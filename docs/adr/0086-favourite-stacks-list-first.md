@@ -47,3 +47,10 @@ As built:
 - Each browser has its own favourites, as it has its own order.
 - ADR-0084 point 1 no longer beats favourites; its other points stand.
 - Hiding stacks (#377) stays open.
+
+## Addendum 2026-11-11
+
+Point 5 is decided by
+[ADR-0102](0102-the-stacks-list-orders-by-last-commit-hides-stacks-and-filters.md):
+stacks can be hidden, in the browser, and favourites list first in its new
+order "Last edited first" too.

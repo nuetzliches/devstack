@@ -24,6 +24,7 @@ const { router } = await import('@/router');
 const { useHub } = await import('@/stores/hub');
 const { persist } = await import('@/lib/persist');
 const { useUi } = await import('@/stores/ui');
+const { useHidden } = await import('@/lib/stackOrder');
 const Sidebar = (await import('./Sidebar.vue')).default;
 
 const entry: StackEntry = { id: 'ab12', name: 'shop', file: '/src/shop/devstack.toml', repo: '/src/shop', running: true, daemon: { pid: 1, port: 7000, started: 0, version: '0.9.8' }, last_seen: null };
@@ -236,6 +237,138 @@ describe('the sidebar', () => {
     expect(names()).toEqual(['shop', 'zoo']);
     expect(star('cd34').getAttribute('aria-pressed')).toBe('false');
     expect(persist.get('sidebar.favourites')).toEqual([]);
+    app.unmount();
+  });
+
+  /** Two stacks: `shop` running with the lane `feat`, `zoo` offline with no worktree. */
+  async function twoStacks(extra: Partial<StackEntry> = {}, shopExtra: Partial<StackEntry> = {}) {
+    const zoo: StackEntry = { ...entry, id: 'cd34', name: 'zoo', repo: '/src/zoo', running: false, daemon: null, ...extra };
+    fake.on('/hub/stacks/cd34/worktrees', ok([]));
+    await router.push('/pool');
+    const hub = useHub();
+    await hub.init();
+    fake.stream('/hub/events').handlers.onMessage({ type: 'stacks', stacks: [zoo, { ...entry, ...shopExtra }] });
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const app = createApp(Sidebar);
+    app.use(router);
+    app.mount(el);
+    await settle();
+    const names = () => [...el.querySelectorAll('[data-testid="sidebar-stack"] .label')].map((x) => x.textContent?.trim());
+    return { el, app, names };
+  }
+  const input = (el: HTMLElement, sel: string, value: string) => {
+    const i = q(el, sel) as HTMLInputElement;
+    i.value = value;
+    i.dispatchEvent(new Event('input'));
+  };
+
+  it('orders by last edited, as a snapshot a new commit does not move', async () => {
+    const { el, app, names } = await twoStacks({ last_commit: 500 }, { last_commit: 100 });
+    // By name first: shop, zoo.
+    expect(names()).toEqual(['shop', 'zoo']);
+    q(el, '[data-testid="sidebar-order"]').click();
+    await settle();
+    document.querySelector<HTMLElement>('[data-testid="sidebar-order-menu"] [data-order="edited"]')!.click();
+    await settle();
+    expect(names()).toEqual(['zoo', 'shop']);
+    expect(persist.get('sidebar.order')).toBe('edited');
+
+    // shop gets a newer commit while the page is open: nothing moves.
+    const zoo: StackEntry = { ...entry, id: 'cd34', name: 'zoo', repo: '/src/zoo', running: false, daemon: null, last_commit: 500 };
+    fake.stream('/hub/events').handlers.onMessage({ type: 'stacks', stacks: [zoo, { ...entry, last_commit: 900 }] });
+    await settle();
+    expect(names()).toEqual(['zoo', 'shop']);
+
+    // Choosing the order again takes a fresh snapshot.
+    q(el, '[data-testid="sidebar-order"]').click();
+    await settle();
+    document.querySelector<HTMLElement>('[data-testid="sidebar-order-menu"] [data-order="edited"]')!.click();
+    await settle();
+    expect(names()).toEqual(['shop', 'zoo']);
+    app.unmount();
+  });
+
+  it('hides a stack that does not run, lists it under Hidden, and shows it again (this browser only)', async () => {
+    const { el, app, names } = await twoStacks();
+    // A running stack is not hidden.
+    q(el, '[data-stack="ab12"] [data-testid="sidebar-stack-menu"]').click();
+    await settle();
+    expect((document.querySelector('[data-testid="sidebar-menu-hide"]') as HTMLButtonElement).disabled).toBe(true);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await settle();
+
+    q(el, '[data-stack="cd34"] [data-testid="sidebar-stack-menu"]').click();
+    await settle();
+    document.querySelector<HTMLElement>('[data-testid="sidebar-menu-hide"]')!.click();
+    await settle();
+    expect(names()).toEqual(['shop']);
+    expect(persist.get('sidebar.hidden')).toEqual(['cd34']);
+    const toggle = q(el, '[data-testid="sidebar-hidden-toggle"]');
+    expect(toggle.textContent).toContain('1');
+
+    toggle.click();
+    await settle();
+    expect(names()).toEqual(['shop', 'zoo']);
+    expect(el.querySelector('[data-stack="cd34"]')!.classList.contains('is-hidden')).toBe(true);
+
+    q(el, '[data-stack="cd34"] [data-testid="sidebar-stack-menu"]').click();
+    await settle();
+    document.querySelector<HTMLElement>('[data-testid="sidebar-menu-show"]')!.click();
+    await settle();
+    expect(persist.get('sidebar.hidden')).toEqual([]);
+    expect(el.querySelector('[data-testid="sidebar-hidden-toggle"]')).toBeNull();
+    expect(names()).toEqual(['shop', 'zoo']);
+    app.unmount();
+  });
+
+  it('lists a hidden stack that starts: it is not missed', async () => {
+    const { el, app, names } = await twoStacks();
+    q(el, '[data-stack="cd34"] [data-testid="sidebar-stack-menu"]').click();
+    await settle();
+    document.querySelector<HTMLElement>('[data-testid="sidebar-menu-hide"]')!.click();
+    await settle();
+    expect(names()).toEqual(['shop']);
+    fake.stream('/hub/events').handlers.onMessage({
+      type: 'stacks',
+      stacks: [{ ...entry, id: 'cd34', name: 'zoo', repo: '/src/zoo', running: true, daemon: entry.daemon }, entry],
+    });
+    await settle();
+    expect(names()).toEqual(['shop', 'zoo']);
+    // The hidden list is kept by the page's module: leave it as found.
+    useHidden().show('cd34');
+    app.unmount();
+  });
+
+  it('filters by stack and by worktree, opens the stack a worktree matched, and closes with Esc', async () => {
+    const { el, app, names } = await twoStacks();
+    expect(el.querySelector('[data-testid="sidebar-filter"]')).toBeNull();
+    // The label opens the field.
+    q(el, '[data-testid="sidebar-filter-toggle"]').click();
+    await settle();
+    expect(document.activeElement).toBe(q(el, '[data-testid="sidebar-filter"]'));
+
+    input(el, '[data-testid="sidebar-filter"]', 'ZOO');
+    await settle();
+    expect(names()).toEqual(['zoo']);
+
+    // Only shop has a worktree `feat`: it shows, with just that worktree, though folded.
+    q(el, '[data-testid="sidebar-fold-all"]').click();
+    await settle();
+    input(el, '[data-testid="sidebar-filter"]', 'feat');
+    await settle();
+    expect(names()).toEqual(['shop']);
+    expect([...el.querySelectorAll('[data-testid="sidebar-lane"]')].map((x) => x.getAttribute('data-lane'))).toEqual(['feat']);
+
+    input(el, '[data-testid="sidebar-filter"]', 'nothing like it');
+    await settle();
+    expect(names()).toEqual([]);
+    expect(el.querySelector('[data-testid="sidebar-filter-empty"]')).not.toBeNull();
+
+    q(el, '[data-testid="sidebar-filter"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await settle();
+    expect(el.querySelector('[data-testid="sidebar-filter"]')).toBeNull();
+    expect(names()).toEqual(['shop', 'zoo']);
     app.unmount();
   });
 });

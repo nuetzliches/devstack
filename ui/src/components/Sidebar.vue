@@ -25,7 +25,9 @@ import { laneView, stackPage } from '@/lib/stackRoutes';
 import { persist } from '@/lib/persist';
 import { statusBucket } from '@/lib/status';
 import {
+  filterStacks,
   forgetFavourite,
+  forgetHidden,
   forgetOpened,
   noteOpened,
   openedTimes,
@@ -33,6 +35,7 @@ import {
   savedOrder,
   saveOrder,
   useFavourites,
+  useHidden,
   type StackOrder,
 } from '@/lib/stackOrder';
 import { useHub } from '@/stores/hub';
@@ -110,7 +113,51 @@ const runningStacks = computed(() => hub.stacks.filter((s) => s.running && !hub.
 const order = ref<StackOrder>(savedOrder());
 const openedSnapshot = ref(openedTimes());
 const favourites = useFavourites();
-const stacks = computed(() => orderStacks(hub.stacks, order.value, openedSnapshot.value, favourites.list()));
+// Last edited is a snapshot too: a commit moves no row while the page is open.
+// A stack seen later joins it with its time; the choice takes a fresh one.
+const editedSnapshot = ref<Record<string, number>>({});
+function snapshotEdited(fresh: boolean) {
+  const next: Record<string, number> = fresh ? {} : editedSnapshot.value;
+  for (const s of hub.stacks) if (s.last_commit != null && !(s.id in next)) next[s.id] = s.last_commit;
+  editedSnapshot.value = next;
+}
+watch(() => hub.stacks.map((s) => `${s.id}:${s.last_commit ?? ''}`).join(','), () => snapshotEdited(false), { immediate: true });
+const ordered = computed(() => orderStacks(hub.stacks, order.value, openedSnapshot.value, favourites.list(), editedSnapshot.value));
+
+// Hide (this browser only): a hidden stack leaves the list and waits under
+// "Hidden"; it stays registered, which "Remove" does not.
+const hidden = useHidden();
+const showHidden = ref(false);
+// The filter (the label opens it): stack name, repository folder, worktree.
+const searching = ref(false);
+const query = ref('');
+const filterEl = ref<HTMLInputElement | null>(null);
+const words = computed(() => query.value.toLowerCase().split(/\s+/).filter(Boolean));
+const worktreeLabels = (s: StackEntry) => lanesOf(s).flatMap((l) => [laneLabel(l), l.name]);
+const matched = computed(() => filterStacks(ordered.value, query.value, worktreeLabels));
+/** The stacks listed: the filter's, the hidden ones apart. */
+// A stack that runs is never listed as hidden: it would be missed.
+const isHidden = (s: StackEntry) => hidden.has(s.id) && !s.running;
+const stacks = computed(() => matched.value.stacks.filter((s) => !isHidden(s)));
+const hiddenStacks = computed(() => matched.value.stacks.filter(isHidden));
+/** The list in two parts: the stacks, then (a row of its own, folded until opened) the hidden ones. */
+const groups = computed(() => [
+  { key: 'shown', head: false, stacks: stacks.value },
+  { key: 'hidden', head: hiddenStacks.value.length > 0, stacks: showHidden.value ? hiddenStacks.value : [] },
+]);
+/** A worktree matched, not the stack: only the matching worktrees show, open. */
+const lanesMatch = (s: StackEntry) => matched.value.byWorktree.has(s.id);
+const lanesShown = (s: StackEntry) =>
+  lanesMatch(s) ? lanesOf(s).filter((l) => words.value.some((w) => [laneLabel(l), l.name].some((t) => t.toLowerCase().includes(w)))) : lanesOf(s);
+function toggleSearch() {
+  if (searching.value) return closeSearch();
+  searching.value = true;
+  void nextTick(() => filterEl.value?.focus());
+}
+function closeSearch() {
+  searching.value = false;
+  query.value = '';
+}
 // A stack shown is opened; the hub's list may arrive after the route.
 watch(
   () => [route.params.stack, hub.stacks.length] as const,
@@ -136,6 +183,7 @@ function chooseOrder(o: StackOrder) {
   order.value = o;
   saveOrder(o);
   openedSnapshot.value = openedTimes();
+  snapshotEdited(true);
   closeOrderMenu();
 }
 function onOrderDown(e: PointerEvent) {
@@ -250,7 +298,7 @@ function stackDot(s: StackEntry): Dot {
   return (['err', 'warn', 'on'] as Dot[]).find((d) => dots.includes(d)) ?? 'off';
 }
 /** Its trees are listed under it (`main` at least): their dots say it, the stack's own would repeat them. */
-const expanded = (s: StackEntry) => !collapsed.value[s.id];
+const expanded = (s: StackEntry) => !collapsed.value[s.id] || lanesMatch(s);
 function mainDot(s: StackEntry): Dot {
   if (!hub.reachable) return 'unknown';
   // A stack that does not run runs nothing, whatever was seen last.
@@ -412,8 +460,20 @@ async function removeStack(s: StackEntry) {
   persist.forgetStack(s.id);
   forgetOpened(s.id);
   forgetFavourite(s.id);
+  forgetHidden(s.id);
   delete known.value[s.id];
   if (isCurrent(s)) void router.push('/');
+}
+/** Out of the list until shown again; a running stack stays (it would be missed). */
+function hideStack(s: StackEntry) {
+  closeMenu();
+  hidden.hide(s.id);
+  ui.toast('info', `${s.name} hidden`, 'Listed under Hidden at the end of the list (this browser only).');
+  if (isCurrent(s)) void router.push('/');
+}
+function showStack(s: StackEntry) {
+  closeMenu();
+  hidden.show(s.id);
 }
 async function copyPath(s: StackEntry) {
   closeMenu();
@@ -433,13 +493,23 @@ function toggleFavourite(s: StackEntry) {
 <template>
   <aside class="sidebar" aria-label="Stacks and worktrees" data-testid="sidebar">
     <div class="head head-row">
-      <span class="head-label">Stacks</span>
+      <button
+        type="button"
+        class="head-label"
+        :aria-expanded="searching"
+        :title="searching ? 'Close the filter' : 'Filter by stack or worktree'"
+        aria-label="Filter the stacks"
+        data-testid="sidebar-filter-toggle"
+        @click="toggleSearch"
+      >
+        Stacks<Icon name="search" :size="12" class="head-search" :class="{ on: searching }" />
+      </button>
       <button
         ref="orderBtn"
         type="button"
         class="head-btn"
         :class="{ open: orderMenu }"
-        :title="`Order: ${order === 'name' ? 'by name' : 'last opened first'}`"
+        :title="`Order: ${order === 'name' ? 'by name' : order === 'edited' ? 'last edited first' : 'last opened first'}`"
         aria-label="Order of the stacks"
         aria-haspopup="menu"
         :aria-expanded="orderMenu"
@@ -474,8 +544,37 @@ function toggleFavourite(s: StackEntry) {
         <Icon name="plus" :size="14" />
       </button>
     </div>
+    <div v-if="searching" class="filter-row">
+      <span class="search">
+        <Icon name="search" :size="13" class="muted" />
+        <input
+          ref="filterEl"
+          v-model="query"
+          class="input"
+          placeholder="Filter stacks and worktrees"
+          aria-label="Filter stacks and worktrees"
+          data-testid="sidebar-filter"
+          @keydown.esc.prevent="closeSearch"
+        />
+      </span>
+    </div>
     <ul class="stacks">
-      <li v-for="s in stacks" :key="s.id" class="stack" :class="{ current: isCurrent(s) }" :data-stack="s.id">
+      <template v-for="g in groups" :key="g.key">
+      <li v-if="g.head" class="hidden-row">
+        <button
+          type="button"
+          class="item hidden-toggle"
+          :aria-expanded="showHidden"
+          title="Stacks hidden in this browser"
+          data-testid="sidebar-hidden-toggle"
+          @click="showHidden = !showHidden"
+        >
+          <Icon :name="showHidden ? 'chevronDown' : 'chevronRight'" :size="13" />
+          <span class="label">Hidden</span>
+          <span class="faint small tabular">{{ hiddenStacks.length }}</span>
+        </button>
+      </li>
+      <li v-for="s in g.stacks" :key="s.id" class="stack" :class="{ current: isCurrent(s), 'is-hidden': g.key === 'hidden' }" :data-stack="s.id">
         <div class="stack-row" @contextmenu.prevent="openMenu(s, $event)">
           <button
             type="button"
@@ -531,7 +630,7 @@ function toggleFavourite(s: StackEntry) {
             <Icon name="more" :size="14" />
           </button>
         </div>
-        <ul v-if="!collapsed[s.id]" class="lanes">
+        <ul v-if="expanded(s)" class="lanes">
           <li>
             <button
               type="button"
@@ -547,7 +646,7 @@ function toggleFavourite(s: StackEntry) {
               <span v-if="s.running && !servedBy(s)" class="pill sm ok" title="The main working tree serves the main ports" data-testid="sidebar-main-ports">main ports</span>
             </button>
           </li>
-          <li v-for="l in lanesOf(s)" :key="l.name">
+          <li v-for="l in lanesShown(s)" :key="l.name">
             <button
               type="button"
               class="item lane"
@@ -575,9 +674,12 @@ function toggleFavourite(s: StackEntry) {
           </li>
         </ul>
       </li>
-      <li v-if="!stacks.length" class="empty">
+      </template>
+      <li v-if="query.trim() && !stacks.length && !hiddenStacks.length" class="empty" data-testid="sidebar-filter-empty">No stack or worktree matches.</li>
+      <li v-else-if="!hub.stacks.length" class="empty">
         No stacks yet. <button type="button" class="link" @click="adding = true">Add one</button>, or run <code>devstack up</code> in a project.
       </li>
+      <li v-else-if="!stacks.length && !query.trim()" class="empty" data-testid="sidebar-all-hidden">Every stack is hidden.</li>
     </ul>
     <template v-if="sharedLanes.length">
       <div class="head" data-testid="sidebar-shared">Shared with you</div>
@@ -657,6 +759,7 @@ function toggleFavourite(s: StackEntry) {
           v-for="o in [
             { value: 'name', label: 'By name' },
             { value: 'opened', label: 'Last opened first' },
+            { value: 'edited', label: 'Last edited first' },
           ] as const"
           :key="o.value"
           type="button"
@@ -687,6 +790,21 @@ function toggleFavourite(s: StackEntry) {
         <button type="button" class="opt" role="menuitem" @click="copyPath(menu!.s)"><Icon name="copy" :size="14" /> Copy path</button>
         <button type="button" class="opt" role="menuitem" data-testid="sidebar-menu-fav" @click="toggleFavourite(menu!.s)">
           <Icon name="star" :size="14" /> {{ favourites.has(menu.s.id) ? 'Remove from favourites' : 'Add to favourites' }}
+        </button>
+        <button v-if="isHidden(menu.s)" type="button" class="opt" role="menuitem" data-testid="sidebar-menu-show" @click="showStack(menu!.s)">
+          <Icon name="eye" :size="14" /> Show again
+        </button>
+        <button
+          v-else
+          type="button"
+          class="opt"
+          role="menuitem"
+          :disabled="menu.s.running"
+          :title="menu.s.running ? 'Stop it first: a running stack is not hidden' : 'Leave the list; it stays registered, listed under Hidden (this browser only)'"
+          data-testid="sidebar-menu-hide"
+          @click="hideStack(menu!.s)"
+        >
+          <Icon name="eyeOff" :size="14" /> Hide
         </button>
         <div class="sep" role="separator" />
         <button
@@ -732,6 +850,57 @@ function toggleFavourite(s: StackEntry) {
 }
 .head-label {
   flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.head-label:hover {
+  color: var(--text);
+}
+/* The magnifier shows when the label is pointed at (or focused), and while the filter is open. */
+.head-search {
+  opacity: 0;
+}
+.head-label:hover .head-search,
+.head-label:focus-visible .head-search,
+.head-search.on {
+  opacity: 1;
+}
+@media (hover: none) {
+  .head-search {
+    opacity: 1;
+  }
+}
+.filter-row {
+  padding: 2px 4px 4px;
+}
+.search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.search .input {
+  flex: 1;
+  min-width: 0;
+}
+.hidden-toggle {
+  color: var(--text-muted);
+}
+.hidden-row {
+  margin-top: 4px;
+}
+.stack.is-hidden .stack-row > .item {
+  color: var(--text-muted);
+  font-weight: 400;
 }
 .head-btn,
 .fav-btn,

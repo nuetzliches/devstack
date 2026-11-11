@@ -48,3 +48,9 @@ As built:
 - Last opened says what this browser showed, not what an agent or the CLI
   used: a stack an agent works on through MCP does not rise.
 - Favourites and hiding (#377) stay open.
+
+## Addendum 2026-11-11
+
+[ADR-0102](0102-the-stacks-list-orders-by-last-commit-hides-stacks-and-filters.md)
+adds a third choice, "Last edited first" (the newest commit, reported by the
+hub), with the snapshot rule of point 2, and builds hiding.
