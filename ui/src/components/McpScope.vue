@@ -45,8 +45,8 @@ async function set(a: McpScopeAgent, scope: McpScope) {
     <div class="card-body">
       <p class="muted">
         Per repository, an agent finds devstack's tools (and the upstreams above) where the repository's own file registers them; the stack's head offers to add
-        it. For you, in every folder, the hub writes one entry <code>devstack</code> into the agent's own configuration, for every folder you work in,
-        repositories without a stack included, and takes it out again when you switch back. The rest of that file stays as it is.
+        the entry. In every folder, the hub writes one entry <code>devstack</code> into the agent's own configuration, so the tools are there wherever you work,
+        repositories without a stack included; switching back takes the entry out again. The rest of that file stays as it is.
       </p>
       <p v-if="problem" class="err">{{ problem }}</p>
       <ul class="agents">
@@ -100,6 +100,11 @@ async function set(a: McpScopeAgent, scope: McpScope) {
 }
 .who span {
   overflow-wrap: anywhere;
+}
+/* The two choices stay side by side: a long path wraps, not the buttons. */
+.agent .btn-group {
+  flex: none;
+  flex-wrap: nowrap;
 }
 .err {
   color: var(--danger-text);

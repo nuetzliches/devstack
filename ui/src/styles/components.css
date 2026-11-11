@@ -464,7 +464,12 @@ select.input {
   border: 1px solid var(--border-strong);
   background: var(--surface);
   font-size: 12.5px;
+  white-space: nowrap;
   cursor: pointer;
+}
+.chip-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .chip-toggle[aria-pressed='true'] {
   background: var(--accent-soft);
