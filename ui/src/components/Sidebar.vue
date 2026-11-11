@@ -462,7 +462,7 @@ function toggleFavourite(s: StackEntry) {
       <button
         type="button"
         class="head-btn"
-        title="Stop all stacks…"
+        title="Stop all stacks… (Shift-click skips the confirmation)"
         aria-label="Stop all stacks"
         :disabled="!runningStacks.length || stoppingAll"
         data-testid="sidebar-stop-all"

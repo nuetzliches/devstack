@@ -54,7 +54,7 @@ export async function act<T = unknown>(opts: ActOptions<T>): Promise<ActResult<T
   const method = opts.method ?? 'POST';
   let body = opts.body;
   if (opts.confirmText) {
-    const ok = await ui.confirm({ title: opts.label, text: opts.confirmText, danger: opts.danger ?? true, confirmLabel: opts.confirmLabel ?? 'Run anyway' });
+    const ok = await ui.confirm({ title: opts.label, text: opts.confirmText, danger: opts.danger ?? true, confirmLabel: opts.confirmLabel ?? 'Run anyway', skippable: false });
     if (!ok) return { ok: false, status: 428, body: null };
     body = { ...(body ?? {}), confirm: true };
   }
@@ -77,7 +77,7 @@ export async function act<T = unknown>(opts: ActOptions<T>): Promise<ActResult<T
     if (res.status === 428 && round === 0) {
       const text =
         res.body && typeof res.body === 'object' && 'confirm' in res.body ? String((res.body as { confirm: unknown }).confirm) : 'This action needs confirmation.';
-      const ok = await ui.confirm({ title: opts.label, text, danger: opts.danger ?? true, confirmLabel: opts.confirmLabel ?? 'Run anyway' });
+      const ok = await ui.confirm({ title: opts.label, text, danger: opts.danger ?? true, confirmLabel: opts.confirmLabel ?? 'Run anyway', skippable: false });
       if (!ok) return { ok: false, status: 428, body: null };
       body = { ...(body ?? {}), confirm: true };
       continue;

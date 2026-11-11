@@ -156,6 +156,7 @@ async function remove(u: McpUpstream) {
     text: 'Its configuration and its login go; coding agents no longer see its tools.',
     confirmLabel: 'Remove',
     danger: true,
+    skippable: false, // its login goes
   });
   if (!ok) return;
   await one(u, 'remove', () => act({ label: `Remove ${u.name}`, method: 'DELETE', path: paths.upstream(u.name), success: `${u.name} removed` }));

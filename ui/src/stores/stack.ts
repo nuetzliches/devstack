@@ -1413,6 +1413,7 @@ export const useStack = defineStore('stack', () => {
         text: `The profile ${profile} starts the main working tree with fresh data: its containers' volumes go, and its databases are seeded again.`,
         confirmLabel: 'Start with fresh data',
         danger: true,
+        skippable: false, // volumes go
       }))
     )
       return;
@@ -1472,6 +1473,7 @@ export const useStack = defineStore('stack', () => {
       text: `Its daemon starts again with the installed devstack and the current stack file: all services stop and start again. Containers keep running unless the file changes them.${lanesText ? ` ${lanesText}` : ''}${profileText}`,
       confirmLabel: 'Reload',
       danger: (!restartLanes.value.carried && !!lanesText) || fresh,
+      skippable: !fresh, // fresh data drops volumes
     });
     if (!ok) return;
     const unmark = mark('stack', 'restart');

@@ -75,7 +75,31 @@ export const useUi = defineStore('ui', () => {
 
   // ---------------------------------------------------------- dialogs
   const confirmRequest = ref<ConfirmRequest | null>(null);
-  function confirm(opts: { title: string; text: string; confirmLabel?: string; danger?: boolean; option?: ConfirmOption }): Promise<boolean> {
+
+  // Shift on the click (or Enter) that started an action skips its
+  // confirmation. The action asks after the event, so the last Shift is
+  // remembered for a moment and spent by the first dialog that uses it.
+  let shiftAt = 0;
+  const SHIFT_WINDOW_MS = 1000;
+  function noteShift(e: MouseEvent | KeyboardEvent) {
+    if (e instanceof KeyboardEvent && e.key !== 'Enter' && e.key !== ' ') return;
+    shiftAt = e.shiftKey ? Date.now() : 0;
+  }
+  document.addEventListener('click', noteShift, true);
+  document.addEventListener('keydown', noteShift, true);
+
+  function confirm(opts: {
+    title: string;
+    text: string;
+    confirmLabel?: string;
+    danger?: boolean;
+    option?: ConfirmOption;
+    /** False for a dialog Shift must not skip: it loses data or logins, or the daemon asked for it. */
+    skippable?: boolean;
+  }): Promise<boolean> {
+    const skip = shiftAt > 0 && Date.now() - shiftAt < SHIFT_WINDOW_MS;
+    shiftAt = 0;
+    if (skip && !opts.option && opts.skippable !== false) return Promise.resolve(true);
     confirmRequest.value?.resolve(false);
     return new Promise((resolve) => {
       confirmRequest.value = {
