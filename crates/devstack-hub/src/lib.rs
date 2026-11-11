@@ -41,6 +41,7 @@ mod branches;
 mod exit;
 pub mod filters;
 mod guests;
+mod lastcommit;
 pub mod mcp;
 mod mcpclient;
 pub mod mcpscope;
@@ -123,6 +124,11 @@ pub struct StackEntry {
     pub running: bool,
     pub daemon: Option<DaemonEntry>,
     pub last_seen: Option<u128>,
+    /// When its repository last got a commit, on any branch (Unix seconds);
+    /// absent while not known yet or for a folder without commits. The
+    /// dashboard's "Last edited first" order.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_commit: Option<u64>,
     /// Why the last start from the dashboard failed (the end of `devstack
     /// up`'s output), while the stack is not running (#11).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -204,10 +210,12 @@ fn random_hex() -> String {
 /// name it gives replaces the folder's (ADR-0089).
 fn scan(
     last_seen: &mut HashMap<String, u128>,
+    commits: &lastcommit::Commits,
     errors: &StartErrors,
     unset: &mut std::collections::HashSet<String>,
 ) -> Vec<StackEntry> {
     let mut errors = errors.lock().unwrap();
+    let commits = commits.lock().unwrap();
     registry::list()
         .into_iter()
         .map(|mut e| {
@@ -248,6 +256,7 @@ fn scan(
                     carries_lanes: i.carries_lanes,
                 }),
                 last_seen: last_seen.get(&e.id).copied(),
+                last_commit: commits.get(&e.repo).copied(),
                 shift: e.shift,
                 no_file,
                 id: e.id,
@@ -412,11 +421,12 @@ pub fn serve() -> Result<(), String> {
         let (tx, rx) = watch::channel(Vec::new());
         let start_errors: StartErrors = Arc::default();
         let errors = start_errors.clone();
+        let commits = lastcommit::spawn();
         tokio::task::spawn_blocking(move || {
             let (mut seen, mut outdated) = (HashMap::new(), HashMap::new());
             let mut unset = std::collections::HashSet::new();
             loop {
-                let next = scan(&mut seen, &errors, &mut unset);
+                let next = scan(&mut seen, &commits, &errors, &mut unset);
                 note_outdated(&next, &mut outdated);
                 tx.send_if_modified(|cur| {
                     if *cur == next {
@@ -1665,6 +1675,7 @@ fn entry(s: &AppState, id: &str) -> Option<StackEntry> {
                     running: false,
                     daemon: None,
                     last_seen: None,
+                    last_commit: None,
                     start_error: None,
                     shift: e.shift,
                 })
