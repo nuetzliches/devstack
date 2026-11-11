@@ -51,7 +51,14 @@ impl Supervisor {
                 .iter()
                 .map(|(r, e)| (r.as_str(), e.hash.clone())),
         )?;
-        let mark = self.layout.lane("main").join("prepared").join(name);
+        let lane = self.layout.lane("main");
+        let mark = lane.join("prepared").join(name);
+        // Another service's `prepare` with the same key may have made these
+        // outputs in this copy already (#513).
+        let mut shared = (!p.outputs.is_empty()).then(|| SharedMark {
+            mark: shared_mark(&lane.join("prepared-outputs"), &p.outputs),
+            outputs: p.outputs.iter().map(|o| snap.dir.join(o)).collect(),
+        });
         // A linked directory that is gone (a `git worktree remove` followed
         // the link into it, ADR-0044) is prepared again.
         let linked_there =
@@ -75,10 +82,13 @@ impl Supervisor {
                     "`{rel}` of {name} had lost what `prepare` made ({now} of {then} entries): something emptied it, likely a reinstall through the worktree's link. It is prepared again; leave a linked directory alone in the worktree."
                 ),
             );
+            // Emptied for every service that shares them.
+            shared = None;
         }
         Ok(Some(PrepareJob {
             key,
             mark,
+            shared,
             cwd: cwd.map_or_else(|| snap.dir.clone(), |c| snap.dir.join(c)),
             run: p.run.clone(),
             store: self.store_use(name, p, snap),
@@ -353,14 +363,26 @@ impl Supervisor {
 
     /// Run a `prepare` to completion; its output goes to a log of its own.
     /// `cancel`: a stop came in, the prepare is killed. Where its outputs
-    /// came from: the store or the run.
+    /// came from: the store or the run; `None` when another service's
+    /// `prepare` with the same key made them in this copy already (#513):
+    /// replaced, they would be gone under that service's build for a while.
     pub(super) fn run_prepare(
         &self,
         name: &str,
         job: PrepareJob,
         cancel: &dyn Fn() -> bool,
-    ) -> Result<PrepareView, String> {
+    ) -> Result<Option<PrepareView>, String> {
         let _one = self.preparing.lock().unwrap();
+        if job.shared.as_ref().is_some_and(|s| s.holds(&job.key)) {
+            crate::diag::info(
+                "prepare_shared",
+                serde_json::json!({ "lane": self.lane, "service": name, "run": job.run }),
+            );
+            return job.done().map(|()| None);
+        }
+        // What follows replaces the outputs: until it succeeded, no mark
+        // says they are whole.
+        job.unmark();
         let dir = self.log_dir(name);
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         crate::diag::prune(&dir, "prepare-", KEEP_BUILD_LOGS);
@@ -384,7 +406,7 @@ impl Supervisor {
             match self.prepare_from_store(name, &store, k, &s.root, &log) {
                 Ok(view) => {
                     self.clear_notice(&format!("prepare.store.{name}"));
-                    return job.done().map(|()| view);
+                    return job.done().map(|()| Some(view));
                 }
                 Err(why) => miss = Some(why),
             }
@@ -435,14 +457,16 @@ impl Supervisor {
             (Some(k), Ok(s)) => self.store_put(name, &store, k, s, took),
             _ => false,
         };
-        job.done().map(|()| PrepareView {
-            source: "run",
-            at: now_ms(),
-            ms: took.as_millis() as u64,
-            key: key.filter(|_| stored),
-            prepare_ms: None,
-            miss,
-            stored,
+        job.done().map(|()| {
+            Some(PrepareView {
+                source: "run",
+                at: now_ms(),
+                ms: took.as_millis() as u64,
+                key: key.filter(|_| stored),
+                prepare_ms: None,
+                miss,
+                stored,
+            })
         })
     }
 
@@ -459,8 +483,9 @@ impl Supervisor {
             self.clear_notice("copy");
             self.prepare_job(name, svc, &snap)?
         };
-        if let Some(job) = job {
-            let view = self.run_prepare(name, job, cancel)?;
+        if let Some(job) = job
+            && let Some(view) = self.run_prepare(name, job, cancel)?
+        {
             self.set_prepare(name, view);
         }
         self.link_prepared(name, svc);
@@ -638,6 +663,7 @@ impl Supervisor {
                     let job = PrepareJob {
                         key,
                         mark,
+                        shared: None,
                         cwd: cwd.map_or_else(|| root.clone(), |c| root.join(c)),
                         run: p.run.clone(),
                         store: Ok(StoreUse {
@@ -655,7 +681,7 @@ impl Supervisor {
                         counted: counted(to),
                     };
                     match self.run_prepare(name, job, cancel) {
-                        Ok(v) if v.source == "store" => state = "linked (store)",
+                        Ok(Some(v)) if v.source == "store" => state = "linked (store)",
                         Ok(_) => {}
                         Err(e) if current.is_some() => {
                             views.extend(at(
@@ -727,6 +753,7 @@ impl Supervisor {
         let job = PrepareJob {
             key,
             mark: root.parent().unwrap_or(root).join("prepared").join(name),
+            shared: None,
             cwd: cwd.map_or_else(|| root.to_path_buf(), |c| root.join(c)),
             run: p.run.clone(),
             store: Ok(StoreUse {
@@ -768,6 +795,9 @@ impl Supervisor {
             let done = match job {
                 Ok(None) => Ok(("prepared before", None, None)),
                 Ok(Some(job)) => self.run_prepare(name, job, cancel).map(|v| {
+                    let Some(v) = v else {
+                        return ("prepared before", None, None);
+                    };
                     let how = if v.source == "store" {
                         "from the store"
                     } else {
@@ -926,6 +956,8 @@ pub(super) struct PrepareJob {
     key: String,
     /// Holds `key` once it succeeded.
     mark: PathBuf,
+    /// The mark of its outputs in this copy, whichever service made them.
+    shared: Option<SharedMark>,
     cwd: PathBuf,
     run: String,
     /// What the store needs, when it is used (ADR-0062).
@@ -952,8 +984,49 @@ impl PrepareJob {
             .iter()
             .map(|d| format!("{}\n", entries(d)))
             .collect();
-        std::fs::write(entries_file(&self.mark), counts).map_err(|e| e.to_string())
+        std::fs::write(entries_file(&self.mark), counts).map_err(|e| e.to_string())?;
+        if let Some(s) = &self.shared {
+            if let Some(parent) = s.mark.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            std::fs::write(&s.mark, &self.key).map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
+
+    /// Its outputs are about to be replaced: no mark says they hold a key.
+    fn unmark(&self) {
+        let _ = std::fs::remove_file(&self.mark);
+        if let Some(s) = &self.shared {
+            let _ = std::fs::remove_file(&s.mark);
+        }
+    }
+}
+
+/// The outputs of a `prepare` in a lane's copy, shared by every service whose
+/// `prepare` names them (#513), and the key they were made for.
+struct SharedMark {
+    mark: PathBuf,
+    outputs: Vec<PathBuf>,
+}
+
+impl SharedMark {
+    /// They were made for `key` and are there.
+    fn holds(&self, key: &str) -> bool {
+        std::fs::read_to_string(&self.mark).is_ok_and(|k| k == key)
+            && self.outputs.iter().all(|o| o.is_dir())
+    }
+}
+
+/// In `dir`, the mark of the outputs `outputs`.
+fn shared_mark(dir: &Path, outputs: &[String]) -> PathBuf {
+    let mut outputs: Vec<String> = outputs
+        .iter()
+        .map(|o| o.replace('\\', "/").trim_matches('/').to_string())
+        .collect();
+    outputs.sort();
+    let h = blake3::hash(outputs.join("\0").as_bytes()).to_hex();
+    dir.join(&h[..20])
 }
 
 /// Beside a mark: the entries each counted directory had once prepared.
@@ -1401,6 +1474,7 @@ mod tests {
         PrepareJob {
             key: "k".into(),
             mark: mark.clone(),
+            shared: None,
             cwd: d.path().into(),
             run: "x".into(),
             store: Err(None),
@@ -1707,6 +1781,59 @@ mod tests {
         assert!(!log.contains("prepare_warm_failed"), "{log}");
     }
 
+    // #513: two services with the same `prepare` and `outputs` share them in
+    // one copy. The second does not replace what the first made: a build of
+    // the first may be reading it right then.
+    #[cfg(windows)]
+    #[test]
+    fn a_copy_prepared_by_one_service_is_not_prepared_again_for_another() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let d = tempfile::tempdir().unwrap();
+        let prep = "prepare = { run = \"mkdir deps 2>nul & copy /y package-lock.json deps\\\\lock.json\", inputs = [\"package-lock.json\"], outputs = [\"deps\"] }";
+        let stack = format!(
+            "version = 1\n[stack]\nname = \"t\"\n[services.app]\nkind = \"devserver\"\nrun = \"x\"\nport = 4200\n{prep}\n[services.ui]\nkind = \"devserver\"\nrun = \"x\"\nport = 4201\n{prep}\n"
+        );
+        let sup = warm_repo(
+            d.path(),
+            &stack,
+            &[("package-lock.json", "{\"v\":4}"), ("app.js", "1")],
+            &rt,
+        );
+        let services = sup.stack().services.clone();
+        sup.copy_ready("app", &services["app"], &|| false).unwrap();
+        let deps = sup.snapshot.lock().unwrap().dir.join("deps");
+        let lock = || std::fs::read_to_string(deps.join("lock.json")).unwrap_or_default();
+        assert_eq!(lock(), "{\"v\":4}", "{:?}", sup.notices());
+        // What app's build reads while ui starts.
+        std::fs::write(deps.join("in-use.txt"), "app reads this").unwrap();
+        sup.copy_ready("ui", &services["ui"], &|| false).unwrap();
+        assert!(
+            deps.join("in-use.txt").is_file(),
+            "ui's prepare replaced the outputs app had made for the same key"
+        );
+        // Each service's own mark holds the key: neither prepares again.
+        let snap = sup.snapshot.lock().unwrap();
+        for name in ["app", "ui"] {
+            assert!(
+                sup.prepare_job(name, &services[name], &snap)
+                    .unwrap()
+                    .is_none(),
+                "{name} would prepare again"
+            );
+        }
+        drop(snap);
+        // New inputs: the first to start prepares them, the other has them.
+        std::fs::write(d.path().join("package-lock.json"), "{\"v\":5}").unwrap();
+        sup.copy_ready("ui", &services["ui"], &|| false).unwrap();
+        assert_eq!(lock(), "{\"v\":5}", "prepared for the new inputs");
+        std::fs::write(deps.join("in-use.txt"), "ui reads this").unwrap();
+        sup.copy_ready("app", &services["app"], &|| false).unwrap();
+        assert!(deps.join("in-use.txt").is_file());
+    }
+
     #[cfg(windows)]
     #[test]
     fn a_ref_whose_key_the_store_lacks_is_prepared_into_it() {
@@ -1798,6 +1925,7 @@ mod tests {
         let job = || PrepareJob {
             key: "inputs".into(),
             mark: d.path().join("mark"),
+            shared: None,
             cwd: copy.clone(),
             run: "git --version".into(),
             counted: Vec::new(),
@@ -1811,14 +1939,14 @@ mod tests {
         let key = store_key_of("inputs", &["deps".to_string()], None);
 
         // The first copy runs it: the store has no entry yet, and gets one.
-        let ran = sup.run_prepare("web", job(), &|| false).unwrap();
+        let ran = sup.run_prepare("web", job(), &|| false).unwrap().unwrap();
         assert_eq!(ran.source, "run");
         assert!(ran.stored);
         assert_eq!(ran.key.as_deref(), Some(key.as_str()));
         assert!(ran.miss.as_deref().unwrap().contains("no entry"), "{ran:?}");
 
         // The next one copies it out of the store.
-        let hit = sup.run_prepare("web", job(), &|| false).unwrap();
+        let hit = sup.run_prepare("web", job(), &|| false).unwrap().unwrap();
         assert_eq!(hit.source, "store", "{hit:?}");
         assert_eq!(hit.key.as_deref(), Some(key.as_str()));
         assert!(hit.prepare_ms.is_some() && hit.miss.is_none());
@@ -1829,7 +1957,7 @@ mod tests {
         // Without the store: why, and nothing stored.
         let mut off = job();
         off.store = Err(Some("its `version` (`node --version`) failed".into()));
-        let plain = sup.run_prepare("web", off, &|| false).unwrap();
+        let plain = sup.run_prepare("web", off, &|| false).unwrap().unwrap();
         assert_eq!(plain.source, "run");
         assert!(!plain.stored && plain.key.is_none());
         assert!(plain.miss.as_deref().unwrap().contains("version"));

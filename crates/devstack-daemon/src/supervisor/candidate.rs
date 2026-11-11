@@ -1,7 +1,7 @@
 //! The candidate pipeline (ADR-0003) and the promotion gate (ADR-0013).
 
 use super::{DEBOUNCE, Held, RESCAN, STOPPED, SUPERSEDED, Supervisor, first_lines};
-use crate::state::{Candidate, Status, now_ms};
+use crate::state::{Candidate, NoticeLevel, Status, now_ms};
 use devstack_config::model::Service;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -145,17 +145,29 @@ impl Supervisor {
         // again from its old build, and a start in progress may have read
         // the tree before this change: the paths are kept, and that start
         // takes them up as a candidate once it runs (`resume_changes`).
-        let (serving, coming) = {
+        let (serving, coming, failed) = {
             let slots = self.slots.lock().unwrap();
             let s = &slots[name];
             let coming = matches!(
                 s.view.status,
                 Status::Exited { .. } | Status::Building { .. } | Status::Starting
             );
-            (s.main.is_some(), coming)
+            let failed = matches!(&s.view.status, Status::Failed { reason } if reason != STOPPED);
+            (s.main.is_some(), coming, failed)
         };
         if !serving {
             clear();
+            // A failed start is not tried again by itself; the change waits
+            // for one the user asks for (#513). Gone with the failure.
+            if failed {
+                self.set_notice(
+                    &format!("waits.{name}"),
+                    NoticeLevel::Warn,
+                    format!(
+                        "{name} failed and does not run: a change to its files starts no new build. `devstack restart {name}` builds and starts it."
+                    ),
+                );
+            }
             return coming;
         }
         let newer = || {
@@ -642,5 +654,50 @@ mod tests {
             "{:?}",
             done.elapsed()
         );
+    }
+
+    /// A service that failed and does not run builds no candidate on a
+    /// change; the status says that it waits for a restart (#513), until
+    /// it is something else than failed.
+    #[test]
+    fn a_failed_service_says_a_change_waits_for_a_restart() {
+        let (_d, _rt, sup) = two_after_a_job();
+        let waits = |sup: &Supervisor| {
+            sup.notices()
+                .iter()
+                .any(|n| n.id == "waits.a" && n.text.contains("devstack restart a"))
+        };
+        sup.set_status(
+            "a",
+            Status::Failed {
+                reason: "build failed".into(),
+            },
+        );
+        sup.changed("a", PATH);
+        let t0 = Instant::now();
+        while !waits(&sup) && t0.elapsed() < DEBOUNCE * 3 {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(waits(&sup), "{:?}", sup.notices());
+        sup.set_status("a", Status::Building { build_id: None });
+        assert!(!waits(&sup), "{:?}", sup.notices());
+
+        // Stopped by the user: nothing to say.
+        sup.set_status(
+            "b",
+            Status::Failed {
+                reason: STOPPED.into(),
+            },
+        );
+        sup.changed("b", PATH);
+        let t0 = Instant::now();
+        while sup.changes.lock().unwrap()["b"].worker && t0.elapsed() < DEBOUNCE * 3 {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !sup.changes.lock().unwrap()["b"].worker,
+            "b's pipeline ended"
+        );
+        assert!(sup.notices().is_empty(), "{:?}", sup.notices());
     }
 }
