@@ -9,6 +9,42 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-11-11
+
+The dashboard's path menu is on the stack page too, and the programs you
+star in it get a button of their own beside the path. Fixed: two services
+that share what their `prepare` makes no longer clash in a lane's copy; the
+MCP server card keeps its choices side by side; the release builds no longer
+fail when the runners cannot resolve the Ubuntu archive.
+
+### Added
+
+- **The stack page's path has the lane header's path menu.** The
+  repository path was plain text; it now opens the same menu as a lane's
+  header: copy the path, open it in a program the hub found, manage the
+  programs.
+- **Favourite programs get a button beside the path.** A program starred in
+  "Programs in the path menu" gets a round icon button beside the path, on
+  the stack page and in every lane's header, that opens the tree in it; it
+  stays in the menu as well. A hidden program is no favourite. Kept in this
+  browser, like the order.
+
+### Fixed
+
+- **A second service does not prepare again what another made in the
+  copy.** Two services whose `prepare` has the same key and `outputs` share
+  those outputs in a lane's copy. The second service to start took the store
+  entry again and removed the outputs under the first one's running build
+  (`node_modules` gone). A mark on the outputs themselves says which key they
+  hold, whoever made them (#513, #515). A failed service that does not run
+  says, on a change to its files, that the change waits for a restart.
+- **The MCP server card keeps its choices side by side.** A long
+  configuration path pushed the two scope buttons under each other; the path
+  wraps instead, and a disabled choice looks disabled (#514).
+- **CI and release builds reach the Ubuntu archive.** When the runner cannot
+  resolve `azure.archive.ubuntu.com`, apt uses the Ubuntu archive, looked up
+  over DNS-over-HTTPS (#516).
+
 ## [0.45.1] - 2026-11-10
 
 Fixed: `devstack doctor` no longer reports a shell's own command as a
@@ -3290,7 +3326,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.45.1...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.46.0...HEAD
+[0.46.0]: https://github.com/nuetzliches/devstack/compare/v0.45.1...v0.46.0
 [0.45.1]: https://github.com/nuetzliches/devstack/compare/v0.45.0...v0.45.1
 [0.45.0]: https://github.com/nuetzliches/devstack/compare/v0.44.0...v0.45.0
 [0.44.0]: https://github.com/nuetzliches/devstack/compare/v0.43.0...v0.44.0
