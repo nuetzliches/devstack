@@ -9,6 +9,15 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **The installed dashboard picks up a new version without F5.** After an
+  update the app showed the new version number but still ran the old
+  dashboard, because it only looked for a new one after the hub's stream
+  broke. It now compares its own version with the hub's, looks for the new
+  dashboard when they differ (and when the window is shown again or the
+  browser is back online), and reloads once if none took over.
+
 ## [0.46.0] - 2026-11-11
 
 The dashboard's path menu is on the stack page too, and the programs you

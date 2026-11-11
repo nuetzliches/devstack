@@ -3,7 +3,7 @@ import { computed, ref } from 'vue';
 import { api, paths, Unreachable, type StreamState, type Subscription } from '@/api';
 import type { AttentionItem, DockerEngine, Guest, HubEvent, HubSession, Opener, PoolSkillsState, StackEntry, UpdateState } from '@/api/types';
 import { act } from '@/lib/actions';
-import { checkForAppUpdate } from '@/lib/app-update';
+import { checkForAppUpdate, reconcileShellVersion } from '@/lib/app-update';
 import { persist } from '@/lib/persist';
 import { usePool } from '@/stores/pool';
 import { useUi } from '@/stores/ui';
@@ -111,6 +111,7 @@ export const useHub = defineStore('hub', () => {
         else if (res.ok && res.body && typeof res.body === 'object') {
           status.value = 'ok';
           version.value = res.body.version;
+          reconcileShellVersion(res.body.version);
           linkUnavailable.value = res.body.link_unavailable ?? null;
           lastContact.value = Date.now();
         } else status.value = 'unreachable';
