@@ -22,18 +22,25 @@ function move(from: number, to: number) {
   ids.splice(to, 0, id);
   save({ ...prefs.value, order: ids });
 }
+/** Hiding a program also takes its button beside the path away. */
 function toggle(o: Opener) {
-  const hidden = prefs.value.hidden.includes(o.id) ? prefs.value.hidden.filter((h) => h !== o.id) : [...prefs.value.hidden, o.id];
-  save({ ...prefs.value, hidden });
+  const hiding = !prefs.value.hidden.includes(o.id);
+  const hidden = hiding ? [...prefs.value.hidden, o.id] : prefs.value.hidden.filter((h) => h !== o.id);
+  const favorites = hiding ? prefs.value.favorites.filter((f) => f !== o.id) : prefs.value.favorites;
+  save({ ...prefs.value, hidden, favorites });
+}
+function toggleFavorite(o: Opener) {
+  const favorites = prefs.value.favorites.includes(o.id) ? prefs.value.favorites.filter((f) => f !== o.id) : [...prefs.value.favorites, o.id];
+  save({ ...prefs.value, favorites });
 }
 function reset() {
-  save({ order: [], hidden: [] });
+  save({ order: [], hidden: [], favorites: [] });
 }
 </script>
 
 <template>
   <Modal :open="open" title="Programs in the path menu" size="sm" testid="openers-dialog" @close="$emit('close')">
-    <p class="muted small intro">Move them with the arrows; the ones unchecked are not listed. Kept in this browser.</p>
+    <p class="muted small intro">Move them with the arrows; the ones unchecked are not listed; starred ones also get a button beside the path. Kept in this browser.</p>
     <ul class="list">
       <li
         v-for="(o, i) in list"
@@ -49,6 +56,19 @@ function reset() {
           <span class="grow truncate">{{ o.label }}</span>
           <span class="faint small">{{ kindLabel[o.kind] ?? o.kind }}</span>
         </label>
+        <button
+          type="button"
+          class="move fav"
+          :class="{ on: prefs.favorites.includes(o.id) }"
+          :disabled="prefs.hidden.includes(o.id)"
+          :aria-pressed="prefs.favorites.includes(o.id)"
+          :aria-label="prefs.favorites.includes(o.id) ? `No button for ${o.label} beside the path` : `A button for ${o.label} beside the path`"
+          :title="prefs.hidden.includes(o.id) ? 'Not listed, so no button either' : prefs.favorites.includes(o.id) ? 'Not beside the path' : 'Show beside the path'"
+          data-testid="opener-fav"
+          @click="toggleFavorite(o)"
+        >
+          <Icon name="star" :size="13" />
+        </button>
         <button type="button" class="move" :disabled="i === 0" :aria-label="`Move ${o.label} up`" data-testid="opener-up" @click="move(i, i - 1)">
           <Icon name="arrowUp" :size="13" />
         </button>
@@ -58,7 +78,7 @@ function reset() {
       </li>
     </ul>
     <template #footer>
-      <button type="button" class="btn btn-sm" :disabled="!prefs.order.length && !prefs.hidden.length" data-testid="openers-reset" @click="reset">Reset</button>
+      <button type="button" class="btn btn-sm" :disabled="!prefs.order.length && !prefs.hidden.length && !prefs.favorites.length" data-testid="openers-reset" @click="reset">Reset</button>
       <button type="button" class="btn btn-sm btn-primary" @click="$emit('close')">Done</button>
     </template>
   </Modal>
@@ -100,6 +120,13 @@ function reset() {
 .move:disabled {
   opacity: 0.35;
   cursor: default;
+}
+/* A favourite's star is filled, as a favourite stack's in the sidebar. */
+.fav.on {
+  color: var(--warn);
+}
+.fav.on :deep(svg) {
+  fill: currentColor;
 }
 .row:hover {
   background: var(--surface-hover);
