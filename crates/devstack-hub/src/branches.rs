@@ -154,6 +154,14 @@ fn git_with(
     }
 }
 
+/// When the newest commit of any ref of `repo` was made (Unix seconds); none
+/// if it is no repository or has no commit.
+pub(crate) fn newest_commit(repo: &Path) -> Option<u64> {
+    git(repo, &["log", "-1", "--all", "--format=%ct"], LOCAL)
+        .ok()
+        .and_then(|o| crate::lastcommit::parse(&o))
+}
+
 /// The repository's git directory shared by its worktrees.
 /// The URL of the remote `origin` of the working tree `tree`, if it has one.
 pub(crate) fn origin(tree: &Path) -> Option<String> {
