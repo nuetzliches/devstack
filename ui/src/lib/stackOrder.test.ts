@@ -1,5 +1,17 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { forgetFavourite, forgetOpened, noteOpened, openedTimes, orderStacks, savedOrder, saveOrder, useFavourites } from './stackOrder';
+import {
+  filterStacks,
+  forgetFavourite,
+  forgetHidden,
+  forgetOpened,
+  noteOpened,
+  openedTimes,
+  orderStacks,
+  savedOrder,
+  saveOrder,
+  useFavourites,
+  useHidden,
+} from './stackOrder';
 
 const s = (id: string, name: string) => ({ id, name });
 const all = [s('c', 'web'), s('a', 'api'), s('b', 'worker'), s('d', 'db')];
@@ -42,5 +54,55 @@ describe('the order of the stacks', () => {
     forgetFavourite('b');
     expect(favs.list()).toEqual([]);
     expect(JSON.parse(localStorage.getItem('devstack.sidebar.favourites') ?? 'null')).toEqual([]);
+  });
+
+  it('by last edited puts the newest commit first, a stack without one after it by name', () => {
+    saveOrder('edited');
+    expect(savedOrder()).toBe('edited');
+    expect(orderStacks(all, 'edited', {}, [], { b: 20, c: 30 }).map((x) => x.name)).toEqual(['web', 'worker', 'api', 'db']);
+    // Opening changes nothing about it; a favourite still lists first.
+    expect(orderStacks(all, 'edited', { d: 99 }, ['d'], { b: 20, c: 30 }).map((x) => x.name)).toEqual(['db', 'web', 'worker', 'api']);
+  });
+
+  it('keeps the hidden stacks in this browser, and forgets a removed one', () => {
+    const hidden = useHidden();
+    hidden.hide('a');
+    hidden.hide('b');
+    hidden.hide('a');
+    expect(hidden.list()).toEqual(['a', 'b']);
+    expect(JSON.parse(localStorage.getItem('devstack.sidebar.hidden') ?? '[]')).toEqual(['a', 'b']);
+    hidden.show('a');
+    expect(hidden.has('a')).toBe(false);
+    forgetHidden('b');
+    expect(hidden.list()).toEqual([]);
+    expect(JSON.parse(localStorage.getItem('devstack.sidebar.hidden') ?? 'null')).toEqual([]);
+  });
+});
+
+describe('the filter of the stacks', () => {
+  const f = (id: string, name: string, repo: string) => ({ id, name, repo });
+  const list = [f('a', 'shop', '/src/shop'), f('b', 'Billing', '/work/ledger'), f('c', 'docs', '/src/docs')];
+  const labels = (x: { id: string }) => (x.id === 'a' ? ['feat-cart', 'fix-tax'] : x.id === 'c' ? ['feat-search'] : []);
+
+  it('keeps every stack for an empty query', () => {
+    expect(filterStacks(list, '  ', labels).stacks).toHaveLength(3);
+  });
+
+  it('matches name or repository folder, whatever the case', () => {
+    expect(filterStacks(list, 'BILL', labels).stacks.map((x) => x.id)).toEqual(['b']);
+    expect(filterStacks(list, 'ledger', labels).stacks.map((x) => x.id)).toEqual(['b']);
+  });
+
+  it('matches a worktree, and says the stack matched only through it', () => {
+    const r = filterStacks(list, 'feat', labels);
+    expect(r.stacks.map((x) => x.id)).toEqual(['a', 'c']);
+    expect([...r.byWorktree]).toEqual(['a', 'c']);
+    // A stack that matches by itself is not "by worktree".
+    expect([...filterStacks(list, 'docs', labels).byWorktree]).toEqual([]);
+  });
+
+  it('needs every word, in the name or in a worktree', () => {
+    expect(filterStacks(list, 'shop cart', labels).stacks.map((x) => x.id)).toEqual(['a']);
+    expect(filterStacks(list, 'shop search', labels).stacks).toEqual([]);
   });
 });

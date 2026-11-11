@@ -140,6 +140,7 @@ export function shopSeed(now: number): MockStackSeed {
       running: true,
       daemon: { pid: 21544, port: 52711, started: now - 26 * MIN, version: '0.2.0' },
       last_seen: now,
+      last_commit: Math.floor((now - 40 * MIN) / 1000),
     },
     view: {
       name: 'shop',
@@ -222,6 +223,7 @@ export function crmSeed(now: number): MockStackSeed {
       running: true,
       daemon: { pid: 4410, port: 41877, started: now - 95 * MIN, version: '0.2.0' },
       last_seen: now,
+      last_commit: Math.floor((now - 3 * 60 * MIN) / 1000),
     },
     view: { name: 'crm', repo, version: '0.2.0', services, infra, groups, commands },
     previous,
@@ -256,6 +258,7 @@ export function docsSeed(now: number): MockStackSeed {
       running: false,
       daemon: null,
       last_seen: last,
+      last_commit: Math.floor((now - 2 * 24 * 60 * MIN) / 1000),
     },
     view: { name: 'docs', repo, version: '0.2.0', services, infra, groups, commands },
     previous,

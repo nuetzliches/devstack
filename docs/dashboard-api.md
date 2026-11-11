@@ -164,6 +164,7 @@ type StackEntry = {
   daemon: { pid: number; port: number; started: number; version: string;
             carries_lanes: boolean } | null; // carries_lanes: a restart leaves its lanes to the next daemon (ADR-0052)
   last_seen: number | null; // when the hub last saw it running
+  last_commit?: number;  // Unix seconds of the newest commit on any ref of its repository (the sidebar's "Last edited first"); read by the hub once a minute, absent until known or without commits; older hubs omit it
   start_error?: string;  // why the last start from the dashboard failed (end of `devstack up`'s output; hub/up-<id>.log), until it runs
   shift: number;         // what its main tree's ports are moved by on this machine (ADR-0082), 0: the stack file's; older hubs omit it
   no_file?: true;        // its stack file is gone (a setup broken off, or removed since it was registered)

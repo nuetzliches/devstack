@@ -9,6 +9,19 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **The stacks list can be ordered by last edit, filtered, and thinned out.**
+  The order menu has "Last edited first": the newest commit on any branch of
+  the stack's repository, which the hub now reports as `last_commit` (read
+  once a minute, in the background). A click on the "Stacks" label opens a
+  filter field (a magnifier shows when you point at the label) that matches
+  stack names, repository folders and worktree names; a stack that matches
+  only through a worktree shows open with just that worktree. A stack's menu
+  has **Hide**: it leaves the list and waits under "Hidden" at its end until
+  you show it again (kept in this browser, like the favourites; a running
+  stack is never hidden, and Remove still forgets a stack altogether).
+
 ### Fixed
 
 - **The installed dashboard picks up a new version without F5.** After an

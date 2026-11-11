@@ -7,7 +7,7 @@ import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
 import { laneLabel, lastTab, MAIN, orderLanes } from '@/lib/lanes';
 import { laneView, stackPage } from '@/lib/stackRoutes';
-import { useFavourites } from '@/lib/stackOrder';
+import { useFavourites, useHidden } from '@/lib/stackOrder';
 import type { LaneView } from '@/api/types';
 import Icon from './icons/Icon.vue';
 import AddStackDialog from './AddStackDialog.vue';
@@ -33,8 +33,12 @@ function addStack() {
 // The favourites first, as in the sidebar (ADR-0086); then the running ones.
 const favourites = useFavourites();
 const fav = (id: string) => (favourites.has(id) ? 0 : 1);
+// A stack hidden in the sidebar is left out, unless it runs or is the one shown.
+const hidden = useHidden();
 const stacks = computed(() =>
-  [...hub.stacks].sort((a, b) => fav(a.id) - fav(b.id) || Number(b.running) - Number(a.running) || a.name.localeCompare(b.name)),
+  hub.stacks
+    .filter((s) => !hidden.has(s.id) || s.running || s.id === stack.id)
+    .sort((a, b) => fav(a.id) - fav(b.id) || Number(b.running) - Number(a.running) || a.name.localeCompare(b.name)),
 );
 const current = computed(() => hub.entry(stack.id));
 const currentName = computed(() => current.value?.name ?? stack.view?.name ?? 'Select a stack');
