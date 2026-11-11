@@ -263,12 +263,7 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: musl tools
-        # The runner's Azure mirror does not always resolve (2026-11-11, for
-        # hours): then the Ubuntu archive itself.
-        run: |
-          getent hosts azure.archive.ubuntu.com > /dev/null \
-            || echo "http://archive.ubuntu.com/ubuntu/" | sudo tee /etc/apt/apt-mirrors.txt
-          sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+        run: bash .github/scripts/apt-install.sh musl-tools
       - name: static build for the lane container
         run: cargo build --release --locked -p devstack --target x86_64-unknown-linux-musl
       - name: lane on a node

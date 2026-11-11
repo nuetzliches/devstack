@@ -114,12 +114,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: musl tools
         if: startsWith(matrix.os, 'ubuntu')
-        # The runner's Azure mirror does not always resolve (2026-11-11, for
-        # hours): then the Ubuntu archive itself.
-        run: |
-          getent hosts azure.archive.ubuntu.com > /dev/null \
-            || echo "http://archive.ubuntu.com/ubuntu/" | sudo tee /etc/apt/apt-mirrors.txt
-          sudo apt-get update && sudo apt-get install -y musl-tools
+        run: bash .github/scripts/apt-install.sh musl-tools
       - name: tag matches the crate and dashboard versions
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
