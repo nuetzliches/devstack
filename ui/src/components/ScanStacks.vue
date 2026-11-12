@@ -53,7 +53,15 @@ function pickRoot(root: string) {
   void scan();
 }
 
-const fresh =computed(() => (found.value ?? []).filter((f) => !f.registered && !f.error));
+const fresh = computed(() => (found.value ?? []).filter((f) => !f.registered && !f.error));
+/** What the list shows: what is not in the stacks list yet on top (new ones,
+ * those that do not load, those just added here, so a row stays where it was
+ * when it is added), the ones already in it below; the order of the scan
+ * within each part. */
+const ordered = computed(() => {
+  const rank = (f: Found) => (f.registered && !f.added ? 1 : 0);
+  return [...(found.value ?? [])].sort((a, b) => rank(a) - rank(b));
+});
 /** The new repositories to add, by id: every new one after a scan. */
 const chosen = ref(new Set<string>());
 const all = computed(() => fresh.value.length > 0 && fresh.value.every((f) => chosen.value.has(f.id)));
@@ -171,7 +179,7 @@ async function add() {
           <input type="checkbox" :checked="all" :indeterminate="some && !all" data-testid="scan-all" @change="toggleAll" />
           <span class="grow">{{ count }} of {{ fresh.length }} new chosen</span>
         </label>
-        <component :is="fresh.includes(f) ? 'label' : 'div'" v-for="f in found" :key="f.id" class="item" :class="{ off: !fresh.includes(f) }" :data-testid="`scan-found-${f.id}`">
+        <component :is="fresh.includes(f) ? 'label' : 'div'" v-for="f in ordered" :key="f.id" class="item" :class="{ off: !fresh.includes(f) }" :data-testid="`scan-found-${f.id}`">
           <input v-if="fresh.includes(f)" type="checkbox" :checked="chosen.has(f.id)" @change="toggle(f.id)" />
           <Icon v-else :name="f.error ? 'alert' : 'checkCircle'" :size="15" :class="f.error ? 'err' : 'ok'" />
           <div class="grow">
