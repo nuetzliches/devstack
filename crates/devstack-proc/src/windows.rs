@@ -221,9 +221,17 @@ pub(crate) fn start_in_job(job: &Job, spec: Spec) -> Result<Child> {
         source: e,
     })?;
     // `cmd /s /c` strips the first and last quote of the line: wrap the line once more.
-    let mut child = Command::new("cmd")
-        .args(["/d", "/s", "/c"])
-        .raw_arg(format!("\"{}\"", spec.command))
+    let mut cmd = Command::new("cmd");
+    cmd.args(["/d", "/s", "/c"])
+        .raw_arg(format!("\"{}\"", spec.command));
+    // A tool installed since the daemon started is found without restarting
+    // it; a PATH the stack file sets is its own.
+    if !spec.env.keys().any(|k| k.eq_ignore_ascii_case("PATH"))
+        && let Some(path) = crate::path_var()
+    {
+        cmd.env("PATH", path);
+    }
+    let mut child = cmd
         .current_dir(&spec.cwd)
         .envs(&spec.env)
         .stdin(Stdio::null())

@@ -86,7 +86,7 @@ pub(crate) fn resolve(program: &str) -> PathBuf {
     } else {
         vec![String::new()]
     };
-    std::env::var_os("PATH")
+    devstack_proc::path_var()
         .and_then(|path| {
             std::env::split_paths(&path).find_map(|dir| {
                 exts.iter().find_map(|e| {
@@ -115,6 +115,10 @@ impl Process {
             if let Some(v) = std::env::var_os(k) {
                 cmd.env(k, v);
             }
+        }
+        // A tool installed since the hub started (`npx` after Node) is found.
+        if let Some(path) = devstack_proc::path_var() {
+            cmd.env("PATH", path);
         }
         cmd.envs(env);
         if let Some(d) = log.parent() {

@@ -30,6 +30,14 @@ and listed with their assets on the
   broke. It now compares its own version with the hub's, looks for the new
   dashboard when they differ (and when the window is shown again or the
   browser is back online), and reloads once if none took over.
+- **A tool installed while the stack runs is found without restarting it
+  (Windows).** After `winget install GoLang.Go`, a build still failed with
+  "go is not recognized" until `devstack down` and `up` from a new terminal:
+  the daemon kept the PATH it started with. Builds, services, commands, the
+  Docker CLI calls and the hub's upstream MCP servers now get that PATH with
+  what was added to the machine's and the user's PATH since appended. The
+  daemon's own entries stay first and in their order; a PATH the stack file
+  sets is left alone.
 
 ## [0.46.0] - 2026-11-11
 

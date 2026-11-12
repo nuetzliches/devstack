@@ -46,6 +46,8 @@ mod macos;
 mod posix;
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+mod winpath;
 
 #[cfg(unix)]
 use posix as backend;
@@ -84,6 +86,19 @@ pub(crate) fn os(what: impl Into<String>) -> ProcError {
         what: what.into(),
         source: std::io::Error::last_os_error(),
     }
+}
+
+/// The PATH a process this one starts should get. On Windows this process's
+/// PATH with what was added to the registry since it started appended (a tool
+/// installed while the daemon or the hub runs, see `winpath`); elsewhere this
+/// process's PATH as it is. `None` without a PATH at all.
+pub fn path_var() -> Option<std::ffi::OsString> {
+    let current = std::env::var_os("PATH");
+    #[cfg(windows)]
+    if let Some(p) = winpath::refreshed(current.as_deref()) {
+        return Some(p);
+    }
+    current
 }
 
 /// Is a process with this id running? For processes devstack did not start

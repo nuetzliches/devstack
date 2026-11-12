@@ -332,3 +332,26 @@ fn usage_covers_the_whole_tree() {
     assert!(u2.cpu_us >= u1.cpu_us, "{u1:?} -> {u2:?}");
     assert!(tree.stop(Duration::from_secs(10)).graceful);
 }
+
+/// A tool installed after the daemon started is on the PATH of what it starts
+/// next: a daemon whose own PATH lacks the registry's entries (it started
+/// before an installer added them) still hands them to its build.
+#[cfg(windows)]
+#[test]
+fn a_build_sees_what_the_registry_added_to_path_since_the_daemon_started() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("path.txt");
+    let stale = r"C:\devstack-stale-entry";
+    let status = std::process::Command::new(FIXTURE)
+        .args(["show-path", "--out"])
+        .arg(&out)
+        .env("PATH", stale)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let seen = std::fs::read_to_string(&out).unwrap().to_lowercase();
+    let seen = seen.trim();
+    // The daemon's own entry first, then the machine's (system32 is always there).
+    assert!(seen.starts_with(&stale.to_lowercase()), "{seen}");
+    assert!(seen.contains(r"\system32"), "{seen}");
+}

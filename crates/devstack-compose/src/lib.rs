@@ -487,6 +487,10 @@ pub fn clean_env(cmd: &mut Command) {
             cmd.env(k, v);
         }
     }
+    // A Docker installed since this process started is found too.
+    if let Some(path) = devstack_proc::path_var() {
+        cmd.env("PATH", path);
+    }
 }
 
 /// Runs the Docker CLI. `program` is `docker` unless a test substitutes it.
