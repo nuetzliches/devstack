@@ -7,6 +7,9 @@ function backoff(attempt: number): number {
   return base * (0.8 + Math.random() * 0.4);
 }
 
+/** How long a stream must have been open for a drop to reconnect at once, without an error. */
+const STABLE_MS = 5000;
+
 export class RealTransport implements Transport {
   readonly kind = 'real' as const;
 
@@ -58,11 +61,14 @@ export class RealTransport implements Transport {
     const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/hub/ws?path=${encodeURIComponent(path)}`;
 
     const connect = () => {
+      timer = null;
       if (closed) return;
       setState('connecting');
       const socket = new WebSocket(url);
       ws = socket;
+      let openedAt: number | null = null;
       socket.onopen = () => {
+        openedAt = Date.now();
         attempt = 0;
         setState('open');
       };
@@ -81,15 +87,36 @@ export class RealTransport implements Transport {
         if (ws !== socket) return;
         ws = null;
         if (closed) return;
+        // A connection that held for a while and dropped (the window was in
+        // the background, the machine slept): try again at once, still
+        // "connecting"; only a reconnect that fails is an error. One that
+        // dropped right after it opened waits like a failed one, so a hub
+        // that closes every stream does not make a busy loop.
+        if (openedAt !== null && Date.now() - openedAt >= STABLE_MS) {
+          connect();
+          return;
+        }
         setState('error');
         timer = setTimeout(connect, backoff(attempt++));
       };
     };
 
+    // Back in view or online: do not sit out the rest of a backoff, which
+    // a background window's throttled timers stretch to a minute or more.
+    const wake = () => {
+      if (timer === null || closed || document.visibilityState === 'hidden') return;
+      clearTimeout(timer);
+      connect();
+    };
+    document.addEventListener('visibilitychange', wake);
+    window.addEventListener('online', wake);
+
     connect();
     return {
       close() {
         closed = true;
+        document.removeEventListener('visibilitychange', wake);
+        window.removeEventListener('online', wake);
         if (timer) clearTimeout(timer);
         const socket = ws;
         ws = null;
