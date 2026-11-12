@@ -35,6 +35,23 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
+        // Like a daemon starting a build: the PATH that build sees, to --out.
+        #[cfg(windows)]
+        Some("show-path") => {
+            let out = arg(&args[1..], "--out").expect("--out");
+            let spec = devstack_proc::Spec {
+                name: "show-path".into(),
+                command: "echo %PATH%".into(),
+                cwd: std::env::temp_dir(),
+                env: Default::default(),
+                log: std::fs::File::create(&out).expect("create --out"),
+            };
+            let (mut tree, _) =
+                devstack_proc::spawn(spec, &devstack_proc::Options::default()).expect("spawn");
+            while tree.try_exit_code().is_none() {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
         #[cfg(unix)]
         Some("shim") => devstack_proc::shim_main(&args[1..]),
         _ => {
