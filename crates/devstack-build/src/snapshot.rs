@@ -68,6 +68,55 @@ impl Snapshot {
         })
     }
 
+    /// Remove the files under `under` that no sync put there (a build's
+    /// outputs, intermediates, caches) and that were last written between
+    /// `from` and `to`, a killed build's time (#523): what it left half
+    /// written is written again by the next build, which an incremental
+    /// tool would otherwise keep. Links are not followed. How many went.
+    ///
+    /// Another service's build that wrote under `under` at the same time
+    /// loses those files too; its next build writes them again.
+    pub fn discard_written(&self, under: &Path, from: SystemTime, to: SystemTime) -> usize {
+        // A file's time is that of its last write; the kill takes a moment.
+        let (from, to) = (
+            from.checked_sub(Duration::from_secs(1)).unwrap_or(from),
+            to + Duration::from_secs(2),
+        );
+        let mut removed = 0;
+        let mut dirs = vec![under.to_path_buf()];
+        while let Some(dir) = dirs.pop() {
+            let Ok(entries) = fs::read_dir(&dir) else {
+                continue;
+            };
+            for e in entries.flatten() {
+                let Ok(ty) = e.file_type() else { continue };
+                let path = e.path();
+                let Ok(rel) = path.strip_prefix(&self.dir) else {
+                    continue;
+                };
+                let rel = rel.to_string_lossy().replace('\\', "/");
+                if EXCLUDED_PREFIXES
+                    .iter()
+                    .any(|x| format!("{rel}/").starts_with(x))
+                {
+                    continue;
+                }
+                if ty.is_dir() {
+                    dirs.push(path);
+                } else if ty.is_file()
+                    && !self.manifest.files.contains_key(&rel)
+                    && e.metadata()
+                        .and_then(|m| m.modified())
+                        .is_ok_and(|t| t >= from && t <= to)
+                    && fs::remove_file(&path).is_ok()
+                {
+                    removed += 1;
+                }
+            }
+        }
+        removed
+    }
+
     /// Tracked and untracked, non-ignored files of the source, with those of
     /// checked-out submodules (their own tracked and untracked files). Without
     /// a git repository (a node's mirror of a worktree, ADR-0029, holds exactly

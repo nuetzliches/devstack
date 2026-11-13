@@ -294,6 +294,79 @@ fn build_publish_failure_cancel_and_prune() {
     assert!(!trash.exists());
 }
 
+/// #523: a build killed while it wrote a file leaves it half written in the
+/// snapshot, and an incremental build after it keeps what is there. The next
+/// build of the service after a kill writes it again.
+#[test]
+fn a_killed_builds_half_written_files_are_written_again() {
+    let r = repo();
+    let state = tempfile::tempdir().unwrap();
+    let layout = Layout::new(state.path());
+    let mut snap = Snapshot::open(r.path(), &layout.lane("main")).unwrap();
+    snap.sync().unwrap();
+    let builder = Builder::new(layout.clone(), &Default::default()).unwrap();
+    // Incremental, as a build tool is: a file that is there is not written
+    // again. The slow one is killed between creating the file and filling it.
+    let (slow, fast) = if cfg!(windows) {
+        (
+            // `if` takes the rest of its line: each in parentheses.
+            "mkdir out 2> nul & (if not exist gen.cfg (type nul > gen.cfg && ping -n 30 127.0.0.1 > nul && echo cfg> gen.cfg)) & copy /y gen.cfg out > nul",
+            "mkdir out 2> nul & (if not exist gen.cfg (echo cfg> gen.cfg)) & copy /y gen.cfg out > nul",
+        )
+    } else {
+        (
+            // Subshells: `{` starts a placeholder in a build line.
+            "mkdir -p out && ( [ -e gen.cfg ] || ( : > gen.cfg && sleep 30 && echo cfg > gen.cfg ) ) && cp gen.cfg out/",
+            "mkdir -p out && ( [ -e gen.cfg ] || echo cfg > gen.cfg ) && cp gen.cfg out/",
+        )
+    };
+    let svc = |cmd: &str| service(&format!("build = '{cmd}'\noutput = \"out\"\nrun = \"x\"\n"));
+    // What an earlier build wrote stays: the next one is incremental still.
+    let earlier = snap.dir.join("earlier.cache");
+    fs::write(&earlier, "kept").unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&earlier)
+        .unwrap()
+        .set_modified(SystemTime::now() - Duration::from_secs(600))
+        .unwrap();
+    let mut run = builder.start("main", &snap, "g", &svc(slow)).unwrap();
+    let gen_cfg = snap.dir.join("gen.cfg");
+    let t = std::time::Instant::now();
+    while !gen_cfg.exists() {
+        assert!(
+            t.elapsed() < Duration::from_secs(20),
+            "the build never began"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    builder.cancel(&mut run);
+    assert_eq!(
+        fs::metadata(&gen_cfg).unwrap().len(),
+        0,
+        "left half written"
+    );
+
+    let mut run = builder.start("main", &snap, "g", &svc(fast)).unwrap();
+    let Outcome::Published { dir, .. } = builder.wait(&mut run).unwrap() else {
+        panic!("not published")
+    };
+    assert_eq!(
+        fs::read_to_string(dir.join("gen.cfg")).unwrap().trim(),
+        "cfg"
+    );
+    assert_eq!(run.swept, 1, "the one file the killed build wrote");
+    assert!(
+        snap.dir.join("src/a.txt").is_file(),
+        "the repository's files stay"
+    );
+    assert!(earlier.is_file(), "an earlier build's output stays");
+    assert!(
+        !snap.dir.join("killed").exists() && !layout.lane("main").join("killed/g.json").exists(),
+        "the mark goes with the build after the kill"
+    );
+}
+
 #[test]
 fn a_half_published_artifact_is_removed_on_start() {
     let state = tempfile::tempdir().unwrap();

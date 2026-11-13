@@ -298,6 +298,26 @@ pub struct Running {
     build: Build,
     output: PathBuf,
     started: Instant,
+    /// When it began, and the mark a kill leaves for the next build of the
+    /// service in the snapshot (#523).
+    began: SystemTime,
+    killed_mark: PathBuf,
+    /// Files a killed build before it left in the snapshot, removed before
+    /// this one began ([`Snapshot::discard_written`]).
+    pub swept: usize,
+}
+
+/// A killed build's time, kept beside the snapshot until the next build of
+/// its service there (#523).
+#[derive(Serialize, Deserialize)]
+struct Killed {
+    from_ms: u64,
+    to_ms: u64,
+}
+
+fn unix_ms(t: SystemTime) -> u64 {
+    t.duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
 }
 
 impl Builder {
@@ -385,6 +405,25 @@ impl Builder {
         let repo = snap.dir.to_string_lossy();
         let command = expand(command, &repo)?;
         let output = inside_snapshot(&snap.dir, &expand(output, &repo)?, "output")?;
+        // The last build of this service here was killed: what it wrote is
+        // written again (#523).
+        let killed_mark = snap
+            .dir
+            .parent()
+            .unwrap_or(&snap.dir)
+            .join("killed")
+            .join(format!("{service}.json"));
+        let swept = match fs::read(&killed_mark)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Killed>(&b).ok())
+        {
+            Some(k) => {
+                let at = |ms: u64| UNIX_EPOCH + Duration::from_millis(ms);
+                snap.discard_written(&cwd, at(k.from_ms), at(k.to_ms))
+            }
+            None => 0,
+        };
+        let _ = fs::remove_file(&killed_mark);
         let log = self.layout.build_log(service, &id);
         fs::create_dir_all(log.parent().expect("log has a parent"))
             .map_err(|e| BuildError::io("create log dir", e))?;
@@ -396,6 +435,7 @@ impl Builder {
             log: fs::File::create(&log)
                 .map_err(|e| BuildError::io(format!("create {}", log.display()), e))?,
         };
+        let began = SystemTime::now();
         let build = self.job.run(spec)?;
         Ok(Running {
             service: service.into(),
@@ -405,6 +445,9 @@ impl Builder {
             build,
             output,
             started: Instant::now(),
+            began,
+            killed_mark,
+            swept,
         })
     }
 
@@ -434,9 +477,27 @@ impl Builder {
         self.finish(r, code, &|| true)
     }
 
-    /// Superseded (ADR-0003): kill the build's tree, publish nothing.
+    /// Superseded (ADR-0003): kill the build's tree, publish nothing. What
+    /// it was writing may be left half written in the snapshot; the next
+    /// build of the service there writes it again ([`Self::start_as`], #523).
     pub fn cancel(&self, r: &mut Running) -> Outcome {
         r.build.cancel();
+        // An earlier kill not built after yet: its time and this one's.
+        let from = fs::read(&r.killed_mark)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Killed>(&b).ok())
+            .map_or(unix_ms(r.began), |k| k.from_ms.min(unix_ms(r.began)));
+        let k = Killed {
+            from_ms: from,
+            to_ms: unix_ms(SystemTime::now()),
+        };
+        if let Some(dir) = r.killed_mark.parent() {
+            let _ = fs::create_dir_all(dir);
+        }
+        let _ = fs::write(
+            &r.killed_mark,
+            serde_json::to_vec(&k).expect("killed serialises"),
+        );
         Outcome::Cancelled { id: r.id.clone() }
     }
 
