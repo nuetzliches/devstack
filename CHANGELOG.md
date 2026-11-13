@@ -44,6 +44,15 @@ and listed with their assets on the
   lane ran its background workers there, but `devstack lane move <lane> --to
   local` brought it here without them. It now runs them here too, as a lane
   started here with that profile does.
+- **A build after a superseded one no longer keeps what that one left half
+  written (#523).** A build killed by a newer change (or a stop) could leave
+  a file it was writing empty in the build's copy of the tree; an
+  incremental build after it took the file as up to date, and the service
+  failed at its start (a .NET service with exit code 147: its
+  `runtimeconfig.json` was empty), also with `--rebuild`. The next build of
+  the service after a kill now removes what the killed build wrote there
+  first, so the build tool writes it again; what earlier builds wrote
+  stays. The daemon log says so (`build_swept`).
 - **A lane's measured need no longer flips from one moment to the next.**
   The coordinator keeps the last five runs of a repository, but a run that
   left them while its lane ran on (a warm lane, say) came back as the newest

@@ -201,6 +201,18 @@ impl Supervisor {
                 .start_as("main", &snap, name, svc, id.clone())
                 .map_err(|e| e.to_string())?;
             drop(snap); // other services may sync while this one builds
+            if running.swept > 0 {
+                crate::diag::info(
+                    "build_swept",
+                    serde_json::json!({
+                        "lane": self.lane,
+                        "service": name,
+                        "build_id": id,
+                        "files": running.swept,
+                        "why": "the build before it was killed: what it wrote is written again",
+                    }),
+                );
+            }
             // All services of a tree share one snapshot: another one's build
             // may sync it while this one builds. Published only while its
             // inputs are still the ones its id says, checked before the id
