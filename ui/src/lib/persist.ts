@@ -30,6 +30,25 @@ function remove(key: string): void {
   }
 }
 
+// What belongs to this tab only and outlives a reload, not the tab: a filter
+// typed into the sidebar. Read and written like the rest, never failing.
+function readSession<T>(key: string): T | null {
+  try {
+    const raw = sessionStorage.getItem(PREFIX + key);
+    return raw ? (JSON.parse(raw) as T) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeSession(key: string, value: unknown): void {
+  try {
+    sessionStorage.setItem(PREFIX + key, JSON.stringify(value));
+  } catch {
+    /* no storage: the value lives until the page does */
+  }
+}
+
 export type CachedHub = { stacks: StackEntry[]; version: string | null; at: number; linkUnavailable?: string | null };
 export type CachedStack = { view: StackView; at: number };
 
@@ -46,4 +65,7 @@ export const persist = {
 
   get: read,
   set: write,
+
+  getSession: readSession,
+  setSession: writeSession,
 };

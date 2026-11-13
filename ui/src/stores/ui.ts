@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { computed, ref, watchEffect } from 'vue';
+import { computed, ref, watch, watchEffect } from 'vue';
 import { persist } from '@/lib/persist';
 
 export type ThemePref = 'system' | 'light' | 'dark';
@@ -152,9 +152,23 @@ export const useUi = defineStore('ui', () => {
     if (save) persist.set('sidebar.width', sidebarWidth.value);
   }
 
+  // ---------------------------------------------------------- sidebar filter
+  // The sidebar's filter is kept here and in this tab's session storage, not in
+  // the component: the sidebar is mounted again while the hub loads, and the
+  // page reloads when the hub brings a new shell (app-update.ts); neither must
+  // empty what was typed.
+  const filterOpen = ref(persist.getSession<boolean>('sidebar.filter.open') ?? false);
+  const filterQuery = ref(persist.getSession<string>('sidebar.filter.query') ?? '');
+  watch([filterOpen, filterQuery], ([open, query]) => {
+    persist.setSession('sidebar.filter.open', open);
+    persist.setSession('sidebar.filter.query', query);
+  });
+
   return {
     theme,
     effectiveTheme,
+    filterOpen,
+    filterQuery,
     cycleTheme,
     toasts,
     toast,
