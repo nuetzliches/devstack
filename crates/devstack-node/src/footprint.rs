@@ -50,7 +50,15 @@ struct Entry {
     capped: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     steady: Option<Amount>,
+    /// It left the last [`RUNS`]: kept, without counting, while its node
+    /// still reports it, so a lane that runs on does not come back as the
+    /// newest run and push another out at each report.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    gone: bool,
 }
+
+/// How long a run that left is remembered after its node last reported it.
+const GONE_FOR: u64 = 24 * 60 * 60;
 
 pub struct Footprints {
     path: PathBuf,
@@ -90,6 +98,10 @@ impl Footprints {
             .entry(key(&run.repo, run.profile.as_deref()))
             .or_default();
         let changed = match runs.iter_mut().find(|e| e.id == run.id) {
+            Some(e) if e.gone => {
+                e.at = now;
+                false
+            }
             Some(e) => {
                 // A node updated during the run: its capped CPU replaces
                 // the uncapped one.
@@ -115,13 +127,17 @@ impl Footprints {
                     peak,
                     capped: run.capped,
                     steady: run.steady,
+                    gone: false,
                 });
-                if runs.len() > RUNS {
-                    runs.remove(0);
+                if runs.iter().filter(|e| !e.gone).count() > RUNS
+                    && let Some(oldest) = runs.iter_mut().find(|e| !e.gone)
+                {
+                    oldest.gone = true;
                 }
                 true
             }
         };
+        runs.retain(|e| !e.gone || now.saturating_sub(e.at) < GONE_FOR);
         if by.len() > KEYS
             && let Some(oldest) = by
                 .iter()
@@ -139,7 +155,14 @@ impl Footprints {
     /// how idle its node was, and could lock a repository out of the pool.
     pub fn get(&self, repo: &str, profile: Option<&str>) -> Option<(Need, usize)> {
         let by = self.by.lock().unwrap();
-        let runs = by.get(&key(repo, profile)).filter(|r| !r.is_empty())?;
+        let runs: Vec<&Entry> = by
+            .get(&key(repo, profile))?
+            .iter()
+            .filter(|e| !e.gone)
+            .collect();
+        if runs.is_empty() {
+            return None;
+        }
         let most = runs.iter().fold(Need::default(), |a, e| {
             let cpus = if e.capped { e.peak.cpus } else { 0.0 };
             a.max(Need { cpus, ..e.peak })
@@ -153,6 +176,7 @@ impl Footprints {
         let by = self.by.lock().unwrap();
         by.get(&key(repo, profile))?
             .iter()
+            .filter(|e| !e.gone)
             .filter_map(|e| e.steady)
             .reduce(|a, b| Amount {
                 cpus: a.cpus.max(b.cpus),
@@ -214,6 +238,32 @@ mod tests {
         f.save().unwrap();
         let again = Footprints::load(dir.path());
         assert_eq!(again.get("shop", None).unwrap().1, 5);
+    }
+
+    /// A run that left the last five while its lane still runs, and so is
+    /// reported again every round, stays out: it came back as the newest
+    /// and pushed another out, and the need flipped with each report.
+    #[test]
+    fn a_run_that_left_stays_out_while_its_lane_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = Footprints::load(dir.path());
+        f.record(&run("long", 8 * GIB, GIB), 1);
+        for (i, id) in ["b", "c", "d", "e", "f"].iter().enumerate() {
+            f.record(&run(id, 2 * GIB, GIB), 2 + i as u64);
+        }
+        assert_eq!(f.get("shop", None).unwrap().0.memory, 2 * GIB);
+        // Its node reports it again, as it does every round.
+        assert!(!f.record(&run("long", 8 * GIB, GIB), 10));
+        let (n, runs) = f.get("shop", None).unwrap();
+        assert_eq!((n.memory, runs), (2 * GIB, 5));
+        // Also after a restart of the coordinator.
+        f.save().unwrap();
+        let again = Footprints::load(dir.path());
+        assert!(!again.record(&run("long", 8 * GIB, GIB), 11));
+        assert_eq!(again.get("shop", None).unwrap(), (n, 5));
+        // A new run still comes in.
+        assert!(again.record(&run("g", 3 * GIB, GIB), 12));
+        assert_eq!(again.get("shop", None).unwrap().0.memory, 3 * GIB);
     }
 
     #[test]

@@ -39,6 +39,13 @@ and listed with their assets on the
 
 ### Fixed
 
+- **A lane's measured need no longer flips from one moment to the next.**
+  The coordinator keeps the last five runs of a repository, but a run that
+  left them while its lane ran on (a warm lane, say) came back as the newest
+  at its node's next report and pushed another run out. The need then
+  changed within seconds, so a lease could be refused at 5.6 CPU and
+  `devstack pool placement` show 9.6 CPU right after (#524). Such a run now
+  stays out.
 - **The installed dashboard picks up a new version without F5.** After an
   update the app showed the new version number but still ran the old
   dashboard, because it only looked for a new one after the hub's stream

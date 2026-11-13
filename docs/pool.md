@@ -225,7 +225,8 @@ builds, volumes) and of the images its containers run, and reports it with
 its report; a run counts once its lane ran for three minutes. The
 coordinator keeps the last five runs of each repository and profile
 (`footprints.json` in its directory), and a lane's need is the most each
-part took in them. Before any ran in the pool, the requester's estimate
+part took in them. A run that left the last five stays out while its lane
+runs on, though its node still reports it. Before any ran in the pool, the requester's estimate
 from its main tree stands for them: the most its services, builds and
 containers each took over the last ten minutes, and as disk its tree
 (without `.git` and its state), its snapshot, artifacts, logs and volumes,
