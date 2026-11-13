@@ -59,6 +59,15 @@ impl Supervisor {
         self.lane_workers.store(on, Ordering::SeqCst);
     }
 
+    /// A lane's workers as it is started with them: its profile's
+    /// `workers` where the profile says, else `asked` (`--workers`;
+    /// ADR-0041, #314). Every start of a lane here goes through this, a
+    /// move from a node too (#522).
+    pub fn ask_lane_workers(&self, asked: bool) {
+        let profile = self.stack().profile.as_ref().and_then(|p| p.workers);
+        self.set_lane_workers(profile.unwrap_or(asked));
+    }
+
     /// What [`Self::set_lane_workers`] said last.
     pub fn lane_workers(&self) -> bool {
         self.lane_workers.load(Ordering::SeqCst)
