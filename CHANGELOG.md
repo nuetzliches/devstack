@@ -9,6 +9,18 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-11-13
+
+A start in the pool now waits while another lane is starting on the node it
+fits, instead of being refused, and a lane's measured need no longer flips
+between two values. The stacks list can be ordered by last edit, filtered
+and thinned out; Shift-click skips a confirmation. Fixed: a lane moved back
+from a node keeps its profile's workers; a build after a superseded one no
+longer keeps what that one left half written (a .NET service that failed
+with exit code 147); the installed dashboard picks up a new version without
+F5; a window brought back no longer flashes the red banner; a tool installed
+while the stack runs is found on Windows.
+
 ### Added
 
 - **The stacks list can be ordered by last edit, filtered, and thinned out.**
@@ -21,8 +33,16 @@ and listed with their assets on the
   has **Hide**: it leaves the list and waits under "Hidden" at its end until
   you show it again (kept in this browser, like the favourites; a running
   stack is never hidden, and Remove still forgets a stack altogether).
+- **Shift-click skips a confirmation.** Holding Shift on the click (or Enter)
+  that starts an action answers its confirmation at once. Dialogs that offer
+  a choice, and those for losing data (fresh data, removing an upstream,
+  what the daemon asks to confirm), always open. Stop all and Reload name
+  the shortcut in their tooltip.
 
 ### Changed
+
+- **The folder scan lists new repositories first.** In *Add a stack*, what
+  is not in the list yet comes first, the repositories already in it below.
 
 - **A start in the pool waits for another lane's start instead of being
   refused (#524).** A node holds a starting lane's need off its offer for
@@ -66,6 +86,11 @@ and listed with their assets on the
   broke. It now compares its own version with the hub's, looks for the new
   dashboard when they differ (and when the window is shown again or the
   browser is back online), and reloads once if none took over.
+- **A window brought back no longer shows "hub not reachable" for a
+  moment.** A browser closes a background window's connections; on return
+  the dashboard waited before reconnecting and showed the red banner
+  meanwhile. It now reconnects at once and shows the banner only if that
+  fails.
 - **A tool installed while the stack runs is found without restarting it
   (Windows).** After `winget install GoLang.Go`, a build still failed with
   "go is not recognized" until `devstack down` and `up` from a new terminal:
@@ -3392,7 +3417,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.46.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.47.0...HEAD
+[0.47.0]: https://github.com/nuetzliches/devstack/compare/v0.46.0...v0.47.0
 [0.46.0]: https://github.com/nuetzliches/devstack/compare/v0.45.1...v0.46.0
 [0.45.1]: https://github.com/nuetzliches/devstack/compare/v0.45.0...v0.45.1
 [0.45.0]: https://github.com/nuetzliches/devstack/compare/v0.44.0...v0.45.0
