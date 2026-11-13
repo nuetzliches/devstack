@@ -766,6 +766,17 @@ fn a_lane_runs_on_a_node_of_the_pool() {
         std::thread::sleep(Duration::from_millis(500));
     }
 
+    // A profile that turns the workers on: they run on the node, and still
+    // once the lane moved here (#522).
+    cli(&main, &["lane", "stop", "wt"]);
+    node_is_clear();
+    cli(&wt, &["up", "--profile", "workers", "--on", "ci-node"]);
+    let info = http_get(port, "/info");
+    assert!(info.contains("\"workers\":true"), "on the node: {info}");
+    cli(&main, &["lane", "move", "wt", "--to", "local"]);
+    let info = http_get(port, "/info");
+    assert!(info.contains("\"workers\":true"), "moved here: {info}");
+
     // `down --all`: the daemon ends, and the lane on the node goes with it
     // (ADR-0025 point 7).
     cli(&main, &["down", "--all"]);

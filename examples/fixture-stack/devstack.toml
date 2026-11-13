@@ -45,3 +45,7 @@ steps       = [{ stop = "api" }, { exec = "git --version" }, { start = "api" }]
 [groups.app]
 label   = "Application"
 members = ["api", "compose.app.db", "compose.app.cache", "command.ping", "command.reset"]
+
+# A lane started with it runs its background workers, here or on a node.
+[profiles.workers]
+workers = true
