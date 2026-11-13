@@ -373,6 +373,31 @@ describe('the sidebar', () => {
     app.unmount();
   });
 
+  it('ends the filter when a stack or a worktree is picked from it', async () => {
+    const { el, app, names } = await twoStacks();
+    q(el, '[data-testid="sidebar-filter-toggle"]').click();
+    await settle();
+    input(el, '[data-testid="sidebar-filter"]', 'zoo');
+    await settle();
+    q(el, '[data-testid="sidebar-stack"]').click();
+    await settle();
+    expect(router.currentRoute.value.path).toBe('/s/cd34');
+    expect(el.querySelector('[data-testid="sidebar-filter"]')).toBeNull();
+    expect(names()).toEqual(['shop', 'zoo']);
+
+    // A worktree the filter found: its lane opens, the list is whole again.
+    q(el, '[data-testid="sidebar-filter-toggle"]').click();
+    await settle();
+    input(el, '[data-testid="sidebar-filter"]', 'feat');
+    await settle();
+    q(el, '[data-testid="sidebar-lane"][data-lane="feat"]').click();
+    await settle();
+    expect(router.currentRoute.value.params).toMatchObject({ stack: 'ab12', lane: 'feat' });
+    expect(el.querySelector('[data-testid="sidebar-filter"]')).toBeNull();
+    expect(names()).toEqual(['shop', 'zoo']);
+    app.unmount();
+  });
+
   it('keeps the filter when the sidebar is mounted again, and when the page reloads', async () => {
     const first = await twoStacks();
     q(first.el, '[data-testid="sidebar-filter-toggle"]').click();
