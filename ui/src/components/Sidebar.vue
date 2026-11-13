@@ -350,6 +350,7 @@ function laneTitle(s: StackEntry, l: LaneView): string {
 // Choosing where to go closes the drawer of a narrow screen.
 function openStack(s: StackEntry) {
   ui.drawerOpen = false;
+  endSearchAt(s);
   void router.push(stackPage(s.id));
 }
 
@@ -358,7 +359,16 @@ function openStack(s: StackEntry) {
 // navigating to it.
 function openLane(s: StackEntry, lane: string | null) {
   ui.drawerOpen = false;
+  endSearchAt(s);
   void router.push(laneView(s.id, lane, lastTab(route.name)));
+}
+
+// A stack or worktree picked from the filtered list ends the filter: the
+// whole list shows again, scrolled so the pick stays in view.
+function endSearchAt(s: StackEntry) {
+  if (!searching.value) return;
+  closeSearch();
+  void nextTick(() => document.querySelector(`.sidebar [data-stack="${s.id}"]`)?.scrollIntoView?.({ block: 'nearest' }));
 }
 
 const isCurrent = (s: StackEntry) => s.id === stack.id;
