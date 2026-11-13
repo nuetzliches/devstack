@@ -336,6 +336,15 @@ fn pairing_cookie_and_checks() {
         line.contains("\"type\":\"stacks\"") && line.contains("shop"),
         "{line}"
     );
+    // Each stack's figures for the start page follow.
+    while !(line.starts_with("data:") && line.contains("\"type\":\"summary\"")) {
+        line.clear();
+        r.read_line(&mut line).unwrap();
+        assert!(t0.elapsed() < Duration::from_secs(5), "no summary event");
+    }
+    let v: serde_json::Value = serde_json::from_str(line["data:".len()..].trim()).unwrap();
+    assert_eq!(v["stacks"][0]["state"], "stopped", "{v}");
+    assert_eq!(v["stacks"][0]["total"], 0, "{v}");
 }
 
 /// The cookie from a fresh pairing (`name=value`).

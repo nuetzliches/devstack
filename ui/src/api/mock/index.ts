@@ -13,7 +13,7 @@
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
 //   ?mock=nopool     this machine is in no pool; ?mock=poolmember: a member, not an admin
 //   ?mock=hubdown    the hub is unreachable (toggle at runtime: window.devstackMock.hubDown(false))
-import type { AttentionItem, DockerEngine, Guest, HubEvent, PoolFeed, PoolNode, PoolSkillsAdmin, PoolSkillsState, LaneView, McpUpstream, NotifySettings, UpstreamFilter, PoolUpstream, LogStreamEvent, RunLogEvent, StackEvent, StackEntry, StackView, PoolPublicLinksAdmin, PublicLinksState } from '../types';
+import type { AttentionItem, StackGlance, DockerEngine, Guest, HubEvent, PoolFeed, PoolNode, PoolSkillsAdmin, PoolSkillsState, LaneView, McpUpstream, NotifySettings, UpstreamFilter, PoolUpstream, LogStreamEvent, RunLogEvent, StackEvent, StackEntry, StackView, PoolPublicLinksAdmin, PublicLinksState } from '../types';
 import type { Response, StreamHandlers, Subscription, Transport } from '../transport';
 import { Unreachable } from '../transport';
 import { persist } from '@/lib/persist';
@@ -34,6 +34,7 @@ const mockMcpScope: McpScopeView = {
 };
 import { autoShift, daemonPorts, hubPorts, refusal, type MockLane } from './ports';
 import { runningHolders } from '@/lib/shift';
+import { statusBucket } from '@/lib/status';
 
 type Route = { stop(): void } | null;
 
@@ -329,13 +330,35 @@ class MockHub {
     }
     return out;
   }
+  /** Every stack's figures for the start page, as the hub's `summary` event has them. */
+  glances(): StackGlance[] {
+    const items = this.attention();
+    return (this.empty ? [] : this.stacks).map((s) => {
+      const services = s.entry.running ? s.view.services : [];
+      const attention = items.some((a) => a.stack === s.entry.id);
+      return {
+        id: s.entry.id,
+        state: attention ? 'attention' : s.entry.running ? 'ok' : 'stopped',
+        ready: services.filter((v) => statusBucket(v.status) === 'healthy').length,
+        total: services.length,
+        lanes: s.entry.running ? s.startedLanes.size : 0,
+      };
+    });
+  }
   private lastAttention = '';
+  private lastGlances = '';
   publishAttention(): void {
     const items = this.attention();
     const key = JSON.stringify(items);
-    if (key === this.lastAttention) return;
-    this.lastAttention = key;
-    for (const l of this.hubSubs) l.send({ type: 'attention', items });
+    if (key !== this.lastAttention) {
+      this.lastAttention = key;
+      for (const l of this.hubSubs) l.send({ type: 'attention', items });
+    }
+    const stacks = this.glances();
+    const figures = JSON.stringify(stacks);
+    if (figures === this.lastGlances) return;
+    this.lastGlances = figures;
+    for (const l of this.hubSubs) l.send({ type: 'summary', stacks });
   }
 
   /** Worktrees made in a stack (by the dashboard, or `?mock=worktrees`), by stack id; each stack has `fix-login` besides (ADR-0078). */
@@ -1478,6 +1501,7 @@ export class MockTransport implements Transport {
       l.send({ type: 'skills', skills: hub.poolSkillState });
       l.send({ type: 'worktrees', worktrees: hub.worktreeVersions });
       l.send({ type: 'attention', items: hub.attention() });
+      l.send({ type: 'summary', stacks: hub.glances() });
       hub.hubSubs.add(l);
       return { stop: () => hub.hubSubs.delete(l) };
     }

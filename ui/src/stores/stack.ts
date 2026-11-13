@@ -391,7 +391,6 @@ export const useStack = defineStore('stack', () => {
     mcp.value = null;
     void loadUpgrade();
     void loadMcp();
-    persist.saveLastStack(next);
     lane.value = opts.lane !== undefined ? opts.lane : (persist.get<string | null>(`lane.${next}`) ?? null);
     if (opts.lane !== undefined && (opts.remember ?? true)) persist.set(`lane.${next}`, opts.lane);
     reset(next);
