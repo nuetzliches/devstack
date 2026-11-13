@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { api, paths, Unreachable, type StreamState, type Subscription } from '@/api';
-import type { AttentionItem, DockerEngine, Guest, HubEvent, HubSession, Opener, PoolSkillsState, StackEntry, UpdateState } from '@/api/types';
+import type { AttentionItem, DockerEngine, Guest, HubEvent, HubSession, Opener, PoolSkillsState, StackEntry, StackGlance, UpdateState } from '@/api/types';
 import { act } from '@/lib/actions';
 import { checkForAppUpdate, reconcileShellVersion } from '@/lib/app-update';
 import { persist } from '@/lib/persist';
@@ -57,6 +57,8 @@ export const useHub = defineStore('hub', () => {
   );
   /** What needs attention in every stack (ADR-0097); empty from an older hub. */
   const attention = ref<AttentionItem[]>([]);
+  /** Every stack's figures for the start page, by id; empty from an older hub. */
+  const glances = ref<Record<string, StackGlance>>({});
   /** When a record was last added to the agents' activity (`activity` events, #482). */
   const activityAt = ref(0);
   /** A version of each stack's worktrees (ADR-0078); empty from an older hub. */
@@ -156,6 +158,10 @@ export const useHub = defineStore('hub', () => {
         }
         if (ev.type === 'attention') {
           attention.value = ev.items;
+          return;
+        }
+        if (ev.type === 'summary') {
+          glances.value = Object.fromEntries(ev.stacks.map((g) => [g.id, g]));
           return;
         }
         if (ev.type === 'pools') {
@@ -287,6 +293,7 @@ export const useHub = defineStore('hub', () => {
     skills,
     skillsWaiting,
     attention,
+    glances,
     activityAt,
     worktrees,
     updating,

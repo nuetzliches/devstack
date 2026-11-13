@@ -61,8 +61,23 @@ export type HubEvent =
   | { type: 'activity'; at: number }
   /** What needs attention in every stack (ADR-0097), first and on every change; older hubs never send it. */
   | { type: 'attention'; items: AttentionItem[] }
+  /** Every stack's figures for the start page, first and on every change; older hubs never send it. */
+  | { type: 'summary'; stacks: StackGlance[] }
   /** Something happened once in the hub that no request reports (ADR-0050): a toast. */
   | { type: 'notice'; level: NoticeLevel; text: string };
+
+/**
+ * A stack at a glance (`summary` events, as `GET /hub/summary` has it without
+ * the attention items): `ready` of `total` of the main tree's services run,
+ * healthy or done; `lanes` started.
+ */
+export type StackGlance = {
+  id: string;
+  state: 'stopped' | 'starting' | 'stopping' | 'ok' | 'attention';
+  ready: number;
+  total: number;
+  lanes: number;
+};
 
 /**
  * Something in a stack that needs attention, as the hub's summary lists it

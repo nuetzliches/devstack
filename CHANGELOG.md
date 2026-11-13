@@ -9,6 +9,18 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **A start page with every stack as a tile.** The dashboard opens on it, and
+  the "devstack" mark in the top bar leads back to it (it used to jump to the
+  stack shown last). Each tile shows the stack's state, how many of its main
+  tree's services run, the lanes started, how long it has been up, its last
+  commit and up to two things that need attention; its star marks it a
+  favourite. The favourite programs from "Manage programs…" sit on each tile
+  and open the stack's folder. The tiles follow the sidebar's order, and
+  hidden stacks stay out. The hub sends the figures as a new `summary` event
+  on `/hub/events`.
+
 ## [0.47.0] - 2026-11-13
 
 A start in the pool now waits while another lane is starting on the node it

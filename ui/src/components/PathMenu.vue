@@ -5,13 +5,14 @@
 // lane shared with us on another machine), it offers the copy only. The
 // favourite programs (chosen in its "Manage programs…") get a button of
 // their own beside it.
-import { computed, ref, watchEffect } from 'vue';
+import { computed, ref } from 'vue';
 import type { Opener } from '@/api/types';
 import { usePopover } from '@/lib/popover';
 import { useOpenerPrefs } from '@/lib/openers';
 import { useHub } from '@/stores/hub';
 import { useUi } from '@/stores/ui';
 import Icon from './icons/Icon.vue';
+import FavoriteOpeners, { openerIcon } from './FavoriteOpeners.vue';
 import OpenersDialog from './OpenersDialog.vue';
 
 const props = defineProps<{
@@ -27,21 +28,10 @@ const trigger = ref<HTMLButtonElement | null>(null);
 const { open, close } = usePopover(root, trigger);
 const openerPrefs = useOpenerPrefs();
 const openers = computed(() => (props.canOpen ? openerPrefs.shown(hub.openers ?? []) : []));
-const favs = computed(() => (props.canOpen ? openerPrefs.favorites(hub.openers ?? []) : []));
 const isFav = (o: Opener) => openerPrefs.prefs.value.favorites.includes(o.id);
-// The programs are read when the menu opens; with favourites, at once, so
-// their buttons are there without it (the store reads them once).
-watchEffect(() => {
-  if (props.canOpen && openerPrefs.prefs.value.favorites.length) void hub.loadOpeners();
-});
+// The programs are read when the menu opens; the favourites' buttons read
+// them at once (the store reads them once).
 const managing = ref(false);
-const openerIcon = {
-  files: 'folder',
-  terminal: 'terminal',
-  editor: 'file',
-  git: 'gitBranch',
-  agent: 'zap',
-} as const;
 
 /** The path's folder and its last part: a long path is cut in the folder, the tree's name stays. */
 const parts = computed(() => {
@@ -110,19 +100,7 @@ function openWith(o: Opener) {
       </div>
       <OpenersDialog :open="managing" :openers="hub.openers ?? []" @close="managing = false" />
     </div>
-    <button
-      v-for="o in favs"
-      :key="o.id"
-      type="button"
-      class="fav-btn"
-      :title="`Open in ${o.label}`"
-      :aria-label="`Open in ${o.label}`"
-      data-testid="path-favorite"
-      :data-id="o.id"
-      @click="openWith(o)"
-    >
-      <Icon :name="openerIcon[o.kind] ?? 'external'" :size="14" />
-    </button>
+    <FavoriteOpeners v-if="canOpen" :stack-id="stackId" :path="path" />
   </div>
 </template>
 
@@ -132,24 +110,6 @@ function openWith(o: Opener) {
   align-items: center;
   gap: 6px;
   min-width: 0;
-}
-/* A favourite: a round button in the path pill's look. */
-.fav-btn {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  flex: none;
-  padding: 0;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface-2);
-  color: var(--text-2);
-  cursor: pointer;
-}
-.fav-btn:hover {
-  border-color: var(--border-strong);
-  color: var(--text);
 }
 .picker {
   position: relative;

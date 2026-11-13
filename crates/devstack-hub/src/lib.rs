@@ -1640,6 +1640,24 @@ fn hub_events(s: &AppState) -> impl tokio_stream::Stream<Item = serde_json::Valu
                 })
             })
     };
+    // Every stack's figures for the start page: on the same changes as
+    // `attention`, sent only when they changed. A start or stop the hub runs
+    // moves neither the board nor the list until the daemon comes or goes;
+    // the page that asked for it shows that on its own.
+    let glances = {
+        let s = s.clone();
+        let mut last: Option<Vec<summary::StackGlance>> = None;
+        tokio_stream::wrappers::WatchStream::new(s.board.subscribe())
+            .map(|_| ())
+            .merge(tokio_stream::wrappers::WatchStream::new(s.stacks.clone()).map(|_| ()))
+            .filter_map(move |()| {
+                let now = summary::glances(&s);
+                (last.as_ref() != Some(&now)).then(|| {
+                    last = Some(now.clone());
+                    serde_json::json!({ "type": "summary", "stacks": now })
+                })
+            })
+    };
     // A dashboard that fell behind misses a toast, nothing it shows.
     let notices =
         tokio_stream::wrappers::BroadcastStream::new(notice::subscribe()).filter_map(|n| n.ok());
@@ -1653,6 +1671,7 @@ fn hub_events(s: &AppState) -> impl tokio_stream::Stream<Item = serde_json::Valu
         .merge(activity)
         .merge(trees)
         .merge(attention)
+        .merge(glances)
         .merge(notices)
 }
 

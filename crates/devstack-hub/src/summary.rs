@@ -264,6 +264,33 @@ pub(crate) fn attention(s: &AppState) -> Vec<Attention> {
         .collect()
 }
 
+/// One stack's figures for the dashboard's start page, the `summary` event
+/// on `/hub/events`: a [`StackSummary`] without its attention items, which
+/// the `attention` event carries already.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct StackGlance {
+    pub id: String,
+    pub state: &'static str,
+    pub ready: usize,
+    pub total: usize,
+    pub lanes: usize,
+}
+
+/// Every stack's figures, for `/hub/events`.
+pub(crate) fn glances(s: &AppState) -> Vec<StackGlance> {
+    summary(s)
+        .stacks
+        .into_iter()
+        .map(|st| StackGlance {
+            id: st.id,
+            state: st.state,
+            ready: st.ready,
+            total: st.total,
+            lanes: st.lanes,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,6 +418,22 @@ mod tests {
             },
         );
         assert!(rx.has_changed().unwrap());
+    }
+
+    #[test]
+    fn a_glance_carries_the_figures_without_the_items() {
+        let v = serde_json::to_value(StackGlance {
+            id: "ab12".into(),
+            state: "ok",
+            ready: 2,
+            total: 3,
+            lanes: 1,
+        })
+        .unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({ "id": "ab12", "state": "ok", "ready": 2, "total": 3, "lanes": 1 })
+        );
     }
 
     #[test]

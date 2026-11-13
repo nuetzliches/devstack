@@ -60,9 +60,6 @@ export const persist = {
   saveStack: (id: string, v: CachedStack) => write(`stack.${id}`, v),
   forgetStack: (id: string) => remove(`stack.${id}`),
 
-  lastStack: () => read<string>('lastStack'),
-  saveLastStack: (id: string) => write('lastStack', id),
-
   get: read,
   set: write,
 

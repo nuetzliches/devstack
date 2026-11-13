@@ -40,7 +40,7 @@ function reset() {
 
 <template>
   <Modal :open="open" title="Programs in the path menu" size="sm" testid="openers-dialog" @close="$emit('close')">
-    <p class="muted small intro">Move them with the arrows; the ones unchecked are not listed; starred ones also get a button beside the path. Kept in this browser.</p>
+    <p class="muted small intro">Move them with the arrows; the ones unchecked are not listed; starred ones also get a button beside the path and on each stack's tile on the start page. Kept in this browser.</p>
     <ul class="list">
       <li
         v-for="(o, i) in list"
