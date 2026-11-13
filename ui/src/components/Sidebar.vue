@@ -15,6 +15,7 @@
 // ADR-0078). A stack's menu (its
 // "…" button, or a right click) starts, stops and removes it. A star marks a
 // favourite: favourites list first (ADR-0086).
+import { storeToRefs } from 'pinia';
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { api, paths, sharedId, v1 } from '@/api';
@@ -129,8 +130,9 @@ const ordered = computed(() => orderStacks(hub.stacks, order.value, openedSnapsh
 const hidden = useHidden();
 const showHidden = ref(false);
 // The filter (the label opens it): stack name, repository folder, worktree.
-const searching = ref(false);
-const query = ref('');
+// Kept in the ui store: the sidebar is mounted again, or the page reloaded,
+// while the hub loads or updates; the filter stays as typed.
+const { filterOpen: searching, filterQuery: query } = storeToRefs(ui);
 const filterEl = ref<HTMLInputElement | null>(null);
 const words = computed(() => query.value.toLowerCase().split(/\s+/).filter(Boolean));
 const worktreeLabels = (s: StackEntry) => lanesOf(s).flatMap((l) => [laneLabel(l), l.name]);

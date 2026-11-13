@@ -34,6 +34,7 @@ let fake: FakeTransport;
 
 beforeEach(() => {
   localStorage.clear();
+  sessionStorage.clear();
   setActivePinia(createPinia());
   fake = new FakeTransport();
   t.current = fake;
@@ -370,5 +371,34 @@ describe('the sidebar', () => {
     expect(el.querySelector('[data-testid="sidebar-filter"]')).toBeNull();
     expect(names()).toEqual(['shop', 'zoo']);
     app.unmount();
+  });
+
+  it('keeps the filter when the sidebar is mounted again, and when the page reloads', async () => {
+    const first = await twoStacks();
+    q(first.el, '[data-testid="sidebar-filter-toggle"]').click();
+    await settle();
+    input(first.el, '[data-testid="sidebar-filter"]', 'zoo');
+    await settle();
+    expect(first.names()).toEqual(['zoo']);
+    first.app.unmount();
+
+    // Mounted again (the hub's list was empty for a moment): same store.
+    const again = await twoStacks();
+    expect((q(again.el, '[data-testid="sidebar-filter"]') as HTMLInputElement).value).toBe('zoo');
+    expect(again.names()).toEqual(['zoo']);
+    again.app.unmount();
+
+    // A reload: the store is new, the tab's session storage is not.
+    setActivePinia(createPinia());
+    const reloaded = await twoStacks();
+    expect((q(reloaded.el, '[data-testid="sidebar-filter"]') as HTMLInputElement).value).toBe('zoo');
+    expect(reloaded.names()).toEqual(['zoo']);
+
+    // Esc still clears and closes it, for good.
+    q(reloaded.el, '[data-testid="sidebar-filter"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await settle();
+    expect(reloaded.names()).toEqual(['shop', 'zoo']);
+    expect(sessionStorage.getItem('devstack.sidebar.filter.query')).toBe('""');
+    reloaded.app.unmount();
   });
 });
