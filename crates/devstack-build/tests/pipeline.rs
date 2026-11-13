@@ -315,8 +315,9 @@ fn a_killed_builds_half_written_files_are_written_again() {
         )
     } else {
         (
-            "mkdir -p out && { [ -e gen.cfg ] || { : > gen.cfg && sleep 30 && echo cfg > gen.cfg; }; } && cp gen.cfg out/",
-            "mkdir -p out && { [ -e gen.cfg ] || echo cfg > gen.cfg; } && cp gen.cfg out/",
+            // Subshells: `{` starts a placeholder in a build line.
+            "mkdir -p out && ( [ -e gen.cfg ] || ( : > gen.cfg && sleep 30 && echo cfg > gen.cfg ) ) && cp gen.cfg out/",
+            "mkdir -p out && ( [ -e gen.cfg ] || echo cfg > gen.cfg ) && cp gen.cfg out/",
         )
     };
     let svc = |cmd: &str| service(&format!("build = '{cmd}'\noutput = \"out\"\nrun = \"x\"\n"));
