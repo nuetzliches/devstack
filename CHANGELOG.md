@@ -39,6 +39,11 @@ and listed with their assets on the
 
 ### Fixed
 
+- **A lane moved back from a node keeps the workers its profile turns on
+  (#522).** Started on a node with a profile that sets `workers = true`, a
+  lane ran its background workers there, but `devstack lane move <lane> --to
+  local` brought it here without them. It now runs them here too, as a lane
+  started here with that profile does.
 - **A lane's measured need no longer flips from one moment to the next.**
   The coordinator keeps the last five runs of a repository, but a run that
   left them while its lane ran on (a warm lane, say) came back as the newest

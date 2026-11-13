@@ -811,9 +811,7 @@ async fn lanes_start(State(s): State<AppState>, Json(body): Json<LaneStart>) -> 
             disk_fits(&main, &usage, &body.path)?;
         }
         let lane = lanes.activate(&body.path, profile)?;
-        // A profile may turn the workers on (ADR-0041).
-        let workers = lane.sup.stack().profile.as_ref().and_then(|p| p.workers);
-        lane.sup.set_lane_workers(workers.unwrap_or(body.workers));
+        lane.sup.ask_lane_workers(body.workers);
         if body.infra && main.stack().compose.values().any(|g| !g.shared.is_empty()) {
             main.infra_up()?;
         }

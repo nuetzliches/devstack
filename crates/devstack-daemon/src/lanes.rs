@@ -3879,11 +3879,13 @@ impl Lanes {
         self.pending.lock().unwrap().remove(name);
         step(2, "starting it here (build, infrastructure, services)");
         let profile = self.profiles.lock().unwrap().get(name).cloned();
+        // As asked when it started there (`--workers`), or as its profile
+        // says, which the node applied there itself (#522).
         let workers = self.workers.lock().unwrap().contains(name);
         let started = self
             .activate(&entry.path, profile.as_deref())
             .and_then(|lane| {
-                lane.sup.set_lane_workers(workers);
+                lane.sup.ask_lane_workers(workers);
                 lane.sup.up().inspect_err(|_| {
                     lane.sup.down(true);
                     let removed = self.map.lock().unwrap().remove(name);
