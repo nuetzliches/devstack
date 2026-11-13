@@ -487,6 +487,16 @@ fn phase_over(lane: &str, node: &str, phase: &str, ms: u64) {
 
 /// Ask about a lease that waits for a machine until it is offered, saying
 /// each change of what it waits for (ADR-0051 point 5).
+/// The phase a lease that waits is in: for a machine (ADR-0051), or for the
+/// lanes starting on a node to settle (#524).
+fn wait_phase(p: &devstack_node::coordinator::Provisioning) -> &'static str {
+    if p.state == "settling" {
+        "settle"
+    } else {
+        "provision"
+    }
+}
+
 fn wait_for_machine(
     local: &devstack_node::member::Local,
     spec: &RemoteSpec<'_>,
@@ -499,12 +509,15 @@ fn wait_for_machine(
             (spec.step)(
                 1,
                 &format!(
-                    "provision: {} ({} of at most {} s)",
-                    p.why, p.waited, p.limit
+                    "{}: {} ({} of at most {} s)",
+                    wait_phase(&p),
+                    p.why,
+                    p.waited,
+                    p.limit
                 ),
             );
             crate::diag::info(
-                "remote_lane_provision",
+                &format!("remote_lane_{}", wait_phase(&p)),
                 serde_json::json!({ "lane": spec.name, "lease": p.id, "why": p.why,
                     "waited": p.waited, "machine": p.machine }),
             );
@@ -642,12 +655,13 @@ impl RemoteLane {
             Leasing::Offer(o) => o,
             Leasing::Provisioning(p) => {
                 let t = Instant::now();
+                let phase = wait_phase(&p);
                 let o = wait_for_machine(&local, spec, p)
                     .map_err(|e| format!("lease on `{}`: {e}", spec.on))?;
                 phase_over(
                     spec.name,
                     &o.node.name,
-                    "provision",
+                    phase,
                     t.elapsed().as_millis() as u64,
                 );
                 o

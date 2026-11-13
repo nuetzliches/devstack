@@ -1166,6 +1166,30 @@ impl Inner {
         }
     }
 
+    /// What the leases admitted within [`SETTLING`] hold of the offer
+    /// (their need, and what `used` measured of them), and when the last of
+    /// them settles; `None` with none settling.
+    fn settling(&self, used: &HashMap<String, Amount>) -> Option<crate::coordinator::Settling> {
+        let now = crate::store::now();
+        let leases = self.leases.lock().unwrap();
+        leases
+            .values()
+            .filter(|l| now.saturating_sub(l.admitted) < SETTLING.as_secs())
+            .map(|l| {
+                let u = used.get(&l.id).copied().unwrap_or_default();
+                crate::coordinator::Settling {
+                    cpus: l.need.cpus + u.cpus,
+                    memory: l.need.memory.saturating_add(u.memory),
+                    ends_in: (l.admitted + SETTLING.as_secs()).saturating_sub(now),
+                }
+            })
+            .reduce(|a, b| crate::coordinator::Settling {
+                cpus: a.cpus + b.cpus,
+                memory: a.memory.saturating_add(b.memory),
+                ends_in: a.ends_in.max(b.ends_in),
+            })
+    }
+
     fn run(&self, l: &NodeLease) -> LaneRun {
         LaneRun {
             id: l.id.clone(),
@@ -3854,6 +3878,7 @@ async fn background(s: Shared) {
             disk_free: devstack_proc::disk_free(&s.root),
             disk_room,
             runs,
+            settling: s.settling(&by),
             leases: s
                 .leases
                 .lock()

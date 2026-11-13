@@ -185,3 +185,4 @@ stay.
 | [0100](0100-the-user-chooses-devstacks-mcp-server-for-every-folder.md) | The user can register devstack's MCP server for every folder; the hub writes only its own entry `devstack` | Accepted (card in the pull request); built |
 | [0101](0101-a-services-link-can-come-from-its-output-and-stays-on-this-machine.md) | A service's link can come from its output; it belongs to the running instance and stays on this machine | Accepted (card in the pull request); built |
 | [0102](0102-the-stacks-list-orders-by-last-commit-hides-stacks-and-filters.md) | The stacks list can order by last commit, hide stacks, and filter by stack or worktree | Accepted (card in the pull request); built |
+| [0103](0103-a-pool-lease-waits-for-the-lanes-starting-on-a-node-to-settle.md) | A pool lease waits for the lanes starting on a node to settle rather than be refused | Accepted (card in the pull request); built |

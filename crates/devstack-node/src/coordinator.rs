@@ -20,6 +20,10 @@
 //!   `PUT /v1/me/provisioned` `{on}`; admins: `GET|POST
 //!   /v1/admin/provisioning`, `POST /v1/admin/members/{id}/provision` `{on}`,
 //!   `POST /v1/admin/nodes/{id}/confirm`, `POST /v1/admin/nodes/{id}/give-back`
+//! - lanes starting on a node (#524): `POST /v1/leases?settle=true` may
+//!   answer `202` (`state: settling`) when a node takes the lane once the
+//!   leases settling there have settled (its report's `settling`); `GET
+//!   /v1/leases/{id}/wait` as for a machine
 
 use crate::pki::{self, Pair};
 use crate::provision::{self, Confirm, Machine, MachineState, Per, Settings};
@@ -189,6 +193,23 @@ pub struct Report {
     /// since its last report (ADR-0049 point 2).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runs: Vec<crate::footprint::Run>,
+    /// What the leases it admitted a moment ago hold of its offer until they
+    /// settle, and when the last of them does: a lease may wait for that
+    /// rather than be refused (#524). Absent with none, and from an older
+    /// node, whose lanes starting are refused as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settling: Option<Settling>,
+}
+
+/// What a node's settling leases hold of its offer: what they need (the
+/// node keeps it off its offer while they start) and what they use now
+/// (in the measured offer too, while they start).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct Settling {
+    pub cpus: f64,
+    pub memory: u64,
+    /// Seconds until the last of them has settled.
+    pub ends_in: u64,
 }
 
 impl Report {
@@ -1255,15 +1276,18 @@ struct Inner {
     public_links: crate::publiclinks::Registry,
 }
 
-/// A lease that waits for a machine (ADR-0051 point 5).
+/// A lease that waits for a machine (ADR-0051 point 5), or for the lanes
+/// starting on a node to settle (#524).
 #[derive(Debug, Clone)]
 struct Wait {
     member: String,
     /// The request, its need settled.
     request: LeaseRequest,
     need_from: String,
-    /// The machine's request id.
-    machine: String,
+    /// The machine's request id; `None`: it waits for lanes to settle, and
+    /// is refused with this once the wait ends.
+    machine: Option<String>,
+    refused: String,
     token: String,
     started: std::time::Instant,
     limit: Duration,
@@ -1944,6 +1968,20 @@ fn placement_for(
     r: &LeaseRequest,
     own: bool,
 ) -> Vec<Placement> {
+    placement_in(s, ms, me, r, own, false)
+}
+
+/// [`placement_for`]; `settled`: as each node will offer once the leases
+/// settling there have settled (what they hold back on its offer), for a
+/// lease that may wait for that (#524).
+fn placement_in(
+    s: &Shared,
+    ms: &[Member],
+    me: &Member,
+    r: &LeaseRequest,
+    own: bool,
+    settled: bool,
+) -> Vec<Placement> {
     let leases = s.leases.lock().unwrap().clone();
     let mine = |l: &Lease| l.member == me.id && l.repo == r.repo && l.lane == r.lane;
     // What each node offers less what offers not admitted yet hold there.
@@ -1953,11 +1991,15 @@ fn placement_for(
         .unwrap()
         .iter()
         .map(|(id, (at, rep))| {
-            let rep = if own {
+            let mut rep = if own {
                 with_own(rep, &leases, id, mine)
             } else {
                 less_offered(rep, offered_need(&leases, id))
             };
+            if settled && let Some(h) = rep.settling {
+                rep.cpus += h.cpus;
+                rep.memory = rep.memory.saturating_add(h.memory);
+            }
             (id.clone(), (*at, rep))
         })
         .collect();
@@ -2002,6 +2044,21 @@ fn placement_for(
                 l.state == "offered" && at.elapsed() < OFFER_HOLDS && !(own && mine(l))
             });
             p.why = with_held(&p.why, held);
+            // A lane starting there holds the room only until it settles.
+            if !settled
+                && let Some((_, rep)) = reports.get(&p.node)
+                && let Some(h) = rep.settling
+                && p.cpus + h.cpus >= need.cpus
+                && p.memory.saturating_add(h.memory) >= need.memory
+            {
+                p.why = format!(
+                    "{}; a lane starting there holds {:.1} CPU and {} MiB until it settles, in about {} s",
+                    p.why,
+                    h.cpus,
+                    h.memory >> 20,
+                    h.ends_in
+                );
+            }
         }
     }
     out
@@ -2071,6 +2128,13 @@ struct LeaseQuery {
     /// refused as before.
     #[serde(default)]
     wait: Option<String>,
+    /// The requester waits for lanes starting on a node to settle when that
+    /// node takes the lane then (#524); an older requester does not ask,
+    /// and is refused as before. A parameter of its own: an older
+    /// coordinator ignores it, where it would read another `wait` value as
+    /// no wait for a machine either.
+    #[serde(default)]
+    settle: bool,
 }
 
 async fn lease_create(
@@ -2096,7 +2160,9 @@ async fn lease_create(
         .values()
         .filter(|(l, _, at)| {
             l.member == me.id
-                && (l.state == "offered" && at.elapsed() < OFFER_FOR || l.state == "provisioning")
+                && (l.state == "offered" && at.elapsed() < OFFER_FOR
+                    || l.state == "provisioning"
+                    || l.state == "settling")
         })
         .count();
     if offered >= MAX_OFFERS {
@@ -2112,11 +2178,16 @@ async fn lease_create(
     // enough, not the requester itself, warm ones first (`rank`).
     let mut why = None;
     if r.node.is_empty() || r.node.eq_ignore_ascii_case("pool") {
+        let settle = q.settle && !r.warm;
         let ranked = placement_for(&s, &ms, &me, &r, false);
-        let best = ranked.into_iter().find(|p| p.eligible).map(|p| {
-            why = Some(p.why);
-            p.node
-        });
+        // One that may wait does not go before the leases waiting already.
+        let best = (!settle || !settle_ahead(&s, &ms, None))
+            .then(|| ranked.into_iter().find(|p| p.eligible))
+            .flatten()
+            .map(|p| {
+                why = Some(p.why);
+                p.node
+            });
         let Some(id) = best else {
             let refused = format!(
                 "no node of the pool can take the lane now ({:.1} CPU, {} MiB, {} of disk; {need_from}): none online, sharing, with that much free and a devstack that works with the requester's",
@@ -2124,6 +2195,11 @@ async fn lease_create(
                 r.need.memory >> 20,
                 gib(r.need.disk())
             );
+            // A node that takes it once the lanes starting there settle:
+            // wait for that rather than refuse (#524).
+            if settle && let Some((target, ends_in)) = settle_target(&s, &ms, &me, &r) {
+                return Ok(settle_for(&s, &me, r, need_from, refused, target, ends_in));
+            }
             // A machine a provisioner makes, for a requester that waits
             // for one (ADR-0051 point 3); a warm lease never makes one.
             if q.wait.as_deref() == Some("provision") && !r.warm && s.provisioner.is_some() {
@@ -2341,15 +2417,15 @@ async fn provision_for(
             .filter(|m| m.state == MachineState::Provisioning && m.repo == repo)
             .find(|m| {
                 let Some(size) = m.size else { return false };
-                let (cpus, memory) = waits.values().filter(|w| w.machine == m.request).fold(
-                    (r.need.cpus, r.need.memory),
-                    |(c, b), w| {
+                let (cpus, memory) = waits
+                    .values()
+                    .filter(|w| w.machine.as_ref() == Some(&m.request))
+                    .fold((r.need.cpus, r.need.memory), |(c, b), w| {
                         (
                             c + w.request.need.cpus,
                             b.saturating_add(w.request.need.memory),
                         )
-                    },
-                );
+                    });
                 size.cpus >= cpus && size.memory >= memory
             })
             .map(|m| (m.request.clone(), m.deadline))
@@ -2477,7 +2553,8 @@ async fn provision_for(
             member: me.id.clone(),
             request: r,
             need_from,
-            machine: request,
+            machine: Some(request),
+            refused,
             token: random_hex(24),
             started: std::time::Instant::now(),
             limit,
@@ -2496,12 +2573,22 @@ fn save_machines(s: &Inner, machines: &[Machine]) {
 /// How the lease `id` that waits for a machine stands, for its requester.
 fn waiting(s: &Inner, id: &str) -> Option<Provisioning> {
     let w = s.waits.lock().unwrap().get(id).cloned()?;
+    let Some(machine) = &w.machine else {
+        return Some(Provisioning {
+            id: id.into(),
+            state: "settling".into(),
+            waited: w.started.elapsed().as_secs(),
+            limit: w.limit.as_secs(),
+            why: "the lanes starting on a node that takes it settle".into(),
+            machine: None,
+        });
+    };
     let m = s
         .machines
         .lock()
         .unwrap()
         .iter()
-        .find(|m| m.request == w.machine)
+        .find(|m| &m.request == machine)
         .cloned();
     let why = match &m {
         Some(m) if m.member.is_some() => "the machine has enrolled; its node agent reports".into(),
@@ -2549,12 +2636,15 @@ async fn lease_wait(
         s.leases.lock().unwrap().remove(&id);
         Err((StatusCode::CONFLICT, why))
     };
+    let Some(request) = w.machine.clone() else {
+        return settle_wait(&s, &me, &id, w).or_else(fail);
+    };
     let machine = s
         .machines
         .lock()
         .unwrap()
         .iter()
-        .find(|m| m.request == w.machine)
+        .find(|m| m.request == request)
         .cloned();
     let Some(m) = machine.filter(|m| m.state != MachineState::Returning) else {
         return fail("the machine made for the lane was given back".into());
@@ -2585,6 +2675,166 @@ async fn lease_wait(
             }
             Err((_, why)) => p.why = why,
         }
+    }
+    Ok(Json(Leasing::Provisioning(p)))
+}
+
+/// The longest a lease waits for the lanes starting on a node to settle,
+/// and how long it waits beyond the node's estimate (#524): past that, it
+/// is refused as it would have been.
+const SETTLE_MOST: u64 = 300;
+const SETTLE_MARGIN: u64 = 60;
+
+/// Whether a lease that waits for lanes to settle, and waited longer than
+/// `before` (all, `None`), can be placed now: it goes first.
+fn settle_ahead(s: &Shared, ms: &[Member], before: Option<(&str, std::time::Instant)>) -> bool {
+    let ahead: Vec<Wait> = s
+        .waits
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(id, w)| {
+            w.machine.is_none() && before.is_none_or(|(me, at)| id.as_str() != me && w.started < at)
+        })
+        .map(|(_, w)| w.clone())
+        .collect();
+    ahead.iter().any(|w| {
+        ms.iter().find(|m| m.id == w.member).is_some_and(|m| {
+            placement_for(s, ms, m, &w.request, false)
+                .iter()
+                .any(|p| p.eligible)
+        })
+    })
+}
+
+/// The node that takes `r` once the lanes starting there settle, as the
+/// requester is told while it waits, and in how many seconds the last of
+/// them does; `None`: no node would take it then either.
+fn settle_target(
+    s: &Shared,
+    ms: &[Member],
+    me: &Member,
+    r: &LeaseRequest,
+) -> Option<(String, u64)> {
+    let p = placement_in(s, ms, me, r, false, true)
+        .into_iter()
+        .find(|p| p.eligible)?;
+    let h = s
+        .reports
+        .lock()
+        .unwrap()
+        .get(&p.node)
+        .and_then(|(_, rep)| rep.settling)
+        .unwrap_or_default();
+    Some((
+        format!(
+            "waiting for {}: a lane is starting there ({:.1} CPU and {} MiB held, about {} s)",
+            p.name,
+            h.cpus,
+            h.memory >> 20,
+            h.ends_in
+        ),
+        h.ends_in,
+    ))
+}
+
+/// Let `r` wait for the lanes starting on a node to settle, and answer `202`
+/// with the lease that waits (#524), as for a machine (ADR-0051 point 5).
+fn settle_for(
+    s: &Shared,
+    me: &Member,
+    r: LeaseRequest,
+    need_from: String,
+    refused: String,
+    why: String,
+    ends_in: u64,
+) -> Response {
+    let id = random_hex(8);
+    s.leases.lock().unwrap().insert(
+        id.clone(),
+        (
+            Lease {
+                id: id.clone(),
+                node: String::new(),
+                member: me.id.clone(),
+                repo: r.repo.clone(),
+                lane: r.lane.clone(),
+                need: r.need,
+                disk: 0,
+                state: "settling".into(),
+                created: store::now(),
+                expires_in: None,
+                shared: None,
+                warm: false,
+            },
+            random_hex(24),
+            std::time::Instant::now(),
+        ),
+    );
+    s.waits.lock().unwrap().insert(
+        id.clone(),
+        Wait {
+            member: me.id.clone(),
+            request: r,
+            need_from,
+            machine: None,
+            refused,
+            token: random_hex(24),
+            started: std::time::Instant::now(),
+            limit: Duration::from_secs((ends_in + SETTLE_MARGIN).min(SETTLE_MOST)),
+        },
+    );
+    let mut p = waiting(s, &id).expect("just inserted");
+    p.why = why;
+    (StatusCode::ACCEPTED, Json(Leasing::Provisioning(p))).into_response()
+}
+
+/// The lease `id` that waits for lanes to settle: offered once a node takes
+/// it and no lease that waited longer can be placed; refused with why
+/// (`Err`) once the wait ends, or no node would take it even then.
+fn settle_wait(
+    s: &Shared,
+    me: &Member,
+    id: &str,
+    w: Wait,
+) -> std::result::Result<Json<Leasing>, String> {
+    let ms = s.store.list().map_err(|e| e.to_string())?;
+    let mut p = waiting(s, id).expect("waits");
+    if settle_ahead(s, &ms, Some((id, w.started))) {
+        p.why = "a lane that asked before goes first".into();
+    } else if let Some(best) = placement_for(s, &ms, me, &w.request, false)
+        .into_iter()
+        .find(|p| p.eligible)
+    {
+        let mut r = w.request.clone();
+        r.node = best.node;
+        match offer(
+            s,
+            &ms,
+            me,
+            r,
+            w.need_from.clone(),
+            Some(best.why),
+            (id.into(), w.token.clone()),
+        ) {
+            Ok(o) => {
+                s.waits.lock().unwrap().remove(id);
+                return Ok(Json(Leasing::Offer(o)));
+            }
+            Err((_, why)) => p.why = why,
+        }
+    } else {
+        match settle_target(s, &ms, me, &w.request) {
+            Some((why, _)) => p.why = why,
+            None => return Err(w.refused),
+        }
+    }
+    if w.started.elapsed() > w.limit {
+        return Err(format!(
+            "{}; the lanes starting there did not settle within {} s",
+            w.refused,
+            w.limit.as_secs()
+        ));
     }
     Ok(Json(Leasing::Provisioning(p)))
 }
@@ -3347,7 +3597,7 @@ async fn tend(s: Shared) {
         .lock()
         .unwrap()
         .values()
-        .map(|w| w.machine.clone())
+        .filter_map(|w| w.machine.clone())
         .collect();
     let mut events = Vec::new();
     let delete: Vec<(String, String)> = {
