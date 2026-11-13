@@ -505,10 +505,11 @@ impl Local {
     }
 
     /// [`Self::lease`], waiting for a machine a provisioner makes when no
-    /// node can take the lane (ADR-0051 point 5): an offer, or the lease
-    /// that waits, to ask about with [`Self::wait`].
+    /// node can take the lane (ADR-0051 point 5), or for the lanes starting
+    /// on a node to settle when it takes the lane then (#524): an offer, or
+    /// the lease that waits, to ask about with [`Self::wait`].
     pub fn lease_or_wait(&self, r: &LeaseRequest) -> Result<Leasing> {
-        self.post("/v1/leases?wait=provision", r)
+        self.post("/v1/leases?wait=provision&settle=true", r)
     }
 
     /// The lease that waits for a machine: offered, or still waiting; an

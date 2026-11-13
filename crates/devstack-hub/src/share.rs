@@ -229,6 +229,7 @@ fn round(
             disk_free: None,
             disk_room: None,
             runs: Vec::new(),
+            settling: None,
             leases: Vec::new(),
             total: Some(total),
             used: None,

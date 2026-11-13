@@ -22,6 +22,21 @@ and listed with their assets on the
   you show it again (kept in this browser, like the favourites; a running
   stack is never hidden, and Remove still forgets a stack altogether).
 
+### Changed
+
+- **A start in the pool waits for another lane's start instead of being
+  refused (#524).** A node holds a starting lane's need off its offer for
+  three minutes, so two starts on the same node in the same minute used to
+  end in "no node of the pool can take the lane now". When a node would
+  take the lane once the lanes starting there have settled, `devstack up`
+  now shows a `settle` phase ("waiting for build-box: a lane is starting
+  there …") and starts the lane as soon as the node takes it, in the order
+  the starts came, for at most five minutes. A node full of running lanes,
+  or offline, still refuses at once. It needs this release on the
+  coordinator, the node and the requester; with an older one anywhere, the
+  start is refused as before. `devstack pool placement` says beside such a
+  node how long its starting lanes hold the room.
+
 ### Fixed
 
 - **The installed dashboard picks up a new version without F5.** After an

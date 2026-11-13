@@ -201,6 +201,19 @@ memory and free CPU, each over the need). The lease says why, in the lane's
 start and in `daemon.log` (`remote_lane_placed`); the dashboard shows the
 order and the reasons beside the nodes to start on.
 
+**A lane starting on a node** holds its need off the node's offer for three
+minutes after the node admitted it, while its use is measured too. A start
+that no node takes only for that **waits** rather than be refused: when a
+node would take it once the lanes starting there have settled, the start
+shows a `settle` phase ("waiting for build-box: a lane is starting there
+(9.0 CPU and 4096 MiB held, about 120 s)") and is placed as soon as a node
+takes it, leases that waited longer first. It waits at most a minute past
+the node's estimate, five minutes in all; past that, or once no node would
+take it even then, it is refused as before, and `--on local` starts it here.
+A warm lease does not wait, nor does a requester or node of an earlier
+release. `devstack pool placement` says beside such a node how long its
+starting lanes hold the room.
+
 **What a lane needs**
 ([ADR-0049](adr/0049-a-lanes-need-is-measured-disk-included.md)): CPU,
 memory, disk and GPUs. A node measures each lane it runs: the peak of its
