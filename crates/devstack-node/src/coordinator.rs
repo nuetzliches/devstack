@@ -3602,6 +3602,11 @@ async fn tend(s: Shared) {
     let mut events = Vec::new();
     let delete: Vec<(String, String)> = {
         let mut machines = s.machines.lock().unwrap();
+        // The members as they are under the machines' lock, which an
+        // enrolment holds while it adds its node and makes its machine
+        // `Ready`: read before it, a machine that enrolled since would find
+        // no node and be given back at once (#542).
+        let ms = s.store.list().unwrap_or_default();
         for m in machines.iter_mut() {
             match m.state {
                 MachineState::Provisioning if now > m.deadline => {
