@@ -121,6 +121,9 @@ pub struct ServiceView {
     /// log. `None` until the instance printed it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
+    /// The stack file says `shortcut = true`: the dashboard shows it as a
+    /// shortcut card of its own (several may). Older daemons omit it.
+    pub shortcut: bool,
 }
 
 /// A service's public link (`POST /v1/services/{name}/public-link`).

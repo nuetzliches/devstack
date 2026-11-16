@@ -1108,7 +1108,7 @@ const FIRST_LANES: u32 = 3;
 
 /// What a valid stack file may want changed (`devstack check` prints them):
 /// a newer key (`[stack] reviewed`, `announced_ports`, a service's `stop`,
-/// `singleton`, `tunnel` and `link`, `prepare.outputs` and `prepare.version`)
+/// `singleton`, `tunnel`, `link` and `shortcut`, `prepare.outputs` and `prepare.version`)
 /// without the `requires` that keeps an older devstack from failing on it;
 /// two services whose ports differ by one of the first
 /// few multiples of `[lanes] port_step`, so that one of the first lanes
@@ -1308,6 +1308,28 @@ pub fn warnings(stack: &Stack) -> Vec<Issue> {
                 message: format!(
                     "a devstack before {v} does not know this key and fails on it with \"unknown field\": `requires = \"{v}\"` makes it ask to be updated instead",
                     v = crate::LINK_SINCE
+                ),
+            });
+        }
+    }
+    let shortcut = crate::version_order(crate::SHORTCUT_SINCE);
+    if stack
+        .stack
+        .requires
+        .as_deref()
+        .is_none_or(|r| crate::version_order(r) < shortcut)
+    {
+        for name in stack
+            .services
+            .iter()
+            .filter(|(_, s)| s.shortcut.is_some())
+            .map(|(n, _)| n)
+        {
+            out.push(Issue {
+                path: format!("services.{name}.shortcut"),
+                message: format!(
+                    "a devstack before {v} does not know this key and fails on it with \"unknown field\": `requires = \"{v}\"` makes it ask to be updated instead",
+                    v = crate::SHORTCUT_SINCE
                 ),
             });
         }

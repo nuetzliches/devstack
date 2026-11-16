@@ -472,6 +472,7 @@ impl Supervisor {
                         public_link: None,
                         public_link_available: svc.port.is_some() && svc.tunnel != Some(false),
                         link: None,
+                        shortcut: svc.shortcut == Some(true),
                     },
                     main: None,
                     previous: None,

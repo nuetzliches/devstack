@@ -63,7 +63,7 @@ export function shopSeed(now: number): MockStackSeed {
       now,
     ),
     service({ name: 'worker', kind: 'service', groups: ['app'] }, repo, now),
-    service({ name: 'web', kind: 'devserver', groups: ['app'], port: 4200, prepare: { source: 'store', at: now - 26 * MIN, ms: 2400, key: 'a41f09c3e2b87d5610fe', prepare_ms: 162_000 } }, repo, now),
+    service({ name: 'web', kind: 'devserver', groups: ['app'], port: 4200, shortcut: true, prepare: { source: 'store', at: now - 26 * MIN, ms: 2400, key: 'a41f09c3e2b87d5610fe', prepare_ms: 162_000 } }, repo, now),
     service(
       {
         name: 'migrate',
@@ -235,7 +235,7 @@ export function docsSeed(now: number): MockStackSeed {
   const last = now - 2 * 60 * MIN - 14 * MIN;
   const services: ServiceView[] = [
     // 4200, as shop's `web`: the overlap `/hub/ports` shows (ADR-0082).
-    service({ name: 'site', kind: 'devserver', groups: ['docs'], port: 4200, since: last - 40 * MIN }, repo, now),
+    service({ name: 'site', kind: 'devserver', groups: ['docs'], port: 4200, shortcut: true, since: last - 40 * MIN }, repo, now),
     service({ name: 'search-api', kind: 'service', groups: ['docs'], port: 8090, since: last - 40 * MIN }, repo, now),
   ];
   const infra: InfraView[] = [

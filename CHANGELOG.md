@@ -20,6 +20,11 @@ and listed with their assets on the
   and open the stack's folder. The tiles follow the sidebar's order, and
   hidden stacks stay out. The hub sends the figures as a new `summary` event
   on `/hub/events`.
+- **Shortcut cards for services.** `shortcut = true` in `[services.<name>]`
+  shows a service as a card of its own above the groups and the pins, with a
+  large button that opens its link, whatever the filter. Several services may
+  have one; the service starts and stops as before. A file with it should say
+  `requires = "0.48.0"`.
 
 ## [0.47.0] - 2026-11-13
 

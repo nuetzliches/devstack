@@ -274,6 +274,7 @@ type ServiceView = {
   public_link_available: boolean;        // one may be opened: it has a `port`, and no `tunnel = false`
   link?: string;                         // the running instance's own link, from its output (`link = { from_log }`, ADR-0101); may hold a token,
                                          // so apart from `url`; absent until printed. Since 0.44.0
+  shortcut?: boolean;                    // the stack file says `shortcut = true`: the overview shows it as a card of its own (several may). Since 0.48.0; older daemons omit it
                                          // (StackView.public_link_domain: the named tunnel's domain, when one is set up (ADR-0091);
                                          //  links then answer at https://{service}-{lane}-{stack}.<domain>, and open once the hub's connector carries them)
   singleton?: boolean;                   // it runs once per machine, in the main working tree only (`singleton = true`, or the deprecated `lanes = false`, ADR-0080); the dashboard's stack page lists it (ADR-0081). Since 0.33.0; older daemons omit it

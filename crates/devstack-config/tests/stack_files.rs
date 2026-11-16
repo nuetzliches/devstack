@@ -1296,6 +1296,36 @@ tunnel = false
 }
 
 #[test]
+fn shortcut_may_mark_several_services() {
+    use devstack_config::{SHORTCUT_SINCE, validate::warnings};
+    let text = MINIMAL.replace(
+        "port = 5000
+",
+        "port = 5000
+shortcut = true
+",
+    ) + "[services.web]
+run = \"x\"
+port = 4500
+shortcut = true
+";
+    let mut s = from_str(&text, Path::new("t")).unwrap();
+    assert_eq!(s.services["api"].shortcut, Some(true));
+    assert_eq!(s.services["web"].shortcut, Some(true));
+    let w = warnings(&s);
+    for name in ["api", "web"] {
+        assert!(
+            w.iter()
+                .any(|i| i.path == format!("services.{name}.shortcut")
+                    && i.message.contains(SHORTCUT_SINCE)),
+            "{w:?}"
+        );
+    }
+    s.stack.requires = Some(SHORTCUT_SINCE.into());
+    assert!(warnings(&s).is_empty());
+}
+
+#[test]
 fn link_from_log_takes_the_first_capture_group() {
     use devstack_config::{LINK_SINCE, model::Link, validate::warnings};
     let text = format!(

@@ -7,6 +7,7 @@ import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
 import ServiceRow from '@/components/ServiceRow.vue';
 import ContainerRow from '@/components/ContainerRow.vue';
+import ShortcutCard from '@/components/ShortcutCard.vue';
 import CommandRow from '@/components/CommandRow.vue';
 import Icon from '@/components/icons/Icon.vue';
 import RowUsage from '@/components/RowUsage.vue';
@@ -89,6 +90,9 @@ const shown = computed(() => {
   if (!f) return withPinned.value;
   return withPinned.value.map((c) => ({ ...c, members: c.members.filter((m) => matches(m, f)) })).filter((c) => c.members.length);
 });
+
+/** Shortcut cards: every service the stack file marks, above the groups and the pins, whatever the filter. */
+const shortcuts = computed(() => (view.value?.services ?? []).filter((s) => s.shortcut));
 
 /** Sections folded away, per stack, kept in this browser; only their head folds them. */
 const folded = ref<Record<string, boolean>>({});
@@ -173,6 +177,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
           <p v-if="filter" class="filter-note muted" data-testid="overview-filter">
             Showing only what is {{ filterLabel[filter] }}<template v-if="!shown.length">: nothing right now</template>.
           </p>
+          <div v-if="shortcuts.length" class="shortcuts" data-testid="shortcuts">
+            <ShortcutCard v-for="s in shortcuts" :key="s.name" :service="s" />
+          </div>
           <div class="list stale-dim" data-testid="member-list">
             <section v-for="card in shown" :key="card.key" class="card section" :class="{ folded: folded[card.key] }" :data-testid="`group-${card.key}`">
               <header class="card-header section-head">
@@ -256,6 +263,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 </template>
 
 <style scoped>
+.shortcuts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
 .head-tail {
   flex: none;
   width: calc(28px + var(--col-pill) + var(--col-actions) + 20px);
