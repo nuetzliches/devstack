@@ -95,11 +95,77 @@ fn path_of(d: &Path, id: &str) -> PathBuf {
     d.join(format!("{id}.json"))
 }
 
-/// The entry file as it is, as JSON: what a write keeps.
-fn read_raw(d: &Path, id: &str) -> Option<serde_json::Map<String, serde_json::Value>> {
-    match serde_json::from_slice(&std::fs::read(path_of(d, id)).ok()?).ok()? {
-        serde_json::Value::Object(m) => Some(m),
-        _ => None,
+/// Why an entry's file did not read.
+enum Unread {
+    /// The file is there, and still does not read after the retries.
+    Io(std::io::Error),
+    /// It reads, and is no JSON of the kind asked for.
+    Parse(serde_json::Error),
+}
+
+impl std::fmt::Display for Unread {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Unread::Io(e) => e.fmt(f),
+            Unread::Parse(e) => e.fmt(f),
+        }
+    }
+}
+
+/// What the file `path` holds, parsed; `Ok(None)` once it is gone. A read
+/// that meets the file while its daemon replaces it (on Windows the rename
+/// over it can fail a reader for a moment), or finds it cut off, is tried
+/// again for up to 200 ms: an entry skipped reads as a stack that claims
+/// nothing, and an entry written back from nothing loses its id (#535,
+/// #539). Content that reads and does not parse is given up at once.
+fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>, Unread> {
+    let mut tries = 0;
+    loop {
+        tries += 1;
+        let last = tries == 10;
+        match std::fs::read(path) {
+            Ok(bytes) => match serde_json::from_slice(&bytes) {
+                Ok(v) => return Ok(Some(v)),
+                Err(e) if e.is_eof() && !last => {}
+                Err(e) => return Err(Unread::Parse(e)),
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) if last => return Err(Unread::Io(e)),
+            Err(_) => {}
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// Said in the log once per file: an entry that does not read.
+fn unreadable(path: &Path, error: &Unread) {
+    static SAID: std::sync::Mutex<BTreeSet<PathBuf>> = std::sync::Mutex::new(BTreeSet::new());
+    if SAID.lock().unwrap().insert(path.to_path_buf()) {
+        crate::diag::warn(
+            "registry_entry_unreadable",
+            serde_json::json!({ "file": path, "error": error.to_string() }),
+        );
+    }
+}
+
+/// The entry file as it is, as JSON: what a write keeps. An error when it is
+/// there and does not read (a write then must not replace it with only what
+/// it sets); a file that reads and is no JSON object is given up, said in
+/// the log, and written anew.
+fn read_raw(
+    d: &Path,
+    id: &str,
+) -> std::io::Result<Option<serde_json::Map<String, serde_json::Value>>> {
+    let path = path_of(d, id);
+    match read_json::<serde_json::Value>(&path) {
+        Ok(Some(serde_json::Value::Object(m))) => Ok(Some(m)),
+        Ok(None) => Ok(None),
+        Ok(Some(_)) => Ok(None),
+        Err(Unread::Io(e)) => Err(e),
+        Err(e) => {
+            unreadable(&path, &e);
+            Ok(None)
+        }
     }
 }
 
@@ -116,7 +182,7 @@ fn change(
         return Err(std::io::Error::other(format!("not a stack id: {id}")));
     }
     std::fs::create_dir_all(d)?;
-    let mut m = read_raw(d, id).unwrap_or_default();
+    let mut m = read_raw(d, id)?.unwrap_or_default();
     f(&mut m);
     let tmp = d.join(format!("{id}.json.{}.tmp", std::process::id()));
     std::fs::write(
@@ -187,40 +253,20 @@ pub fn read(id: &str) -> Option<Entry> {
 }
 
 fn read_in(d: &Path, id: &str) -> Option<Entry> {
-    serde_json::from_slice(&std::fs::read(path_of(d, id)).ok()?).ok()
+    read_entry(&path_of(d, id))
 }
 
 pub fn list() -> Vec<Entry> {
     list_in(&dir())
 }
 
-/// The entry in the file `path`; `None` once it is gone. A read that meets
-/// the file while its daemon replaces it (on Windows the rename over it can
-/// fail a reader for a moment) is tried again for up to 200 ms: an entry
-/// skipped would read as a stack that claims nothing, and another stack's
-/// lane could be numbered onto its ports (#535, #539). One that still does
-/// not read is said in the log, once per file.
+/// The entry in the file `path` ([`read_json`]); `None` once it is gone, or
+/// when it does not read, which is said in the log once per file.
 fn read_entry(path: &Path) -> Option<Entry> {
-    static SAID: std::sync::Mutex<BTreeSet<PathBuf>> = std::sync::Mutex::new(BTreeSet::new());
-    let mut error = String::new();
-    for _ in 0..10 {
-        match std::fs::read(path) {
-            Ok(bytes) => match serde_json::from_slice(&bytes) {
-                Ok(e) => return Some(e),
-                Err(e) => error = e.to_string(),
-            },
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
-            Err(e) => error = e.to_string(),
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    if SAID.lock().unwrap().insert(path.to_path_buf()) {
-        crate::diag::warn(
-            "registry_entry_unreadable",
-            serde_json::json!({ "file": path, "error": error }),
-        );
-    }
-    None
+    read_json(path).unwrap_or_else(|e| {
+        unreadable(path, &e);
+        None
+    })
 }
 
 fn list_in(d: &Path) -> Vec<Entry> {
@@ -349,12 +395,12 @@ mod tests {
         assert_eq!(e.claims.holder(6300), Some("fix"));
         assert_eq!(e.claims.holder(6000), Some("main"));
         assert_eq!(e.claims.ports().len(), 4);
-        let raw = read_raw(d, "abc").unwrap();
+        let raw = read_raw(d, "abc").unwrap().unwrap();
         assert_eq!(raw["future"], "kept");
         // `--shift none` takes the field away again.
         set_shift_in(d, &entry("abc"), 0).unwrap();
         assert_eq!(read_in(d, "abc").unwrap().shift, 0);
-        assert!(!read_raw(d, "abc").unwrap().contains_key("shift"));
+        assert!(!read_raw(d, "abc").unwrap().unwrap().contains_key("shift"));
         assert_eq!(list_in(d).len(), 1, "no temporary file is left");
     }
 
@@ -392,5 +438,46 @@ mod tests {
         assert!(read_entry(&path_of(d.path(), "nope")).is_none());
         std::fs::write(&path, "not json").unwrap();
         assert!(read_entry(&path).is_none());
+    }
+
+    /// A write that meets its entry while it is replaced reads it again,
+    /// rather than writing back only what it sets: an entry without its id
+    /// and name drops out of `list` with its claims (code review after
+    /// 0.47.0, finding 1).
+    #[test]
+    fn a_write_keeps_the_entry_it_met_while_it_was_replaced() {
+        let d = tempfile::tempdir().unwrap();
+        let path = path_of(d.path(), "abc");
+        std::fs::write(&path, "{\"id\":\"abc\",").unwrap();
+        let full = serde_json::to_vec(&entry("abc")).unwrap();
+        let later = path.clone();
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            std::fs::write(later, full).unwrap();
+        });
+        let claims = Claims {
+            main: vec![4600],
+            ..Claims::default()
+        };
+        set_claims_in(d.path(), "abc", &claims).unwrap();
+        writer.join().unwrap();
+        let e = read_in(d.path(), "abc").expect("still an entry");
+        assert_eq!((e.name.as_str(), e.claims), ("shop", claims));
+    }
+
+    /// What never parses is not waited for: every `list` would pay for it
+    /// (code review after 0.47.0, finding 2).
+    #[test]
+    fn an_entry_that_is_no_entry_is_given_up_at_once() {
+        let d = tempfile::tempdir().unwrap();
+        let path = path_of(d.path(), "abc");
+        std::fs::write(&path, "[]").unwrap();
+        let t0 = std::time::Instant::now();
+        assert!(read_entry(&path).is_none());
+        assert!(
+            t0.elapsed() < std::time::Duration::from_millis(100),
+            "{:?}",
+            t0.elapsed()
+        );
     }
 }
