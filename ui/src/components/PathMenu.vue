@@ -100,7 +100,7 @@ function openWith(o: Opener) {
       </div>
       <OpenersDialog :open="managing" :openers="hub.openers ?? []" @close="managing = false" />
     </div>
-    <FavoriteOpeners v-if="canOpen" :stack-id="stackId" :path="path" />
+    <FavoriteOpeners v-if="canOpen" :stack-id="stackId" :path="path" @opened="close" />
   </div>
 </template>
 

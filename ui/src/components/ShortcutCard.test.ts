@@ -57,4 +57,13 @@ describe('ShortcutCard', () => {
     expect(el.textContent).toContain('No port or link to open');
     app.unmount();
   });
+
+  it('takes a link that is no web address for no link at all', async () => {
+    // Printed by the service, but not http(s): nothing a browser opens, and
+    // no port to fall back to (never `http://localhost:null`).
+    const { el, app } = await mountCard(service({ port: null, url: null, link: 'vscode://file/x' }));
+    expect(el.querySelector('[data-testid="shortcut-open"]')).toBeNull();
+    expect(el.textContent).toContain('No port or link to open');
+    app.unmount();
+  });
 });

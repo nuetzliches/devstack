@@ -10,6 +10,8 @@ import { useHub } from '@/stores/hub';
 import Icon from './icons/Icon.vue';
 
 const props = defineProps<{ stackId: string | null; path: string }>();
+/** `opened`: a program was asked to open the path (PathMenu closes its menu). */
+const emit = defineEmits<{ opened: [] }>();
 
 const hub = useHub();
 const openerPrefs = useOpenerPrefs();
@@ -19,6 +21,7 @@ watchEffect(() => {
 });
 
 function openWith(o: Opener) {
+  emit('opened');
   if (props.stackId) void hub.openWith(props.stackId, props.path, o);
 }
 </script>

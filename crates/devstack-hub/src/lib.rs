@@ -156,7 +156,70 @@ enum Phase {
 
 /// Starts and stops under way, by stack id: a start waits for a stop, and
 /// a request for a stack in between is told it is starting or stopping.
-type Phases = Arc<Mutex<HashMap<String, Phase>>>;
+/// Every change ticks [`Phases::subscribe`]: the start page's `summary`
+/// event shows a start or stop the hub runs in every tab, not only in the
+/// one that asked for it.
+#[derive(Clone)]
+struct Phases {
+    map: Arc<Mutex<HashMap<String, Phase>>>,
+    changed: Arc<watch::Sender<u64>>,
+}
+
+impl Default for Phases {
+    fn default() -> Self {
+        Self {
+            map: Arc::default(),
+            changed: Arc::new(watch::channel(0).0),
+        }
+    }
+}
+
+impl Phases {
+    fn get(&self, id: &str) -> Option<Phase> {
+        self.map.lock().unwrap().get(id).copied()
+    }
+
+    fn all(&self) -> HashMap<String, Phase> {
+        self.map.lock().unwrap().clone()
+    }
+
+    fn set(&self, id: &str, phase: Phase) {
+        self.map.lock().unwrap().insert(id.to_string(), phase);
+        self.tick();
+    }
+
+    /// Set `Stopping` unless a stop is under way already: `false` then.
+    fn begin_stop(&self, id: &str) -> bool {
+        {
+            let mut p = self.map.lock().unwrap();
+            if p.get(id) == Some(&Phase::Stopping) {
+                return false;
+            }
+            p.insert(id.to_string(), Phase::Stopping);
+        }
+        self.tick();
+        true
+    }
+
+    /// Forget `phase` of stack `id`, unless another one took its place.
+    fn end(&self, id: &str, phase: Phase) {
+        let ended = {
+            let mut p = self.map.lock().unwrap();
+            p.get(id) == Some(&phase) && p.remove(id).is_some()
+        };
+        if ended {
+            self.tick();
+        }
+    }
+
+    fn tick(&self) {
+        self.changed.send_modify(|n| *n = n.wrapping_add(1));
+    }
+
+    fn subscribe(&self) -> watch::Receiver<u64> {
+        self.changed.subscribe()
+    }
+}
 
 #[derive(Clone)]
 struct AppState {
@@ -1623,41 +1686,7 @@ fn hub_events(s: &AppState) -> impl tokio_stream::Stream<Item = serde_json::Valu
     let activity = tokio_stream::wrappers::WatchStream::new(activity::subscribe())
         .filter(|at| *at > 0)
         .map(|at| serde_json::json!({ "type": "activity", "at": at }));
-    // What needs attention (ADR-0097): again when a stream's glance or the
-    // stack list (a start failed, a stack stopped) changed, sent only when
-    // the items did.
-    let attention = {
-        let s = s.clone();
-        let mut last: Option<Vec<summary::Attention>> = None;
-        tokio_stream::wrappers::WatchStream::new(s.board.subscribe())
-            .map(|_| ())
-            .merge(tokio_stream::wrappers::WatchStream::new(s.stacks.clone()).map(|_| ()))
-            .filter_map(move |()| {
-                let now = summary::attention(&s);
-                (last.as_ref() != Some(&now)).then(|| {
-                    last = Some(now.clone());
-                    serde_json::json!({ "type": "attention", "items": now })
-                })
-            })
-    };
-    // Every stack's figures for the start page: on the same changes as
-    // `attention`, sent only when they changed. A start or stop the hub runs
-    // moves neither the board nor the list until the daemon comes or goes;
-    // the page that asked for it shows that on its own.
-    let glances = {
-        let s = s.clone();
-        let mut last: Option<Vec<summary::StackGlance>> = None;
-        tokio_stream::wrappers::WatchStream::new(s.board.subscribe())
-            .map(|_| ())
-            .merge(tokio_stream::wrappers::WatchStream::new(s.stacks.clone()).map(|_| ()))
-            .filter_map(move |()| {
-                let now = summary::glances(&s);
-                (last.as_ref() != Some(&now)).then(|| {
-                    last = Some(now.clone());
-                    serde_json::json!({ "type": "summary", "stacks": now })
-                })
-            })
-    };
+    let derived = summary_events(s);
     // A dashboard that fell behind misses a toast, nothing it shows.
     let notices =
         tokio_stream::wrappers::BroadcastStream::new(notice::subscribe()).filter_map(|n| n.ok());
@@ -1670,9 +1699,55 @@ fn hub_events(s: &AppState) -> impl tokio_stream::Stream<Item = serde_json::Valu
         .merge(skills)
         .merge(activity)
         .merge(trees)
-        .merge(attention)
-        .merge(glances)
+        .merge(derived)
         .merge(notices)
+}
+
+/// What needs attention (ADR-0097, the `attention` event) and every
+/// stack's figures for the start page (`summary`), each sent only when it
+/// changed: from one summary per change of a stream's glance, the stack
+/// list (a start failed, a stack stopped) or a start or stop the hub runs,
+/// so every tab shows it, not only the one that asked for it. The task
+/// ends with the stream.
+fn summary_events(s: &AppState) -> tokio_stream::wrappers::ReceiverStream<serde_json::Value> {
+    let (tx, rx) = tokio::sync::mpsc::channel(8);
+    let s = s.clone();
+    tokio::spawn(async move {
+        let mut board = s.board.subscribe();
+        let mut stacks = s.stacks.clone();
+        let mut phases = s.phases.subscribe();
+        let mut attention: Option<Vec<summary::Attention>> = None;
+        let mut glances: Option<Vec<summary::StackGlance>> = None;
+        loop {
+            let sum = summary::summary(&s);
+            let now = summary::attention(&sum);
+            if attention.as_ref() != Some(&now) {
+                let v = serde_json::json!({ "type": "attention", "items": now });
+                if tx.send(v).await.is_err() {
+                    return;
+                }
+                attention = Some(now);
+            }
+            let now = summary::glances(&sum);
+            if glances.as_ref() != Some(&now) {
+                let v = serde_json::json!({ "type": "summary", "stacks": now });
+                if tx.send(v).await.is_err() {
+                    return;
+                }
+                glances = Some(now);
+            }
+            let changed = tokio::select! {
+                r = board.changed() => r.is_ok(),
+                r = stacks.changed() => r.is_ok(),
+                r = phases.changed() => r.is_ok(),
+                () = tx.closed() => false,
+            };
+            if !changed {
+                return;
+            }
+        }
+    });
+    tokio_stream::wrappers::ReceiverStream::new(rx)
 }
 
 fn entry(s: &AppState, id: &str) -> Option<StackEntry> {
@@ -2651,13 +2726,13 @@ async fn stack_up(
         return err(StatusCode::INTERNAL_SERVER_ERROR, "cannot find devstack");
     };
     s.start_errors.lock().unwrap().remove(&id);
-    let stopping = s.phases.lock().unwrap().get(&id) == Some(&Phase::Stopping);
+    let stopping = s.phases.get(&id) == Some(Phase::Stopping);
     if !stopping {
-        s.phases.lock().unwrap().insert(id.clone(), Phase::Starting);
+        s.phases.set(&id, Phase::Starting);
         return match start_up(&s, &id, &exe, &e, shift.as_deref(), &profile) {
             Ok(()) => StatusCode::ACCEPTED.into_response(),
             Err(msg) => {
-                end_phase(&s.phases, &id, Phase::Starting);
+                s.phases.end(&id, Phase::Starting);
                 err(StatusCode::INTERNAL_SERVER_ERROR, msg)
             }
         };
@@ -2668,14 +2743,12 @@ async fn stack_up(
     // old one is gone.
     tokio::spawn(async move {
         let t0 = Instant::now();
-        while s.phases.lock().unwrap().get(&id) == Some(&Phase::Stopping)
-            && t0.elapsed() < STOP_WAIT
-        {
+        while s.phases.get(&id) == Some(Phase::Stopping) && t0.elapsed() < STOP_WAIT {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
-        s.phases.lock().unwrap().insert(id.clone(), Phase::Starting);
+        s.phases.set(&id, Phase::Starting);
         if let Err(msg) = start_up(&s, &id, &exe, &e, shift.as_deref(), &profile) {
-            end_phase(&s.phases, &id, Phase::Starting);
+            s.phases.end(&id, Phase::Starting);
             s.start_errors.lock().unwrap().insert(id, msg);
         }
     });
@@ -2685,14 +2758,6 @@ async fn stack_up(
 /// How long a start waits for a stop under way, and a stop for its daemon
 /// to exit (the daemon gives its services 90 s, ADR-0009).
 const STOP_WAIT: Duration = Duration::from_secs(120);
-
-/// Forget `phase` of stack `id`, unless another one took its place.
-fn end_phase(phases: &Phases, id: &str, phase: Phase) {
-    let mut p = phases.lock().unwrap();
-    if p.get(id) == Some(&phase) {
-        p.remove(id);
-    }
-}
 
 /// Run `devstack up` for stack `e` in the background, with `--shift` when
 /// one is asked (ADR-0082); the stack is `Starting` until it ends.
@@ -2730,7 +2795,7 @@ fn start_up(
     let id = id.to_string();
     std::thread::spawn(move || {
         let ok = child.wait().is_ok_and(|st| st.success());
-        end_phase(&phases, &id, Phase::Starting);
+        phases.end(&id, Phase::Starting);
         if ok {
             return;
         }
@@ -2814,12 +2879,8 @@ async fn stack_down(
         }
         return err(StatusCode::SERVICE_UNAVAILABLE, "stack not running");
     };
-    {
-        let mut phases = s.phases.lock().unwrap();
-        if phases.get(&id) == Some(&Phase::Stopping) {
-            return StatusCode::ACCEPTED.into_response(); // under way already
-        }
-        phases.insert(id.clone(), Phase::Stopping);
+    if !s.phases.begin_stop(&id) {
+        return StatusCode::ACCEPTED.into_response(); // under way already
     }
     let (token, phases, port) = (s.token.clone(), s.phases.clone(), daemon.port);
     let state = e.repo.join(".devstack");
@@ -2872,7 +2933,7 @@ async fn stack_down(
         {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
-        end_phase(&phases, &id, Phase::Stopping);
+        phases.end(&id, Phase::Stopping);
     });
     StatusCode::ACCEPTED.into_response()
 }
@@ -3467,7 +3528,7 @@ fn daemon_now(s: &AppState, id: &str) -> DaemonNow {
     let Some(e) = entry(s, id) else {
         return DaemonNow::Absent { starting: false };
     };
-    let phase = s.phases.lock().unwrap().get(id).copied();
+    let phase = s.phases.get(id);
     match daemon_in(&e.repo.join(".devstack")) {
         DaemonNow::Absent { .. } if phase == Some(Phase::Stopping) => DaemonNow::Stopping,
         DaemonNow::Absent { .. } => DaemonNow::Absent {
@@ -4542,5 +4603,34 @@ mod shift_tests {
             Ok(vec!["--profile".to_string(), "e2e".into(), "--yes".into()])
         );
         assert!(profile_args(br#"{"profile":"--run"}"#).is_err());
+    }
+}
+
+#[cfg(test)]
+mod phases_tests {
+    use super::{Phase, Phases};
+
+    /// A start or stop the hub runs is told to every event stream (the
+    /// start page's tiles in every tab), and only a real change is.
+    #[test]
+    fn every_change_of_a_phase_is_told_and_nothing_else() {
+        let p = Phases::default();
+        let mut rx = p.subscribe();
+        assert!(!rx.has_changed().unwrap());
+        p.set("shop", Phase::Starting);
+        assert!(rx.has_changed().unwrap(), "a start");
+        rx.borrow_and_update();
+        // Another phase's end leaves it: nothing to tell.
+        p.end("shop", Phase::Stopping);
+        assert!(!rx.has_changed().unwrap());
+        p.end("shop", Phase::Starting);
+        assert!(rx.has_changed().unwrap(), "its end");
+        rx.borrow_and_update();
+        assert!(p.begin_stop("shop"));
+        assert!(rx.has_changed().unwrap(), "a stop");
+        rx.borrow_and_update();
+        assert!(!p.begin_stop("shop"), "under way already");
+        assert!(!rx.has_changed().unwrap());
+        assert_eq!(p.get("shop"), Some(Phase::Stopping));
     }
 }

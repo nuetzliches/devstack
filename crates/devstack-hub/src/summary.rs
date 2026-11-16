@@ -225,7 +225,7 @@ fn overall(stacks: &[StackSummary]) -> &'static str {
 
 pub(crate) fn summary(s: &AppState) -> Summary {
     let entries = s.stacks.borrow().clone();
-    let phases = s.phases.lock().unwrap().clone();
+    let phases = s.phases.all();
     let stacks: Vec<StackSummary> = entries
         .iter()
         .map(|e| stack(e, phases.get(&e.id).copied(), &s.board.of(&e.id)))
@@ -250,15 +250,15 @@ pub(crate) struct Attention {
     pub item: Item,
 }
 
-/// What needs attention in every stack, for `/hub/events` (ADR-0097).
-pub(crate) fn attention(s: &AppState) -> Vec<Attention> {
-    summary(s)
-        .stacks
-        .into_iter()
+/// What needs attention in every stack of `sum`, for `/hub/events`
+/// (ADR-0097).
+pub(crate) fn attention(sum: &Summary) -> Vec<Attention> {
+    sum.stacks
+        .iter()
         .flat_map(|st| {
-            st.attention.into_iter().map(move |item| Attention {
+            st.attention.iter().map(move |item| Attention {
                 stack: st.id.clone(),
-                item,
+                item: item.clone(),
             })
         })
         .collect()
@@ -276,13 +276,12 @@ pub(crate) struct StackGlance {
     pub lanes: usize,
 }
 
-/// Every stack's figures, for `/hub/events`.
-pub(crate) fn glances(s: &AppState) -> Vec<StackGlance> {
-    summary(s)
-        .stacks
-        .into_iter()
+/// Every stack's figures in `sum`, for `/hub/events`.
+pub(crate) fn glances(sum: &Summary) -> Vec<StackGlance> {
+    sum.stacks
+        .iter()
         .map(|st| StackGlance {
-            id: st.id,
+            id: st.id.clone(),
             state: st.state,
             ready: st.ready,
             total: st.total,

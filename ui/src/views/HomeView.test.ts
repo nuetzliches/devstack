@@ -140,6 +140,18 @@ describe('the start page', () => {
     unmount();
   });
 
+  it('offers no favourite program while the hub is away', async () => {
+    useOpenerPrefs().save({ order: [], hidden: [], favorites: ['vscode'] });
+    const { el, events, unmount } = await mounted([shop]);
+    await settle();
+    expect(tile(el, 'ab12').querySelector('[data-testid="path-favorite"]')).not.toBeNull();
+    // The tiles stay from the last list; a program could not be opened.
+    events.onState?.('error');
+    await settle();
+    expect(tile(el, 'ab12').querySelector('[data-testid="path-favorite"]')).toBeNull();
+    unmount();
+  });
+
   it('marks a favourite from its tile, which moves it first', async () => {
     const { el, unmount } = await mounted([shop, crm]);
     expect(names(el)).toEqual(['crm', 'shop']);

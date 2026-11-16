@@ -133,7 +133,8 @@ const moreItems = computed(() => items.value.length - shownItems.value.length);
     </ul>
 
     <footer class="foot">
-      <FavoriteOpeners :stack-id="stack.id" :path="stack.repo" />
+      <!-- Only while the hub answers: it opens the program (PathMenu's `canOpen`). -->
+      <FavoriteOpeners v-if="hub.reachable" :stack-id="stack.id" :path="stack.repo" />
     </footer>
   </article>
 </template>
