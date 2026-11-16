@@ -26,6 +26,16 @@ and listed with their assets on the
   have one; the service starts and stops as before. A file with it should say
   `requires = "0.48.0"`.
 
+### Fixed
+
+- **A lane started here no longer lands on ports another stack claims for
+  its lane on a node** (#535). Its start checked only whether one of its
+  ports was in use at that moment; a lane on a node forwards its ports here
+  only once its start there is done, so a lane started in between took a
+  number on those ports and its services failed later with "already in
+  use". The start now also checks what other stacks claim, its containers'
+  host ports included, and takes another number if its range is claimed.
+
 ## [0.47.0] - 2026-11-13
 
 A start in the pool now waits while another lane is starting on the node it
