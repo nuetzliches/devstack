@@ -107,6 +107,11 @@ describe('hub store', () => {
     await hub.loadOpeners();
     await hub.loadOpeners();
     expect(fake.requests.filter((r) => r.path === '/hub/openers')).toHaveLength(1);
+    // Asked by every tile of the start page at once: still one request.
+    setActivePinia(createPinia());
+    const fresh = useHub();
+    await Promise.all([fresh.loadOpeners(), fresh.loadOpeners(), fresh.loadOpeners()]);
+    expect(fake.requests.filter((r) => r.path === '/hub/openers')).toHaveLength(2);
     await hub.openWith('shop', '/src/shop', hub.openers![0]);
     expect(fake.requests.find((r) => r.path === '/hub/open')?.body).toEqual({ stack: 'shop', path: '/src/shop', with: 'vscode' });
   });

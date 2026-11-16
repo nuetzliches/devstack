@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { ServiceView } from '@/api/types';
-import { linkLabel, serviceUrl } from '@/lib/format';
+import { linkLabel, serviceUrl, webUrl } from '@/lib/format';
 import { statusBucket } from '@/lib/status';
 import { useStack } from '@/stores/stack';
 import Icon from '@/components/icons/Icon.vue';
@@ -9,8 +9,11 @@ import Icon from '@/components/icons/Icon.vue';
 const props = defineProps<{ service: ServiceView }>();
 const stack = useStack();
 
-/** A service with no port and no link has nothing to open. */
-const url = computed(() => (props.service.port || props.service.link || props.service.url ? serviceUrl(props.service) : null));
+/** A service with no port and no web link has nothing to open: the rule `serviceUrl` takes its link by. */
+const url = computed(() => {
+  const s = props.service;
+  return webUrl(s.link) || webUrl(s.url) || s.port ? serviceUrl(s) : null;
+});
 const bucket = computed(() => statusBucket(props.service.status));
 const tone: Record<ReturnType<typeof statusBucket>, string> = { healthy: 'ok', starting: 'accent', failed: 'danger', idle: 'neutral' };
 </script>

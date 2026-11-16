@@ -259,14 +259,22 @@ export const useHub = defineStore('hub', () => {
   }
 
   /** Ask the hub once what it can open folders with; an older hub knows nothing. */
-  async function loadOpeners() {
-    if (openers.value) return;
-    try {
-      const res = await api().request<Opener[]>('GET', paths.openers);
-      openers.value = res.ok && Array.isArray(res.body) ? res.body : [];
-    } catch {
-      openers.value = null;
-    }
+  // One request for every caller that asks while it is under way: the start
+  // page's tiles all ask at once.
+  let openersLoading: Promise<void> | null = null;
+  function loadOpeners(): Promise<void> {
+    if (openers.value) return Promise.resolve();
+    openersLoading ??= (async () => {
+      try {
+        const res = await api().request<Opener[]>('GET', paths.openers);
+        openers.value = res.ok && Array.isArray(res.body) ? res.body : [];
+      } catch {
+        openers.value = null;
+      } finally {
+        openersLoading = null;
+      }
+    })();
+    return openersLoading;
   }
 
   /** Open one of a stack's trees with a program the hub found. */

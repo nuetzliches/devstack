@@ -49,6 +49,14 @@ and listed with their assets on the
   that enrolled in between found no node in that list and was given back,
   and the lane waiting for it failed with "the machine made for the lane
   was given back".
+- **The start page's tiles show a start or stop from another tab.** A
+  start or stop the hub runs now updates the `summary` event, so every
+  tab's tile says starting or stopping, not only the one that asked.
+- **A shortcut card whose service prints a link that is no web address**
+  and has no port says there is nothing to open, instead of a button to
+  `http://localhost:null`.
+- **The favourite programs' buttons** stay off a tile while the hub is
+  not reachable, and close the path's menu when they open it.
 
 ## [0.47.0] - 2026-11-13
 
