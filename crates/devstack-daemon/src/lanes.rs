@@ -307,6 +307,27 @@ fn free_number_in(
     })
 }
 
+/// Whether the range of a lane moved by `off` is taken now: one of its
+/// `services`' ports is beyond 65535 or `in_use`, or one of its `base`
+/// ports (services and containers' host ports) is in the `foreign` claims
+/// of another stack. A claim counts before anything listens: a lane of
+/// another stack on a node forwards its ports here only once its start
+/// there is done (#535).
+fn range_taken(
+    base: &[u16],
+    services: &[u16],
+    off: u16,
+    foreign: &BTreeSet<u16>,
+    in_use: impl Fn(u16) -> bool,
+) -> bool {
+    services
+        .iter()
+        .any(|p| p.checked_add(off).is_none_or(&in_use))
+        || base
+            .iter()
+            .any(|p| p.checked_add(off).is_none_or(|q| foreign.contains(&q)))
+}
+
 /// Whom each lane is shared with, from `.devstack/lane-shares.json`. The
 /// separate viewers devstack 0.11 kept (`lane-views.json`, ADR-0040 before
 /// its amendment of 2026-10-20) could use the lane as well: they are added
@@ -2369,13 +2390,18 @@ impl Lanes {
         }
         let t0 = std::time::Instant::now();
         let result = (|| {
-            // Its range taken by another process since it was found: a new one.
+            // Its range taken since it was found, by another process or by
+            // what another stack claims: a new one.
             let step = self.main.stack().lanes.port_step;
             let mut entry = entry;
-            let busy = ports(&self.main.stack()).iter().any(|p| {
-                lane_offset(entry.number, step)
-                    .and_then(|off| p.checked_add(off))
-                    .is_none_or(crate::supervisor::port_in_use)
+            let busy = lane_offset(entry.number, step).is_none_or(|off| {
+                range_taken(
+                    &self.lane_base(),
+                    &ports(&self.main.stack()),
+                    off,
+                    &crate::registry::foreign_claims(&self.own_id()),
+                    crate::supervisor::port_in_use,
+                )
             });
             if busy {
                 let mut known = self.known.lock().unwrap();
@@ -4192,6 +4218,38 @@ port = 8080
         );
         // Nothing fits below 65536.
         assert_eq!(free_number_in(&[65000], &[], 1000, &none, free), None);
+    }
+
+    #[test]
+    fn a_lane_start_finds_its_range_claimed_before_anything_listens() {
+        // #535: lane 2 of a stack on 4400/4401 lands on 4600/4601, which
+        // another stack claimed for its lane on a node a minute earlier;
+        // that lane's ports here only listen once its start there is done.
+        let base = [1430, 4400, 4401];
+        let services = [4400, 4401];
+        let foreign = BTreeSet::from([4600, 4601]);
+        let free = |_| false;
+        assert!(range_taken(&base, &services, 200, &foreign, free));
+        // A claim on one of its containers' host ports counts too.
+        assert!(range_taken(
+            &base,
+            &services,
+            200,
+            &BTreeSet::from([1630]),
+            free
+        ));
+        // Not claimed, nothing listening: free.
+        assert!(!range_taken(&base, &services, 300, &foreign, free));
+        // Listening, not claimed: taken, as before.
+        assert!(range_taken(&base, &services, 300, &BTreeSet::new(), |p| p == 4701));
+        // Beyond 65535: taken.
+        assert!(range_taken(
+            &[65000],
+            &[65000],
+            1000,
+            &BTreeSet::new(),
+            free
+        ));
     }
 
     #[test]
