@@ -291,7 +291,7 @@ type PrepareView = {
   stored?: true;                         // `run`: what it made went into the store
 };
 type Status =
-  | { state: "stopped" | "starting" | "running" | "healthy" }
+  | { state: "stopped" | "starting" | "running" | "healthy" }   // a job: "running" from its launch until it ends (since 0.48.0; "starting" before)
   | { state: "building"; build_id: string | null }
   | { state: "unhealthy" | "failed"; reason: string }
   | { state: "completed" | "exited"; exit_code: number };

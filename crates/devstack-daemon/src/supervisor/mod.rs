@@ -88,6 +88,10 @@ pub(crate) struct Slot {
     /// A job: when its last successful run was asked for (Unix ms). A
     /// candidate built after that needs no run of its own.
     ran_since: Option<u128>,
+    /// What the instance being started uses, sampled while its start waits:
+    /// a job for its whole run, a service for its health check (#544). Its
+    /// tree is the start's own until then, so `main` has none to measure.
+    starting_usage: Option<devstack_proc::Usage>,
 }
 
 /// A built candidate a promotion gate holds (ADR-0013). The gate stays until
@@ -483,6 +487,7 @@ impl Supervisor {
                     exits: 0,
                     without_workers: None,
                     ran_since: None,
+                    starting_usage: None,
                 },
             );
             op_locks.insert(name.clone(), Mutex::new(()));
@@ -824,6 +829,9 @@ impl Supervisor {
                     slot.starts += 1;
                     None
                 }
+                // A job runs once launched (#544): its start is over when it
+                // ends, so the start's duration is its run, as before.
+                Status::Running if slot.view.kind == "job" => None,
                 _ => slot
                     .spawned
                     .take()
@@ -1058,8 +1066,22 @@ impl Supervisor {
             .lock()
             .unwrap()
             .iter_mut()
-            .filter_map(|(name, slot)| slot.main.as_mut().map(|i| (name.clone(), i.tree.usage())))
+            .filter_map(|(name, slot)| {
+                let usage = match slot.main.as_mut() {
+                    Some(i) => i.tree.usage(),
+                    None => slot.starting_usage?,
+                };
+                Some((name.clone(), usage))
+            })
             .collect()
+    }
+
+    /// Note what the instance of `name` that is being started uses now
+    /// ([`Slot::starting_usage`]); `None` clears it once the start is over.
+    pub(super) fn set_starting_usage(&self, name: &str, usage: Option<devstack_proc::Usage>) {
+        if let Some(slot) = self.slots.lock().unwrap().get_mut(name) {
+            slot.starting_usage = usage;
+        }
     }
 
     pub(crate) fn build_usage(&self) -> devstack_proc::Usage {

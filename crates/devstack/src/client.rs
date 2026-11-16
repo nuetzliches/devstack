@@ -1321,6 +1321,8 @@ pub fn start_and_wait(
             if expected.contains(&name) {
                 let state = s["status"]["state"].as_str().unwrap_or("");
                 match state {
+                    // A job runs until it ends (#544): `up` waits for it.
+                    "running" if s["kind"] == "job" => done = false,
                     "healthy" | "running" => {}
                     "stopped" if served_elsewhere => {}
                     "completed" if s["status"]["exit_code"] == 0 => {}

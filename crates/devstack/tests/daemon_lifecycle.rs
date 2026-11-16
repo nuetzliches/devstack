@@ -1423,7 +1423,8 @@ steps = [{{ exec = "{hang}", timeout = "1s" }}]
     });
     assert!(
         wait_for(
-            || s.service_view("seed")["status"]["state"] == "starting",
+            // A job runs from its launch (#544).
+            || s.service_view("seed")["status"]["state"] == "running",
             Duration::from_secs(20)
         ),
         "{}",
