@@ -3592,21 +3592,30 @@ async fn tend(s: Shared) {
         .values()
         .map(|(l, _, _)| l.clone())
         .collect();
-    let waited: std::collections::HashSet<String> = s
-        .waits
-        .lock()
-        .unwrap()
-        .values()
-        .filter_map(|w| w.machine.clone())
-        .collect();
     let mut events = Vec::new();
     let delete: Vec<(String, String)> = {
         let mut machines = s.machines.lock().unwrap();
         // The members as they are under the machines' lock, which an
         // enrolment holds while it adds its node and makes its machine
         // `Ready`: read before it, a machine that enrolled since would find
-        // no node and be given back at once (#542).
+        // no node and be given back at once (#542). The leases and the waits
+        // too, read right before the decision: a lease begun since the
+        // copies above makes its machine busy, not idle.
         let ms = s.store.list().unwrap_or_default();
+        let leases: Vec<Lease> = s
+            .leases
+            .lock()
+            .unwrap()
+            .values()
+            .map(|(l, _, _)| l.clone())
+            .collect();
+        let waited: std::collections::HashSet<String> = s
+            .waits
+            .lock()
+            .unwrap()
+            .values()
+            .filter_map(|w| w.machine.clone())
+            .collect();
         for m in machines.iter_mut() {
             match m.state {
                 MachineState::Provisioning if now > m.deadline => {

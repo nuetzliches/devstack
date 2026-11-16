@@ -57,6 +57,15 @@ and listed with their assets on the
   `http://localhost:null`.
 - **The favourite programs' buttons** stay off a tile while the hub is
   not reachable, and close the path's menu when they open it.
+- **A provisioned machine whose lease has just begun is not given back as
+  idle**: the same round now reads the leases and the waits right before
+  it decides, under the machines' lock.
+- **A stack's registry entry keeps its fields when it is written while
+  another daemon replaces it**: a write that could not read the entry for
+  a moment wrote back only what it set, and the stack dropped out of the
+  registry with its claims. It reads the entry again first, and does not
+  write over one that is there and does not read. An entry that reads and
+  is no entry is no longer waited for.
 
 ## [0.47.0] - 2026-11-13
 
