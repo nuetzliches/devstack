@@ -69,7 +69,7 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
 notify = "8"
 rand = "0.10"
 raw-window-handle = "0.6"
-rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
+rfd = { version = "0.18", default-features = false, features = ["xdg-portal"] }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
