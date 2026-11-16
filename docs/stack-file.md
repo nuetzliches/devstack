@@ -492,7 +492,7 @@ server reloads itself).
 | `tunnel = false` | offers no public link to it (below); for a service with a `port` only. A file with it should say `requires = "0.37.0"` |
 | `stop = "docker rm -f api{lane_suffix}-{port}"` | ends what `run` started outside its process tree, a container ([ADR-0059](adr/0059-a-services-stop-command-ends-what-its-run-started.md), below); not for `kind = "static"` |
 | `link = { from_log = 'ui: (http://\S+)' }` | its dashboard link, from its output (below); not for `kind = "static"`. A file with it should say `requires = "0.44.0"` |
-| `shortcut = true` | the dashboard shows it as a card of its own, above the groups and the pins, with a button that opens its link; several services may have one, in the order of the file; the service starts and stops as before. A file with it should say `requires = "0.48.0"` |
+| `shortcut = true` | the dashboard shows it as a card of its own, above the groups and the pins, with a button that opens its link; several services may have one, ordered by name; the service starts and stops as before. A file with it should say `requires = "0.48.0"` |
 
 ### A link from the output (`link`)
 
