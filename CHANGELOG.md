@@ -9,6 +9,17 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.48.0] - 2026-11-16
+
+The dashboard opens on a start page with every stack as a tile, a service
+marked `shortcut = true` gets a card of its own with a large button that
+opens it, and a running job shows that it runs and what it uses. Fixed: a
+lane no longer lands on ports another stack claims for its lane on a node,
+whether it starts here or on a node; the stacks' registry keeps an entry it
+meets while another daemon replaces it; a machine the pool provisioned is
+not given back the moment it enrols, nor right after a lease on it began;
+the start page's tiles follow starts and stops from other tabs.
+
 ### Added
 
 - **A start page with every stack as a tile.** The dashboard opens on it, and
@@ -73,6 +84,9 @@ and listed with their assets on the
   registry with its claims. It reads the entry again first, and does not
   write over one that is there and does not read. An entry that reads and
   is no entry is no longer waited for.
+- **The stacks list's filter survives a reload**, and picking a stack or a
+  worktree from the filtered list ends the filter, scrolled to keep the
+  pick in view.
 
 ## [0.47.0] - 2026-11-13
 
@@ -3482,7 +3496,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.47.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.48.0...HEAD
+[0.48.0]: https://github.com/nuetzliches/devstack/compare/v0.47.0...v0.48.0
 [0.47.0]: https://github.com/nuetzliches/devstack/compare/v0.46.0...v0.47.0
 [0.46.0]: https://github.com/nuetzliches/devstack/compare/v0.45.1...v0.46.0
 [0.45.1]: https://github.com/nuetzliches/devstack/compare/v0.45.0...v0.45.1

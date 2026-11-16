@@ -188,3 +188,4 @@ stay.
 | [0103](0103-a-pool-lease-waits-for-the-lanes-starting-on-a-node-to-settle.md) | A pool lease waits for the lanes starting on a node to settle rather than be refused | Accepted (card in the pull request); built |
 | [0104](0104-the-start-page-shows-every-stack-as-a-tile.md) | The start page shows every stack as a tile, with the hub's figures and the favourite programs | Accepted (card in the pull request); built |
 | [0105](0105-a-service-can-be-a-shortcut-card-on-the-overview.md) | A service can be a shortcut card on the overview, marked in the stack file | Accepted (card in the pull request); built |
+| [0106](0106-a-running-job-is-running-and-measured.md) | A running job is `running` and measured; it counts as done only when it completed | Accepted (card in the pull request); built |
