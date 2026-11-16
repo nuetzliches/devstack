@@ -1611,13 +1611,15 @@ fn port_freed(port: u16) -> bool {
     true
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use super::*;
 
     /// #544: a job that runs shows `running` and its process tree's usage
     /// while it runs, not `starting` with nothing; once done, `completed`,
-    /// and its usage is gone with it.
+    /// and its usage is gone with it. Windows only: elsewhere a process is
+    /// started through devstack's shim, a binary a unit test does not have;
+    /// the daemon's integration test sees the same on every platform.
     #[test]
     fn a_running_job_shows_running_and_what_it_uses() {
         let d = tempfile::tempdir().unwrap();
