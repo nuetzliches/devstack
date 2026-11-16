@@ -43,6 +43,12 @@ and listed with their assets on the
   as if it claimed nothing, and another stack's lane could be numbered onto
   its ports. One that does not read within 200 ms is said in the daemon's
   log.
+- **A machine the pool provisioned is no longer given back the moment it
+  enrols** (#542). The coordinator's round that gives back idle and orphaned
+  machines read the members before it took the machines' lock; a machine
+  that enrolled in between found no node in that list and was given back,
+  and the lane waiting for it failed with "the machine made for the lane
+  was given back".
 
 ## [0.47.0] - 2026-11-13
 
