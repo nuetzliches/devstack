@@ -312,7 +312,12 @@ fn free_number_in(
 /// ports (services and containers' host ports) is in the `foreign` claims
 /// of another stack. A claim counts before anything listens: a lane of
 /// another stack on a node forwards its ports here only once its start
-/// there is done (#535).
+/// there is done (#535). What listens is asked for the services' ports
+/// only, unlike [`free_number_in`] for a new range: the lane's own
+/// containers of an earlier start may still hold its containers' host
+/// ports here, and go only after this check ([`Lanes::launch_remote`],
+/// `stop_local_infra`); asked for those too, a lane would move away from
+/// its own containers.
 fn range_taken(
     base: &[u16],
     services: &[u16],
@@ -1585,26 +1590,43 @@ impl Lanes {
     /// range taken since it was found, by another process or by what
     /// another stack claims (#535), a new one, saved. For a start here and
     /// a start on a node alike: a lane on a node listens on its range here
-    /// too (#539).
+    /// too (#539). The registry and the ports are read without holding
+    /// `known` (a sync, the lane list and the claims wait on it); the number
+    /// is taken under it, and looked for again if another lane's start took
+    /// it meanwhile.
     fn free_range_for(&self, mut entry: LaneEntry) -> Result<LaneEntry, String> {
         let stack = self.main.stack();
-        let mut known = self.known.lock().unwrap();
-        let others: Vec<u16> = known
-            .iter()
-            .filter(|(n, _)| **n != entry.name)
-            .map(|(_, k)| k.entry.number)
-            .collect();
-        let number = number_to_start(
-            entry.number,
-            &self.lane_base(),
-            &ports(&stack),
-            stack.lanes.port_step,
-            &others,
-            &crate::registry::foreign_claims(&self.own_id()),
-            crate::supervisor::port_in_use,
-        )
-        .ok_or("no free port range for another lane")?;
-        if number != entry.number {
+        let (base, services) = (self.lane_base(), ports(&stack));
+        let foreign = crate::registry::foreign_claims(&self.own_id());
+        for _ in 0..3 {
+            let others: Vec<u16> = self
+                .known
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(n, _)| **n != entry.name)
+                .map(|(_, k)| k.entry.number)
+                .collect();
+            let number = number_to_start(
+                entry.number,
+                &base,
+                &services,
+                stack.lanes.port_step,
+                &others,
+                &foreign,
+                crate::supervisor::port_in_use,
+            )
+            .ok_or("no free port range for another lane")?;
+            if number == entry.number {
+                return Ok(entry);
+            }
+            let mut known = self.known.lock().unwrap();
+            if known
+                .iter()
+                .any(|(n, k)| *n != entry.name && k.entry.number == number)
+            {
+                continue;
+            }
             crate::diag::info(
                 "lane_renumbered",
                 serde_json::json!({ "lane": entry.name, "from": entry.number, "number": number }),
@@ -1614,8 +1636,9 @@ impl Lanes {
                 k.entry.number = number;
             }
             self.save(&known);
+            return Ok(entry);
         }
-        Ok(entry)
+        Err("no free port range for another lane: the lanes kept changing".into())
     }
 
     /// This stack's id in the registry of stacks.
