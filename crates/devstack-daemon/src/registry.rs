@@ -194,13 +194,42 @@ pub fn list() -> Vec<Entry> {
     list_in(&dir())
 }
 
+/// The entry in the file `path`; `None` once it is gone. A read that meets
+/// the file while its daemon replaces it (on Windows the rename over it can
+/// fail a reader for a moment) is tried again for up to 200 ms: an entry
+/// skipped would read as a stack that claims nothing, and another stack's
+/// lane could be numbered onto its ports (#535, #539). One that still does
+/// not read is said in the log, once per file.
+fn read_entry(path: &Path) -> Option<Entry> {
+    static SAID: std::sync::Mutex<BTreeSet<PathBuf>> = std::sync::Mutex::new(BTreeSet::new());
+    let mut error = String::new();
+    for _ in 0..10 {
+        match std::fs::read(path) {
+            Ok(bytes) => match serde_json::from_slice(&bytes) {
+                Ok(e) => return Some(e),
+                Err(e) => error = e.to_string(),
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(e) => error = e.to_string(),
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    if SAID.lock().unwrap().insert(path.to_path_buf()) {
+        crate::diag::warn(
+            "registry_entry_unreadable",
+            serde_json::json!({ "file": path, "error": error }),
+        );
+    }
+    None
+}
+
 fn list_in(d: &Path) -> Vec<Entry> {
     let mut out: Vec<Entry> = std::fs::read_dir(d)
         .into_iter()
         .flatten()
         .flatten()
         .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
-        .filter_map(|e| serde_json::from_slice(&std::fs::read(e.path()).ok()?).ok())
+        .filter_map(|e| read_entry(&e.path()))
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
     out
@@ -336,5 +365,32 @@ mod tests {
         let e = read_in(d.path(), "def").unwrap();
         assert_eq!((e.name.as_str(), e.shift), ("shop", 2000));
         assert!(change(d.path(), "../x", |_| {}).is_err());
+    }
+
+    /// #539: an entry met while its daemon replaces it is read again, not
+    /// taken for a stack that claims nothing (its lanes' ports then looked
+    /// free to another stack's numbering).
+    #[test]
+    fn an_entry_met_while_it_is_replaced_is_read_again() {
+        let d = tempfile::tempdir().unwrap();
+        let path = path_of(d.path(), "abc");
+        // Half of it now (what a reader sees of a file not yet complete, or
+        // not at all while it is renamed over), all of it a moment later.
+        std::fs::write(&path, "{\"id\":\"abc\",").unwrap();
+        let mut whole = entry("abc");
+        whole.claims.main = vec![4600];
+        let full = serde_json::to_vec(&whole).unwrap();
+        let later = path.clone();
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            std::fs::write(later, full).unwrap();
+        });
+        let read = read_entry(&path);
+        writer.join().unwrap();
+        assert_eq!(read.map(|e| e.claims.main), Some(vec![4600]));
+        // Gone is gone at once; what never parses is given up.
+        assert!(read_entry(&path_of(d.path(), "nope")).is_none());
+        std::fs::write(&path, "not json").unwrap();
+        assert!(read_entry(&path).is_none());
     }
 }
