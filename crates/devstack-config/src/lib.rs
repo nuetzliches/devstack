@@ -75,6 +75,10 @@ pub const TUNNEL_SINCE: &str = "0.37.0";
 /// that sets it wants `requires` at least this.
 pub const LINK_SINCE: &str = "0.44.0";
 
+/// The first devstack that knows `[services.<name>] shortcut`: a file that
+/// sets it wants `requires` at least this.
+pub const SHORTCUT_SINCE: &str = "0.48.0";
+
 /// `"1.2.3"`, `"v1.2"`, `"1"` as numbers; `None` when malformed. A
 /// pre-release or build suffix (`1.2.3-rc1`, `1.2.3+abc`) is ignored here;
 /// [`version_order`] takes it into account.

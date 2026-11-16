@@ -475,6 +475,8 @@ export type ServiceView = {
   public_link_available?: boolean;
   /** Its running instance's own link, as it printed it (`link = { from_log }`): may hold a token. Absent until printed, and from older daemons. */
   link?: string;
+  /** The stack file marks it `shortcut = true`: the overview shows it as a card of its own. Older daemons omit it. */
+  shortcut?: boolean;
 };
 
 /** A service's public link: reachable from the internet by anyone with `url`. */

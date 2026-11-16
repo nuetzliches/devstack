@@ -996,6 +996,11 @@ pub struct Service {
     /// The dashboard link of an instance, where the bare port is not enough
     /// (a token or path printed at start, ADR-0101): read from its output.
     pub link: Option<Link>,
+    /// `true`: the dashboard shows the service as a shortcut card of its own,
+    /// above the groups and the pins, with a button that opens its link.
+    /// Several services may have one; they list in the order of the file.
+    /// It changes the view only: the service starts and stops as before.
+    pub shortcut: Option<bool>,
 }
 
 /// `link` of a service: where its dashboard link comes from (ADR-0101).
