@@ -328,6 +328,26 @@ fn range_taken(
             .any(|p| p.checked_add(off).is_none_or(|q| foreign.contains(&q)))
 }
 
+/// The number a lane numbered `number` starts with: its own while its range
+/// is free ([`range_taken`]), else the first free one ([`free_number_in`],
+/// `others` the numbers of the stack's other lanes). `None`: none is free.
+fn number_to_start(
+    number: u16,
+    base: &[u16],
+    services: &[u16],
+    step: u16,
+    others: &[u16],
+    foreign: &BTreeSet<u16>,
+    in_use: impl Fn(u16) -> bool,
+) -> Option<u16> {
+    let taken = lane_offset(number, step)
+        .is_none_or(|off| range_taken(base, services, off, foreign, &in_use));
+    if !taken {
+        return Some(number);
+    }
+    free_number_in(base, others, step, foreign, in_use)
+}
+
 /// Whom each lane is shared with, from `.devstack/lane-shares.json`. The
 /// separate viewers devstack 0.11 kept (`lane-views.json`, ADR-0040 before
 /// its amendment of 2026-10-20) could use the lane as well: they are added
@@ -1561,6 +1581,43 @@ impl Lanes {
         )
     }
 
+    /// `entry` with the number it starts with ([`number_to_start`]): its
+    /// range taken since it was found, by another process or by what
+    /// another stack claims (#535), a new one, saved. For a start here and
+    /// a start on a node alike: a lane on a node listens on its range here
+    /// too (#539).
+    fn free_range_for(&self, mut entry: LaneEntry) -> Result<LaneEntry, String> {
+        let stack = self.main.stack();
+        let mut known = self.known.lock().unwrap();
+        let others: Vec<u16> = known
+            .iter()
+            .filter(|(n, _)| **n != entry.name)
+            .map(|(_, k)| k.entry.number)
+            .collect();
+        let number = number_to_start(
+            entry.number,
+            &self.lane_base(),
+            &ports(&stack),
+            stack.lanes.port_step,
+            &others,
+            &crate::registry::foreign_claims(&self.own_id()),
+            crate::supervisor::port_in_use,
+        )
+        .ok_or("no free port range for another lane")?;
+        if number != entry.number {
+            crate::diag::info(
+                "lane_renumbered",
+                serde_json::json!({ "lane": entry.name, "from": entry.number, "number": number }),
+            );
+            entry.number = number;
+            if let Some(k) = known.get_mut(&entry.name) {
+                k.entry.number = number;
+            }
+            self.save(&known);
+        }
+        Ok(entry)
+    }
+
     /// This stack's id in the registry of stacks.
     fn own_id(&self) -> String {
         crate::registry::id_for(self.main.stack_file())
@@ -2390,34 +2447,7 @@ impl Lanes {
         }
         let t0 = std::time::Instant::now();
         let result = (|| {
-            // Its range taken since it was found, by another process or by
-            // what another stack claims: a new one.
-            let step = self.main.stack().lanes.port_step;
-            let mut entry = entry;
-            let busy = lane_offset(entry.number, step).is_none_or(|off| {
-                range_taken(
-                    &self.lane_base(),
-                    &ports(&self.main.stack()),
-                    off,
-                    &crate::registry::foreign_claims(&self.own_id()),
-                    crate::supervisor::port_in_use,
-                )
-            });
-            if busy {
-                let mut known = self.known.lock().unwrap();
-                let others: BTreeMap<String, Known> = known
-                    .iter()
-                    .filter(|(n, _)| **n != name)
-                    .map(|(n, k)| (n.clone(), k.clone()))
-                    .collect();
-                entry.number = self
-                    .free_number(&others, true)
-                    .ok_or("no free port range for another lane")?;
-                if let Some(k) = known.get_mut(&name) {
-                    k.entry.number = entry.number;
-                }
-                self.save(&known);
-            }
+            let entry = self.free_range_for(entry)?;
             let lane = self.open(&entry)?;
             self.map.lock().unwrap().insert(name.clone(), lane.clone());
             crate::diag::info(
@@ -3515,6 +3545,16 @@ impl Lanes {
             self.workers.lock().unwrap().remove(&name);
         }
         self.begin_move(&name, "start", on, 3);
+        // Its ports here are forwarded by its number: not onto a range
+        // another stack claims or another process holds (#539).
+        let entry = match self.free_range_for(entry) {
+            Ok(e) => e,
+            Err(e) => {
+                let e = format!("lane `{name}`: {e}");
+                self.start_failed(&name, on, &e);
+                return Err(e);
+            }
+        };
         let leased = {
             let step = self.step_fn(&name);
             self.with_spec(&entry, on, &need, true, &step, |spec| {
@@ -4250,6 +4290,37 @@ port = 8080
             &BTreeSet::new(),
             free
         ));
+    }
+
+    #[test]
+    fn a_lane_keeps_its_number_until_its_range_is_claimed_or_held() {
+        // #539: one rule for a start here and on a node.
+        let base = [1430, 4400, 4401];
+        let services = [4400, 4401];
+        let free = |_| false;
+        let none = BTreeSet::new();
+        // Its range is free: it keeps its number, even beside other lanes.
+        assert_eq!(
+            number_to_start(2, &base, &services, 100, &[1, 3], &none, free),
+            Some(2)
+        );
+        // Another stack claims lane 2's 4600: the first free one, past the
+        // stack's own lanes 1 and 3.
+        let foreign = BTreeSet::from([4600]);
+        assert_eq!(
+            number_to_start(2, &base, &services, 100, &[1, 3], &foreign, free),
+            Some(4)
+        );
+        // Another process holds lane 2's 4601: the same.
+        assert_eq!(
+            number_to_start(2, &base, &services, 100, &[1, 3], &none, |p| p == 4601),
+            Some(4)
+        );
+        // Nothing is free below 65536.
+        assert_eq!(
+            number_to_start(1, &[65000], &[65000], 1000, &[], &none, |_| true),
+            None
+        );
     }
 
     #[test]

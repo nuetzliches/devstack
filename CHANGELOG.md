@@ -35,6 +35,14 @@ and listed with their assets on the
   number on those ports and its services failed later with "already in
   use". The start now also checks what other stacks claim, its containers'
   host ports included, and takes another number if its range is claimed.
+- **A lane started on a node checks its ports here the same way** (#539):
+  it forwards them by its number, so a range another stack claims, or
+  another process holds, gives it another number before the lease.
+- **An entry of the stacks' registry that cannot be read for a moment is
+  read again** (#539), instead of being skipped: skipped, its stack looked
+  as if it claimed nothing, and another stack's lane could be numbered onto
+  its ports. One that does not read within 200 ms is said in the daemon's
+  log.
 
 ## [0.47.0] - 2026-11-13
 
