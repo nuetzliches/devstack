@@ -194,11 +194,12 @@ pub fn start(
     }
     let view = sup.view();
     for r in &cmd.requires {
-        if !view
-            .services
-            .iter()
-            .any(|s| &s.name == r && s.status.is_ready())
-        {
+        // A job is ready once it completed, not while it runs (#544).
+        let ready = |s: &crate::state::ServiceView| match s.kind.as_str() {
+            "job" => s.status == crate::state::Status::Completed { exit_code: 0 },
+            _ => s.status.is_ready(),
+        };
+        if !view.services.iter().any(|s| &s.name == r && ready(s)) {
             return Err(RunError::NotReady(r.clone()));
         }
     }

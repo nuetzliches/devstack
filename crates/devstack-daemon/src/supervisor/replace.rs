@@ -223,7 +223,7 @@ The running instance was left as it was."
             Ok(i) => i,
             Err(e) => return fail(e),
         };
-        if let Err(e) = self.wait_instance(svc, &mut candidate, &cancel) {
+        if let Err(e) = self.wait_instance(svc, &mut candidate, &cancel, None) {
             self.end(&mut candidate, None);
             return fail(e);
         }
@@ -250,7 +250,7 @@ The running instance was left as it was."
                 Ok(i) => i,
                 Err(e) => return self.running_without_workers(name, svc, e),
             };
-            if let Err(e) = self.wait_instance(svc, &mut fin, &cancel) {
+            if let Err(e) = self.wait_instance(svc, &mut fin, &cancel, None) {
                 self.end(&mut fin, None);
                 return self.running_without_workers(name, svc, e);
             }

@@ -1423,7 +1423,25 @@ steps = [{{ exec = "{hang}", timeout = "1s" }}]
     });
     assert!(
         wait_for(
-            || s.service_view("seed")["status"]["state"] == "starting",
+            // A job runs from its launch (#544).
+            || s.service_view("seed")["status"]["state"] == "running",
+            Duration::from_secs(20)
+        ),
+        "{}",
+        s.diag()
+    );
+    // And is measured while it runs (#544).
+    assert!(
+        wait_for(
+            || {
+                s.daemon_get("/v1/usage")["services"]
+                    .as_array()
+                    .is_some_and(|a| {
+                        a.iter().any(|e| {
+                            e["name"] == "seed" && e["processes"].as_u64().unwrap_or(0) >= 1
+                        })
+                    })
+            },
             Duration::from_secs(20)
         ),
         "{}",
@@ -2514,7 +2532,7 @@ fn a_stop_while_the_migrator_runs_holds() {
     assert_eq!(s.state("app"), "running", "{}", s.diag());
     s.edit_site("<p>a change with a migration</p>");
     assert!(
-        wait_for(|| s.state("migrate") == "starting", Duration::from_secs(60)),
+        wait_for(|| s.state("migrate") == "running", Duration::from_secs(60)),
         "the candidate runs the migrator\n{}",
         s.diag()
     );
@@ -2571,7 +2589,7 @@ fn a_stop_while_a_restart_migrates_leaves_no_candidate() {
             .unwrap()
     });
     assert!(
-        wait_for(|| s.state("migrate") == "starting", Duration::from_secs(60)),
+        wait_for(|| s.state("migrate") == "running", Duration::from_secs(60)),
         "the restart runs the migrator\n{}",
         s.diag()
     );

@@ -24,9 +24,11 @@ pub enum Status {
     Building {
         build_id: Option<String>,
     },
-    /// Process started, waiting for health (or for a job to finish).
+    /// Process started, waiting for health.
     Starting,
-    /// Running without a health check (tools, services without `health`).
+    /// Running without a health check (tools, services without `health`),
+    /// or a job running until it ends (#544; ready for its dependants only
+    /// once `Completed`).
     Running,
     Healthy,
     Unhealthy {

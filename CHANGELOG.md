@@ -28,6 +28,13 @@ and listed with their assets on the
 
 ### Fixed
 
+- **A running job shows what it uses, and that it runs** (#544). A
+  `kind = "job"` stayed "starting" with no CPU or memory for its whole run
+  (hours for a training job), because only a started instance was measured.
+  It now shows "running" from its launch until it ends, with its process
+  tree's usage in the dashboard, the lane card and `/v1/usage`; a service
+  waiting for its health check is measured too. A command that `requires` a
+  job still waits until the job completed.
 - **A lane started here no longer lands on ports another stack claims for
   its lane on a node** (#535). Its start checked only whether one of its
   ports was in use at that moment; a lane on a node forwards its ports here

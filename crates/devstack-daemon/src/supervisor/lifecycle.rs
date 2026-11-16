@@ -839,7 +839,14 @@ impl Supervisor {
             v.instance_port = inst.port;
         }
         self.set_status(name, Status::Starting);
-        let ready = match self.wait_instance(svc, &mut inst, &cancel) {
+        // A job runs from here until it ends (#544): `starting` for its
+        // whole run read as stuck.
+        if svc.kind == Kind::Job {
+            self.set_status(name, Status::Running);
+        }
+        let waited = self.wait_instance(svc, &mut inst, &cancel, Some(name));
+        self.set_starting_usage(name, None);
+        let ready = match waited {
             Ok(s) => s,
             Err(e) => {
                 self.end(&mut inst, None);
@@ -1087,17 +1094,34 @@ impl Supervisor {
     /// the proxy: ADR-0010 condition 1), else a moment to fail fast. Returns the
     /// status to show. A job runs for its `timeout` at most; `cancel` (a
     /// stop) ends the wait at once. The caller kills the instance on an error.
+    /// `record`: the service whose start this is; what the instance uses is
+    /// noted for it while the wait lasts (#544), every [`NATIVE_EVERY`] as
+    /// the usage sampler asks. A candidate's wait notes nothing: its
+    /// service's main instance is measured meanwhile.
+    ///
+    /// [`NATIVE_EVERY`]: crate::usage::NATIVE_EVERY
     pub(super) fn wait_instance(
         &self,
         svc: &Service,
         inst: &mut Instance,
         cancel: &dyn Fn() -> bool,
+        record: Option<&str>,
     ) -> Result<Status, String> {
+        let mut sampled: Option<Instant> = None;
+        let mut sample = |inst: &mut Instance| {
+            if let Some(name) = record
+                && sampled.is_none_or(|t| t.elapsed() >= crate::usage::NATIVE_EVERY)
+            {
+                self.set_starting_usage(name, Some(inst.tree.usage()));
+                sampled = Some(Instant::now());
+            }
+        };
         match svc.kind {
             Kind::Job => {
                 let limit = svc.timeout.unwrap_or(JOB_TIMEOUT);
                 let t0 = Instant::now();
                 loop {
+                    sample(inst);
                     if let Some(code) = inst.tree.try_exit_code() {
                         if code == 0 {
                             return Ok(Status::Completed { exit_code: 0 });
@@ -1126,6 +1150,7 @@ impl Supervisor {
                     let t0 = Instant::now();
                     let mut last = String::new();
                     while t0.elapsed() < h.timeout {
+                        sample(inst);
                         if cancel() {
                             return Err(STOPPED.into());
                         }
@@ -1584,4 +1609,70 @@ fn port_freed(port: u16) -> bool {
         std::thread::sleep(Duration::from_millis(250));
     }
     true
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    /// #544: a job that runs shows `running` and its process tree's usage
+    /// while it runs, not `starting` with nothing; once done, `completed`,
+    /// and its usage is gone with it. Windows only: elsewhere a process is
+    /// started through devstack's shim, a binary a unit test does not have;
+    /// the daemon's integration test sees the same on every platform.
+    #[test]
+    fn a_running_job_shows_running_and_what_it_uses() {
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("devstack.toml");
+        let run = if cfg!(windows) {
+            "ping -n 4 127.0.0.1 > NUL"
+        } else {
+            "sleep 3"
+        };
+        let text = format!(
+            "version = 1\n[stack]\nname = \"s\"\n[services.burn]\nkind = \"job\"\nrun = '{run}'\n"
+        );
+        let stack = devstack_config::from_str(&text, &file).unwrap();
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let sup = Supervisor::new(
+            stack,
+            file,
+            d.path().to_path_buf(),
+            d.path().join(".devstack"),
+            devstack_proc::Options::default(),
+            rt.handle().clone(),
+        )
+        .unwrap();
+        let status = |sup: &Supervisor| {
+            sup.view()
+                .services
+                .into_iter()
+                .find(|s| s.name == "burn")
+                .unwrap()
+                .status
+        };
+        let measured = |sup: &Supervisor| {
+            sup.tree_usage()
+                .iter()
+                .any(|(n, u)| n == "burn" && u.processes > 0)
+        };
+        let s = sup.clone();
+        let start = std::thread::spawn(move || s.start("burn"));
+        let (mut running, mut used) = (false, false);
+        let t0 = Instant::now();
+        while t0.elapsed() < Duration::from_millis(2500) && !(running && used) {
+            running |= status(&sup) == Status::Running;
+            used |= measured(&sup);
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let started = start.join().unwrap();
+        assert!(started.is_ok(), "{started:?}");
+        assert!(running, "running while it ran");
+        assert!(used, "measured while it ran");
+        assert_eq!(status(&sup), Status::Completed { exit_code: 0 });
+        assert!(!measured(&sup), "no usage once done");
+    }
 }
