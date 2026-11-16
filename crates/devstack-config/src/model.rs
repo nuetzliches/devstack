@@ -998,7 +998,7 @@ pub struct Service {
     pub link: Option<Link>,
     /// `true`: the dashboard shows the service as a shortcut card of its own,
     /// above the groups and the pins, with a button that opens its link.
-    /// Several services may have one; they list in the order of the file.
+    /// Several services may have one; they list by name, as `services` does.
     /// It changes the view only: the service starts and stops as before.
     pub shortcut: Option<bool>,
 }
