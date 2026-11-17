@@ -49,6 +49,13 @@ export function ago(at: number | null | undefined, now: number): string {
   return new Date(at).toLocaleString();
 }
 
+/** The age of a commit: within a day as `ago` says it, older in days (which fits a tile or a cell better than a date); `null` while unknown. */
+export function commitAge(at: number | null, now: number): string | null {
+  if (!at) return null;
+  const days = Math.floor((now - at) / 86_400_000);
+  return days >= 1 ? `${days} d ago` : ago(at, now);
+}
+
 export function clock(at: number): string {
   return new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }

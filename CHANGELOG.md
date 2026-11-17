@@ -11,6 +11,14 @@ and listed with their assets on the
 
 ### Added
 
+- **Small tiles and a list on the start page.** A switch beside the search
+  shows the stacks as large tiles (as before), as small tiles (the same tile,
+  closer together, without the time up and the ports shift) or as a list: a
+  table with a column each for state, services, lanes, time up, last commit
+  and what needs attention, sortable by its headers, with the star and the
+  favourite programs in each row; a click on a row opens the stack. The
+  search and the state filter apply in every view, and the choice is kept in
+  the browser.
 - **A search and a state filter on the start page.** A field above the tiles
   finds a stack by its name or its repository folder (every word typed must
   match), and three chips, "All", "Running" and "Needs attention", each with

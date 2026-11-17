@@ -278,3 +278,148 @@ describe('the search and the state filter of the start page', () => {
     again.unmount();
   });
 });
+
+describe('the views of the start page', () => {
+  const billing = stack('gh78', 'Billing', { repo: '/work/ledger' });
+  const view = (el: HTMLElement, key: string) => el.querySelector<HTMLElement>(`[data-testid="overview-view-${key}"]`)!;
+  const rowOf = (el: HTMLElement, id: string) => el.querySelector<HTMLElement>(`[data-testid="stack-row"][data-id="${id}"]`)!;
+  const cell = (row: HTMLElement, id: string) => row.querySelector(`[data-testid="${id}"]`)?.textContent?.replace(/\s+/g, ' ').trim();
+  const head = (el: HTMLElement, label: string) => [...el.querySelectorAll('th')].find((th) => th.textContent?.includes(label))!.querySelector('button')!;
+  const glimpse = (events: { onMessage: (m: unknown) => void }) => {
+    events.onMessage({
+      type: 'summary',
+      stacks: [
+        { id: 'ab12', state: 'attention', ready: 2, total: 3, lanes: 1 },
+        { id: 'cd34', state: 'stopped', ready: 0, total: 0, lanes: 0 },
+      ],
+    });
+    events.onMessage({
+      type: 'attention',
+      items: [
+        { stack: 'ab12', lane: null, service: 'api', text: 'api: failed', detail: '', level: 'error' },
+        { stack: 'ab12', lane: 'feat', service: 'web', text: 'web: build held for promote', detail: '', level: 'warn' },
+        { stack: 'ab12', lane: null, service: 'worker', text: 'worker: failed', detail: '', level: 'error' },
+      ],
+    });
+  };
+
+  it('starts with large tiles, switches to small tiles, and finds the choice again', async () => {
+    const first = await mounted([shop, crm]);
+    expect(view(first.el, 'large').getAttribute('aria-pressed')).toBe('true');
+    expect(first.el.querySelector('[data-testid="overview-tiles"]')?.classList.contains('small')).toBe(false);
+    view(first.el, 'small').click();
+    await settle();
+    expect(first.el.querySelector('[data-testid="overview-tiles"]')?.classList.contains('small')).toBe(true);
+    first.unmount();
+    // Another tab of this browser: a new page and store, the same local storage.
+    setActivePinia(createPinia());
+    sessionStorage.clear();
+    const again = await mounted([shop, crm]);
+    expect(view(again.el, 'small').getAttribute('aria-pressed')).toBe('true');
+    expect(again.el.querySelector('[data-testid="overview-tiles"]')?.classList.contains('small')).toBe(true);
+    again.unmount();
+  });
+
+  it('shows less on a small tile: no time up, only the first thing that needs attention', async () => {
+    const { el, events, unmount } = await mounted([shop, crm]);
+    glimpse(events);
+    await settle();
+    expect(tile(el, 'ab12').querySelector('[data-testid="tile-up"]')).not.toBeNull();
+    view(el, 'small').click();
+    await settle();
+    const s = tile(el, 'ab12');
+    expect(s.querySelector('[data-testid="tile-up"]')).toBeNull();
+    expect(s.querySelector('[data-testid="tile-services"]')?.textContent?.replace(/\s+/g, '')).toContain('2/3');
+    expect([...s.querySelectorAll('[data-testid="tile-attention"]')].map((x) => x.textContent?.trim())).toEqual(['api: failed']);
+    expect(s.textContent).toContain('+2 more');
+    unmount();
+  });
+
+  it('lists a row per stack in the tiles order, with the same figures', async () => {
+    useFavourites().toggle('ab12');
+    const { el, events, unmount } = await mounted([crm, shop, docs]);
+    glimpse(events);
+    view(el, 'list').click();
+    await settle();
+    expect(el.querySelector('[data-testid="overview-tiles"]')).toBeNull();
+    expect(names(el)).toEqual(['shop', 'crm', 'docs']);
+    const s = rowOf(el, 'ab12');
+    expect(cell(s, 'tile-state')).toContain('Needs attention');
+    expect(cell(s, 'tile-services')?.replace(/\s/g, '')).toBe('2/3');
+    expect(cell(s, 'tile-lanes')).toBe('1');
+    expect(cell(s, 'tile-up')).toContain('2h');
+    expect(cell(s, 'row-attention')).toBe('3');
+    expect(s.querySelector('[data-testid="row-attention"]')?.getAttribute('title')).toBe('api: failed\nfeat: web: build held for promote\nworker: failed');
+    const c = rowOf(el, 'cd34');
+    expect(cell(c, 'tile-state')).toContain('Stopped');
+    expect(cell(c, 'tile-services')).toBe('—');
+    expect(cell(c, 'row-attention')).toBe('—');
+    unmount();
+  });
+
+  it('sorts the list by a column, turns it round, and goes back to the tiles order', async () => {
+    useFavourites().toggle('ab12');
+    const { el, unmount } = await mounted([crm, shop, docs]);
+    view(el, 'list').click();
+    await settle();
+    expect(names(el)).toEqual(['shop', 'crm', 'docs']);
+    head(el, 'Name').click();
+    await settle();
+    expect(names(el)).toEqual(['crm', 'docs', 'shop']);
+    head(el, 'Name').click();
+    await settle();
+    expect(names(el)).toEqual(['shop', 'docs', 'crm']);
+    head(el, 'Name').click();
+    await settle();
+    expect(names(el)).toEqual(['shop', 'crm', 'docs']);
+    unmount();
+  });
+
+  it('sorts by what needs attention, the most first', async () => {
+    const { el, events, unmount } = await mounted([shop, crm, docs]);
+    glimpse(events);
+    view(el, 'list').click();
+    await settle();
+    head(el, 'Attention').click();
+    await settle();
+    expect(names(el)[0]).toBe('shop');
+    unmount();
+  });
+
+  it('applies the search and the state to the list as to the tiles', async () => {
+    const { el, unmount } = await mounted([shop, crm, billing]);
+    view(el, 'list').click();
+    await settle();
+    const search = el.querySelector<HTMLInputElement>('[data-testid="overview-search"]')!;
+    search.value = 'ledger';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+    expect(names(el)).toEqual(['Billing']);
+    el.querySelector<HTMLElement>('[data-testid="overview-chip-running"]')!.click();
+    await settle();
+    expect(names(el)).toEqual([]);
+    expect(el.querySelector('[data-testid="overview-list"]')).toBeNull();
+    expect(el.querySelector('[data-testid="overview-empty"]')).not.toBeNull();
+    unmount();
+  });
+
+  it('marks a favourite and opens a program from a row, and the row opens the stack', async () => {
+    useOpenerPrefs().save({ order: [], hidden: [], favorites: ['vscode'] });
+    const { el, unmount } = await mounted([shop, crm]);
+    view(el, 'list').click();
+    await settle();
+    const push = vi.spyOn(router, 'push').mockResolvedValue(undefined);
+    rowOf(el, 'ab12').querySelector<HTMLElement>('[data-testid="path-favorite"]')!.click();
+    await settle();
+    expect(fake.requests.find((r) => r.path === '/hub/open')?.body).toEqual({ stack: 'ab12', path: '/src/shop', with: 'vscode' });
+    rowOf(el, 'ab12').querySelector<HTMLElement>('[data-testid="tile-star"]')!.click();
+    await settle();
+    expect(names(el)).toEqual(['shop', 'crm']);
+    // The star and the program do not open the stack; the row does.
+    expect(push).not.toHaveBeenCalled();
+    rowOf(el, 'cd34').querySelector<HTMLElement>('[data-testid="tile-commit"]')!.click();
+    expect(push).toHaveBeenCalledWith({ name: 'stack', params: { stack: 'cd34' } });
+    push.mockRestore();
+    unmount();
+  });
+});

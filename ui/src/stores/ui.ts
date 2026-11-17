@@ -5,6 +5,8 @@ import { persist } from '@/lib/persist';
 export type ThemePref = 'system' | 'light' | 'dark';
 /** The start page's state filter: every stack, the ones that run, the ones that need attention. */
 export type HomeState = 'all' | 'running' | 'attention';
+/** How the start page shows the stacks: large tiles, small tiles, a list. */
+export type HomeView = 'large' | 'small' | 'list';
 export type ToastKind = 'success' | 'error' | 'info' | 'warning';
 export type Toast = { id: number; kind: ToastKind; title: string; message?: string };
 
@@ -179,6 +181,12 @@ export const useUi = defineStore('ui', () => {
     persist.setSession('home.filter.state', state);
   });
 
+  // The way the start page shows the stacks is a choice, kept in this browser
+  // as the sidebar's order is (the filter above is a state of this tab).
+  const savedView = persist.get<HomeView>('home.view');
+  const homeView = ref<HomeView>(savedView === 'small' || savedView === 'list' ? savedView : 'large');
+  watch(homeView, (view) => persist.set('home.view', view));
+
   return {
     theme,
     effectiveTheme,
@@ -186,6 +194,7 @@ export const useUi = defineStore('ui', () => {
     filterQuery,
     homeQuery,
     homeState,
+    homeView,
     cycleTheme,
     toasts,
     toast,

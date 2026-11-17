@@ -7,15 +7,17 @@
 // above it.
 import { computed } from 'vue';
 import type { StackEntry } from '@/api/types';
-import { ago, duration, useNow } from '@/lib/format';
+import { commitAge, duration, useNow } from '@/lib/format';
+import { stackFigures } from '@/lib/stackFigures';
 import { stackPage } from '@/lib/stackRoutes';
-import type { Tone } from '@/lib/status';
 import { useHub } from '@/stores/hub';
 import Icon from './icons/Icon.vue';
 import StatusPill from './StatusPill.vue';
 import FavoriteOpeners from './FavoriteOpeners.vue';
 
-const props = defineProps<{ stack: StackEntry; favourite: boolean }>();
+// `compact`: the small tile, which leaves out how long it has been up and the
+// ports shift, and tells only the first thing that needs attention.
+const props = defineProps<{ stack: StackEntry; favourite: boolean; compact?: boolean }>();
 const emit = defineEmits<{ toggleFavourite: [] }>();
 
 const hub = useHub();
@@ -24,29 +26,11 @@ const now = useNow();
 /** Most attention lines on a tile; the rest are counted. */
 const SHOWN_ITEMS = 2;
 
-const glance = computed(() => hub.glances[props.stack.id] ?? null);
-const items = computed(() => hub.attention.filter((a) => a.stack === props.stack.id));
-
-const look = computed((): { label: string; tone: Tone; busy: boolean } => {
-  const s = props.stack;
-  if (!hub.reachable) return { label: 'Unknown', tone: 'neutral', busy: false };
-  // A start or stop this page asked for, before the hub's figures say it.
-  if (hub.stopping[s.id]) return { label: 'Stopping', tone: 'neutral', busy: true };
-  if (hub.starting[s.id] && !s.running) return { label: 'Starting', tone: 'accent', busy: true };
-  const state = glance.value?.state ?? (s.start_error ? 'attention' : s.running ? 'ok' : 'stopped');
-  switch (state) {
-    case 'attention':
-      return { label: 'Needs attention', tone: items.value.some((i) => i.level === 'error') || s.start_error ? 'danger' : 'warn', busy: false };
-    case 'starting':
-      return { label: 'Starting', tone: 'accent', busy: true };
-    case 'stopping':
-      return { label: 'Stopping', tone: 'neutral', busy: true };
-    case 'ok':
-      return { label: 'Running', tone: 'ok', busy: false };
-    default:
-      return { label: 'Stopped', tone: 'neutral', busy: false };
-  }
-});
+const figures = computed(() => stackFigures(props.stack, hub));
+const look = computed(() => figures.value.look);
+const items = computed(() => figures.value.items);
+const services = computed(() => figures.value.services);
+const lanes = computed(() => figures.value.lanes);
 
 /** The path's folder and its last part: a long path is cut in the folder, the repository's name stays. */
 const parts = computed(() => {
@@ -54,28 +38,15 @@ const parts = computed(() => {
   return m ? { dir: m[1], leaf: m[2] } : { dir: '', leaf: props.stack.repo };
 });
 
-const services = computed(() => {
-  const g = glance.value;
-  if (!props.stack.running || !g || !g.total) return null;
-  return { ready: g.ready, total: g.total, share: g.ready / g.total };
-});
-const lanes = computed(() => (props.stack.running && glance.value ? glance.value.lanes : null));
-const upFor = computed(() => (props.stack.running && props.stack.daemon ? duration(now.value - props.stack.daemon.started) : null));
-const DAY = 86_400_000;
-/** Within a day as `ago` says it; older in days, which fits a tile better than a date. */
-const committed = computed(() => {
-  const at = props.stack.last_commit ? props.stack.last_commit * 1000 : null;
-  if (!at) return null;
-  const days = Math.floor((now.value - at) / DAY);
-  return days >= 1 ? `${days} d ago` : ago(at, now.value);
-});
+const upFor = computed(() => (figures.value.upSince !== null ? duration(now.value - figures.value.upSince) : null));
+const committed = computed(() => commitAge(figures.value.committedAt, now.value));
 
-const shownItems = computed(() => items.value.slice(0, SHOWN_ITEMS));
+const shownItems = computed(() => items.value.slice(0, props.compact ? 1 : SHOWN_ITEMS));
 const moreItems = computed(() => items.value.length - shownItems.value.length);
 </script>
 
 <template>
-  <article class="tile" :class="{ running: stack.running }" data-testid="stack-tile" :data-id="stack.id">
+  <article class="tile" :class="{ running: stack.running, compact }" data-testid="stack-tile" :data-id="stack.id">
     <header class="head">
       <button
         type="button"
@@ -109,7 +80,7 @@ const moreItems = computed(() => items.value.length - shownItems.value.length);
         <dt>Lanes</dt>
         <dd class="num">{{ lanes }}</dd>
       </div>
-      <div v-if="upFor" class="fig" data-testid="tile-up">
+      <div v-if="upFor && !compact" class="fig" data-testid="tile-up">
         <dt>Up</dt>
         <dd>{{ upFor }}</dd>
       </div>
@@ -117,7 +88,7 @@ const moreItems = computed(() => items.value.length - shownItems.value.length);
         <dt>Last commit</dt>
         <dd>{{ committed }}</dd>
       </div>
-      <div v-if="stack.shift" class="fig">
+      <div v-if="stack.shift && !compact" class="fig">
         <dt>Ports</dt>
         <dd class="mono">+{{ stack.shift }}</dd>
       </div>
@@ -158,6 +129,17 @@ const moreItems = computed(() => items.value.length - shownItems.value.length);
 .tile:focus-within {
   border-color: var(--border-strong);
   box-shadow: var(--shadow-sm);
+}
+/* The small tile: closer together, the name a little smaller. */
+.tile.compact {
+  gap: 6px;
+  padding: 10px 12px;
+}
+.compact .name {
+  font-size: 14px;
+}
+.compact .figures {
+  gap: 6px 14px;
 }
 .head {
   display: flex;
