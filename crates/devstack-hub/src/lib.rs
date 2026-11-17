@@ -3615,7 +3615,7 @@ async fn daemon_get(
     s: &AppState,
     id: &str,
     path: &str,
-) -> Result<hyper::Response<hyper::body::Incoming>, DaemonError> {
+) -> Result<hyper::Response<DaemonBody>, DaemonError> {
     let req = hyper::Request::get(path)
         .header(header::AUTHORIZATION, format!("Bearer {}", s.token))
         .header(header::ACCEPT, "text/event-stream")
@@ -3635,10 +3635,23 @@ async fn daemon_get(
 /// one the request went to, the answer is `503` with `Retry-After` and
 /// what the stack does; only a daemon that still serves and broke the
 /// exchange is a `502`.
+/// An answer of a daemon; read to its end, its connection takes the hub's
+/// next request to that daemon (#556: a connection per request leaves each
+/// in `TIME_WAIT`, and a dashboard that polls adds them up).
+type DaemonBody = devstack_node::connpool::GiveBack<u16, Body>;
+
+/// The hub's idle connections to its daemons, by port.
+fn daemon_pool() -> Arc<devstack_node::connpool::Pool<u16, Body>> {
+    static POOL: std::sync::OnceLock<Arc<devstack_node::connpool::Pool<u16, Body>>> =
+        std::sync::OnceLock::new();
+    POOL.get_or_init(|| devstack_node::connpool::Pool::new(devstack_node::connpool::IDLE_MAX))
+        .clone()
+}
+
 async fn daemon_send(
     resolve: impl Fn() -> DaemonNow,
     mut req: hyper::Request<Body>,
-) -> Result<hyper::Response<hyper::body::Incoming>, DaemonError> {
+) -> Result<hyper::Response<DaemonBody>, DaemonError> {
     use hyper::body::Body as _;
     let t0 = Instant::now();
     // GET, HEAD, OPTIONS without a body: safe to repeat whatever happened.
@@ -3661,33 +3674,55 @@ async fn daemon_send(
             HeaderValue::from_str(&format!("127.0.0.1:{port}")).unwrap(),
         );
         let in_window = || t0.elapsed() < RESEND_WINDOW;
-        let stream = match connect_daemon(port).await {
-            Ok(s) => s,
-            Err(e) => {
-                // Nothing was sent. A daemon that replaced this one is
-                // worth another try; otherwise it is not running.
-                let then = resolve();
-                if then != now && in_window() {
-                    continue;
-                }
-                return Err(match then {
-                    DaemonNow::Serves { .. } if then == now => {
-                        DaemonError::unavailable(DaemonNow::Absent { starting: false }, Some(e))
+        let kept = daemon_pool().kept(&port);
+        let reused = kept.is_some();
+        let mut sender = match kept {
+            Some(s) => s,
+            None => {
+                let stream = match connect_daemon(port).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        // Nothing was sent. A daemon that replaced this one is
+                        // worth another try; otherwise it is not running.
+                        let then = resolve();
+                        if then != now && in_window() {
+                            continue;
+                        }
+                        return Err(match then {
+                            DaemonNow::Serves { .. } if then == now => DaemonError::unavailable(
+                                DaemonNow::Absent { starting: false },
+                                Some(e),
+                            ),
+                            then => DaemonError::unavailable(then, Some(e)),
+                        });
                     }
-                    then => DaemonError::unavailable(then, Some(e)),
-                });
+                };
+                let (sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+                    .await
+                    .map_err(|e| DaemonError::new(StatusCode::BAD_GATEWAY, e.to_string()))?;
+                tokio::spawn(conn);
+                sender
             }
         };
-        let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
-            .await
-            .map_err(|e| DaemonError::new(StatusCode::BAD_GATEWAY, e.to_string()))?;
-        tokio::spawn(conn);
         let copy = repeatable.then(|| again(&req));
         match sender.try_send_request(req).await {
-            Ok(resp) => return Ok(resp),
+            Ok(resp) => {
+                return Ok(devstack_node::connpool::GiveBack::wrap(
+                    daemon_pool(),
+                    port,
+                    sender,
+                    resp,
+                ));
+            }
             Err(mut e) => {
-                let then = resolve();
                 let unsent = e.take_message();
+                // A kept connection the daemon closed while it was idle hands
+                // the request back unsent: it goes out on a new one.
+                if reused && let Some(r) = unsent {
+                    req = r;
+                    continue;
+                }
+                let then = resolve();
                 let sent = unsent.is_none();
                 let error = e.into_error().to_string();
                 diag::warn(
@@ -4463,6 +4498,41 @@ mod daemon_send_tests {
             .unwrap();
         assert_eq!(r.status(), StatusCode::OK);
         assert_eq!(n.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn the_hub_reuses_its_connections_to_a_daemon() {
+        // A daemon that keeps its connections open and counts them (#556).
+        let l = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = l.local_addr().unwrap().port();
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let count = accepted.clone();
+        tokio::spawn(async move {
+            while let Ok((c, _)) = l.accept().await {
+                count.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let svc = hyper::service::service_fn(|_req| async {
+                        Ok::<_, std::convert::Infallible>(hyper::Response::new(
+                            http_body_util::Full::new(bytes::Bytes::from("{}")),
+                        ))
+                    });
+                    let _ = hyper::server::conn::http1::Builder::new()
+                        .serve_connection(TokioIo::new(c), svc)
+                        .await;
+                });
+            }
+        });
+        use http_body_util::BodyExt as _;
+        for _ in 0..20 {
+            let r = daemon_send(looks(vec![serves(port)]), get()).await.unwrap();
+            assert_eq!(r.status(), StatusCode::OK);
+            let body = r.into_body().collect().await.unwrap().to_bytes();
+            assert_eq!(&body[..], b"{}");
+        }
+        let n = accepted.load(Ordering::SeqCst);
+        assert!(n <= 2, "20 requests opened {n} connections to the daemon");
     }
 
     #[tokio::test]

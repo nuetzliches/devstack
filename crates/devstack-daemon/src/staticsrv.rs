@@ -91,11 +91,32 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Where a forward sends its requests: `http://host:port`.
-#[derive(Debug, Clone, PartialEq)]
+use devstack_node::connpool::{GiveBack, IDLE_MAX, Pool};
+
+/// Where a forward sends its requests: `http://host:port`, with the
+/// connections to it that are idle now. They are reused, as a reverse proxy
+/// does: a connection per request would leave each one in `TIME_WAIT` on
+/// this side, and an end-to-end suite drains the ephemeral ports (#556).
+#[derive(Debug, Clone)]
 pub struct Target {
     host: String,
     port: u16,
+    pool: Arc<Pool<(), Body>>,
+}
+
+impl Target {
+    /// A new connection.
+    async fn connect(&self) -> Result<hyper::client::conn::http1::SendRequest<Body>, String> {
+        let stream = tokio::net::TcpStream::connect((self.host.as_str(), self.port))
+            .await
+            .map_err(|e| e.to_string())?;
+        let _ = stream.set_nodelay(true);
+        let (sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+            .await
+            .map_err(|e| e.to_string())?;
+        tokio::spawn(conn.with_upgrades());
+        Ok(sender)
+    }
 }
 
 /// The `--forward PREFIX=URL` arguments, checked as `devstack check` does.
@@ -109,7 +130,14 @@ pub fn forwards(args: &[String]) -> Result<Vec<(String, Target)>, String> {
             forward::prefix(prefix).map_err(|e| format!("--forward `{prefix}`: {e}"))?;
             let (host, port) =
                 forward::origin(url).map_err(|e| format!("--forward {prefix}: `{url}`: {e}"))?;
-            Ok((prefix.to_string(), Target { host, port }))
+            Ok((
+                prefix.to_string(),
+                Target {
+                    host,
+                    port,
+                    pool: Pool::new(IDLE_MAX),
+                },
+            ))
         })
         .collect()
 }
@@ -210,20 +238,9 @@ async fn pass(to: &Target, peer: SocketAddr, mut req: Request) -> Response<Body>
     *req.uri_mut() = path.parse().unwrap_or_else(|_| Uri::from_static("/"));
     *req.version_mut() = Version::HTTP_11;
 
-    let stream = match tokio::net::TcpStream::connect((to.host.as_str(), to.port)).await {
-        Ok(s) => s,
-        Err(e) => return fail(e.to_string()),
-    };
-    let _ = stream.set_nodelay(true);
-    let (mut sender, conn) = match hyper::client::conn::http1::handshake(TokioIo::new(stream)).await
-    {
-        Ok(c) => c,
-        Err(e) => return fail(e.to_string()),
-    };
-    tokio::spawn(conn.with_upgrades());
-    let mut resp = match sender.send_request(req).await {
+    let (sender, mut resp) = match to.pool.send(&(), req, || to.connect()).await {
         Ok(r) => r,
-        Err(e) => return fail(e.to_string()),
+        Err(e) => return fail(e),
     };
     let upgraded = resp.status() == StatusCode::SWITCHING_PROTOCOLS && client_upgrade.is_some();
     crate::proxy::strip_hop_by_hop(resp.headers_mut(), upgraded);
@@ -235,11 +252,14 @@ async fn pass(to: &Target, peer: SocketAddr, mut req: Request) -> Response<Body>
                 let _ = tokio::io::copy_bidirectional(&mut c, &mut t).await;
             }
         });
+        // The upgraded connection is the WebSocket's now: not given back.
         let (parts, _) = resp.into_parts();
         return Response::from_parts(parts, Body::empty());
     }
-    let (parts, body) = resp.into_parts();
-    Response::from_parts(parts, Body::new(body))
+    // Read to its end, the answer's connection takes the next request. One
+    // the browser leaves early (or a stream that does not end, SSE) keeps or
+    // drops its connection, never back in the pool.
+    GiveBack::wrap(to.pool.clone(), (), sender, resp).map(Body::new)
 }
 
 /// Whether a file's name carries a hash of its content (`main-3f2a1b9c.js`,
@@ -530,6 +550,93 @@ mod tests {
             r.starts_with("HTTP/1.1 502") && r.contains(&format!("127.0.0.1:{closed}")),
             "{r}"
         );
+    }
+
+    /// A target that counts the connections it accepts (#556).
+    async fn counting_target() -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::Ordering;
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        let accepted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = accepted.clone();
+        tokio::spawn(async move {
+            while let Ok((s, _)) = l.accept().await {
+                count.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let svc = hyper::service::service_fn(|_req| async {
+                        Ok::<_, std::convert::Infallible>(Response::new(http_body_util::Full::new(
+                            bytes::Bytes::from("pong"),
+                        )))
+                    });
+                    let _ = hyper::server::conn::http1::Builder::new()
+                        .serve_connection(TokioIo::new(s), svc)
+                        .await;
+                });
+            }
+        });
+        (port, accepted)
+    }
+
+    #[tokio::test]
+    async fn a_forward_reuses_its_connections_to_the_target() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("index.html"), "<app>").unwrap();
+        let (target, accepted) = counting_target().await;
+        let port = site(d.path(), &[format!("/api=http://127.0.0.1:{target}")]).await;
+        // One browser connection per request, closed after it, as a test
+        // suite's many pages do: the target's side must not follow suit.
+        for i in 0..30 {
+            let (_, r) = talk(
+                port,
+                format!("GET /api/ping/{i} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+                    .as_bytes(),
+                "\0",
+            )
+            .await;
+            assert!(r.starts_with("HTTP/1.1 200") && r.ends_with("pong"), "{r}");
+        }
+        let n = accepted.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            n <= 2,
+            "30 requests one after another opened {n} connections to the target"
+        );
+        // Four at a time, as four test workers send them: about four.
+        for round in 0..10 {
+            let all = (0..4).map(|w| {
+                talk(
+                    port,
+                    format!(
+                        "GET /api/{round}/{w} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+                    )
+                    .leak()
+                    .as_bytes(),
+                    "\0",
+                )
+            });
+            for (_, r) in futures_join(all).await {
+                assert!(r.ends_with("pong"), "{r}");
+            }
+        }
+        let n = accepted.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            n <= 8,
+            "70 requests, four at a time, opened {n} connections to the target"
+        );
+    }
+
+    /// Run the futures side by side, their results in order.
+    async fn futures_join<F: std::future::Future + Send + 'static>(
+        fs: impl Iterator<Item = F>,
+    ) -> Vec<F::Output>
+    where
+        F::Output: Send + 'static,
+    {
+        let handles: Vec<_> = fs.map(tokio::spawn).collect();
+        let mut out = Vec::new();
+        for h in handles {
+            out.push(h.await.unwrap());
+        }
+        out
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # ADR-0110: A static service forwards paths to another server, as a reverse proxy in front of it would
 
-- **Status:** Accepted (card in the pull request); built
+- **Status:** Accepted (card in the pull request); built; amended 2026-11-17 (connections to the target are kept, #556)
 - **Date:** 2026-11-17
 - **Deciders:** project owner
 - **Related:** [ADR-0041](0041-a-profile-says-how-a-lane-runs-for-a-purpose.md) (profiles), [ADR-0023](0023-stack-file-compatibility.md) (a new key is optional), [ADR-0010](0010-promotion-mechanism.md) (the service proxy whose header handling it shares), [ADR-0058](0058-a-profile-can-leave-out-containers-and-services.md) (`skip`), [ADR-0090](0090-a-service-can-get-a-public-link-by-hand.md) (public links), issue #551
@@ -50,8 +50,9 @@ As built:
    appends one per entry to the static service's generated `run`
    (`with_static_servers`), so its placeholders get their values like the
    rest of `run`, per lane.
-3. **Passing a request** (`staticsrv::pass`): a new HTTP/1.1 connection to
-   the target per request, the request target in origin form, the client's
+3. **Passing a request** (`staticsrv::pass`): an HTTP/1.1 connection to
+   the target from its idle pool, or a new one (amendment below), the
+   request target in origin form, the client's
    `Host` kept (or taken from an HTTP/2 authority), `X-Forwarded-For`
    appended to, `X-Forwarded-Host` and `-Proto` set where a proxy in front
    (a tunnel) has not set them; `proxy::strip_hop_by_hop` both ways; the
@@ -62,8 +63,8 @@ Decided while building, not on the card:
 
 - The forward runs inside the static service's own process, not in the
   daemon: it starts, stops and moves with the instance.
-- No connection pool to the target: one connection per request is enough
-  on loopback and keeps the server small.
+- ~~No connection pool to the target: one connection per request is enough
+  on loopback and keeps the server small.~~ Wrong, see the amendment.
 - A target without a port is port 80; an IPv6 host is written in brackets.
 - Prefixes take letters, digits and `-._~` only, so they need no quoting in
   the generated command line.
@@ -91,3 +92,31 @@ Decided while building, not on the card:
   it does not see that.
 - HTTPS targets and path rewriting are not there; both can be added without
   breaking a file that works now.
+
+## Amendment 2026-11-17: connections to the target are kept (#556)
+
+One connection per request was wrong. devstack closed each one first, so
+each left a socket in `TIME_WAIT` on this machine for two minutes; an
+end-to-end suite (four workers, about 1000 tests in 11 minutes) left about
+7000 and drained Windows' ephemeral ports, and the browser and the forward
+failed with `ERR_ADDRESS_IN_USE` and `502`. A reverse proxy keeps its
+upstream connections, and so does a dev server's proxy.
+
+Each target now keeps up to 32 idle connections. A request takes a ready
+one or opens a new one; one the target closed while idle is sent again on a
+new connection, as the service proxy does (ADR-0010). A connection goes back
+once its answer is read to its end (for a body of known length: its last
+frame, which hyper does not poll past); an upgraded one (WebSocket) is the
+upgrade's, and a stream the browser leaves early, or one that does not end
+(server-sent events), keeps or drops its connection. 2000 requests four at
+a time over new browser connections now open 4 connections to the target
+instead of 2001; a unit test bounds the count. No point of the card
+changes: the pool was decided while building.
+
+The pool is `devstack_node::connpool` (`Pool`, and `GiveBack`, the body that
+returns the connection), shared with the hub's way to its daemons, which
+had the same flaw. Two places keep their own way: the service proxy's pool
+is tied to the drain of an instance it switches away from, and the public
+link router (`linkrouter.rs`) still opens a connection per request, since
+its `Dial` is also its check that a host is still open; a kept connection
+would pass a link its owner closed.

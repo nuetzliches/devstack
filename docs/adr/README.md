@@ -192,5 +192,5 @@ stay.
 | [0107](0107-the-start-page-has-a-search-and-a-state-filter.md) | The start page has a search by name or folder and a filter by state | Accepted (card in the pull request); built |
 | [0108](0108-the-start-page-has-large-and-small-tiles-and-a-list.md) | The start page shows the stacks as large tiles, small tiles or a sortable list | Accepted (card in the pull request); built |
 | [0109](0109-the-order-of-the-stacks-is-one-choice-for-the-sidebar-and-the-start-page.md) | The order of the stacks is one choice for the sidebar and the start page | Accepted (card in the pull request); built |
-| [0110](0110-a-static-service-forwards-paths-to-another-server.md) | A static service forwards paths to another server, as a reverse proxy in front of it would | Accepted (card in the pull request); built |
+| [0110](0110-a-static-service-forwards-paths-to-another-server.md) | A static service forwards paths to another server, as a reverse proxy in front of it would | Accepted (card in the pull request); built; amended 2026-11-17 (connections to the target kept, #556) |
 | [0111](0111-the-dashboards-advisory-gate-counts-what-the-bundle-holds.md) | The dashboard's advisory gate counts what the bundle holds, not npm's runtime tree | Accepted (card in the pull request); built |

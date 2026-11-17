@@ -2,6 +2,7 @@
 //! (ADR-0025, ADR-0031).
 
 pub mod confine;
+pub mod connpool;
 pub mod coordinator;
 pub mod egress;
 pub mod events;
