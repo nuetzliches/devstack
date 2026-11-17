@@ -8,8 +8,9 @@ import { api, paths } from '@/api';
 import type { FilterAnswer, McpUpstream, UpstreamFilter } from '@/api/types';
 import { act } from '@/lib/actions';
 import { type FilterForm, filterForm, filterFrom, filterSummary, veilqLinear } from '@/lib/filters';
-import { useUi } from '@/stores/ui';
+import { SHIFT_SKIP_HINT, useUi } from '@/stores/ui';
 import Icon from '@/components/icons/Icon.vue';
+import ShiftHint from '@/components/ShiftHint.vue';
 
 const props = defineProps<{ upstreams: McpUpstream[] }>();
 const ui = useUi();
@@ -180,7 +181,7 @@ const ready = computed(() => {
           </div>
           <div class="actions">
             <button type="button" class="btn btn-ghost btn-sm" @click="startEdit(i)">Change</button>
-            <button type="button" class="btn btn-ghost btn-sm" :disabled="busy" @click="remove(i)">Remove</button>
+            <button type="button" class="btn btn-ghost btn-sm" :disabled="busy" :title="`${SHIFT_SKIP_HINT}.`" @click="remove(i)">Remove<ShiftHint /></button>
           </div>
         </li>
       </ul>

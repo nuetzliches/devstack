@@ -9,6 +9,8 @@ import { restartLanesText } from '@/lib/lanes';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
 import Icon from './icons/Icon.vue';
+import ShiftHint from './ShiftHint.vue';
+import { SHIFT_SKIP_HINT } from '@/stores/ui';
 
 const props = defineProps<{ configChanged: boolean }>();
 
@@ -42,9 +44,9 @@ const canRestart = computed(() => !stack.readOnly && !!stack.entry);
       <template v-if="lanesText">{{ ' ' }}{{ lanesText }}</template>
     </span>
     <span v-else class="grow"><strong>The stack file changed since {{ name ?? 'the stack' }} started.</strong> It applies after a restart.</span>
-    <button v-if="canRestart" type="button" class="btn btn-primary btn-sm" :disabled="!!stack.busy.stack" data-testid="banner-restart-stack" @click="stack.restartStack()">
+    <button v-if="canRestart" type="button" class="btn btn-primary btn-sm" :disabled="!!stack.busy.stack" :title="stack.restartFresh ? undefined : `${SHIFT_SKIP_HINT}.`" data-testid="banner-restart-stack" @click="stack.restartStack()">
       <span v-if="stack.busy.stack === 'restart'" class="spinner" /><Icon v-else name="restart" :size="14" />
-      {{ stack.busy.stack === 'restart' ? 'Reloading…' : 'Reload' }}
+      {{ stack.busy.stack === 'restart' ? 'Reloading…' : 'Reload' }}<ShiftHint v-if="!stack.restartFresh && stack.busy.stack !== 'restart'" />
     </button>
   </div>
 </template>

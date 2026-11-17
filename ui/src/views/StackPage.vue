@@ -20,11 +20,13 @@ import { laneView } from '@/lib/stackRoutes';
 import { statusLook } from '@/lib/status';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
+import { SHIFT_SKIP_HINT } from '@/stores/ui';
 import AgentPrompt from '@/components/AgentPrompt.vue';
 import Icon from '@/components/icons/Icon.vue';
 import PathMenu from '@/components/PathMenu.vue';
 import PortGraph from '@/components/PortGraph.vue';
 import RestartBanner from '@/components/RestartBanner.vue';
+import ShiftHint from '@/components/ShiftHint.vue';
 import StackFileBanner from '@/components/StackFileBanner.vue';
 import { refusedForPorts, runningHolders, shiftLabel } from '@/lib/shift';
 import StatusPill from '@/components/StatusPill.vue';
@@ -275,11 +277,11 @@ const singletons = computed(() => services.value.filter((s) => s.singleton));
       <div v-if="changes" class="actions">
         <!-- No start of the stack: each tree starts on its own card, main too; the daemon comes with the first (ADR-0095). -->
         <template v-if="stack.running">
-          <button type="button" class="btn" :disabled="!!stack.busy.stack" title="Start its daemon again with the installed devstack and the current stack file; the lanes are carried over. Shift-click skips the confirmation." data-testid="action-restart-stack" @click="stack.restartStack()">
-            <span v-if="stack.busy.stack === 'restart'" class="spinner" /><Icon v-else name="restart" :size="14" /> Reload
+          <button type="button" class="btn" :disabled="!!stack.busy.stack" :title="`Start its daemon again with the installed devstack and the current stack file; the lanes are carried over.${stack.restartFresh ? '' : ` ${SHIFT_SKIP_HINT}.`}`" data-testid="action-restart-stack" @click="stack.restartStack()">
+            <span v-if="stack.busy.stack === 'restart'" class="spinner" /><Icon v-else name="restart" :size="14" /> Reload<ShiftHint v-if="!stack.restartFresh" />
           </button>
-          <button type="button" class="btn btn-stop" :disabled="!!stack.busy.stack" title="Every tree stops, main and each lane, with its services and containers; the daemon ends with the last. Shift-click skips the confirmation." data-testid="action-stack-stop" @click="stack.stopStack()">
-            <span v-if="stack.busy.stack === 'stop'" class="spinner" /><Icon v-else name="power" :size="14" /> Stop all
+          <button type="button" class="btn btn-stop" :disabled="!!stack.busy.stack" :title="`Every tree stops, main and each lane, with its services and containers; the daemon ends with the last. ${SHIFT_SKIP_HINT}.`" data-testid="action-stack-stop" @click="stack.stopStack()">
+            <span v-if="stack.busy.stack === 'stop'" class="spinner" /><Icon v-else name="power" :size="14" /> Stop all<ShiftHint />
           </button>
         </template>
       </div>
@@ -295,18 +297,18 @@ const singletons = computed(() => services.value.filter((s) => s.singleton));
         :key="h.id"
         type="button"
         class="btn"
-        :title="`Stop and remove the containers of ${h.name} (devstack down there); their volumes stay`"
+        :title="`Stop and remove the containers of ${h.name} (devstack down there); their volumes stay. ${SHIFT_SKIP_HINT}.`"
         :data-testid="`remove-containers-${h.id}`"
         @click="removeContainers(h.id, h.name)"
       >
-        Remove containers of {{ h.name }}
+        Remove containers of {{ h.name }}<ShiftHint />
       </button>
     </div>
     <div v-if="!hubDown && ownContainers" class="banner warn" data-testid="stack-own-containers">
       <Icon name="alert" :size="18" />
       <span class="grow">Its containers run though its daemon does not<template v-if="ownHeld.length">, and hold {{ ownHeld.join(', ') }}</template>: Docker started them again, or a stop kept them. Another stack cannot start on those ports.</span>
-      <button v-if="changes && stack.id" type="button" class="btn" title="Stop and remove its containers (devstack down); their volumes stay" data-testid="remove-own-containers" @click="removeContainers(stack.id, stack.entry?.name ?? 'this stack')">
-        Remove containers
+      <button v-if="changes && stack.id" type="button" class="btn" :title="`Stop and remove its containers (devstack down); their volumes stay. ${SHIFT_SKIP_HINT}.`" data-testid="remove-own-containers" @click="removeContainers(stack.id, stack.entry?.name ?? 'this stack')">
+        Remove containers<ShiftHint />
       </button>
     </div>
     <div v-if="!hubDown && stack.entry?.start_error && !stack.running" class="banner warn" data-testid="stack-start-error">

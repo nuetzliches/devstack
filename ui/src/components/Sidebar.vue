@@ -42,10 +42,11 @@ import {
 import { useHub } from '@/stores/hub';
 import { connectedTo, usePool } from '@/stores/pool';
 import { useStack } from '@/stores/stack';
-import { useUi } from '@/stores/ui';
+import { SHIFT_SKIP_HINT, useUi } from '@/stores/ui';
 import AddStackDialog from './AddStackDialog.vue';
 import GuestTile from './GuestTile.vue';
 import Icon from './icons/Icon.vue';
+import ShiftHint from './ShiftHint.vue';
 
 const hub = useHub();
 const stack = useStack();
@@ -544,13 +545,13 @@ function toggleFavourite(s: StackEntry) {
       <button
         type="button"
         class="head-btn"
-        title="Stop all stacks… (Shift-click skips the confirmation)"
+        :title="`Stop all stacks… (${SHIFT_SKIP_HINT})`"
         aria-label="Stop all stacks"
         :disabled="!runningStacks.length || stoppingAll"
         data-testid="sidebar-stop-all"
         @click="stopAll()"
       >
-        <span v-if="stoppingAll" class="spinner sm" aria-hidden="true" /><Icon v-else name="power" :size="14" />
+        <span v-if="stoppingAll" class="spinner sm" aria-hidden="true" /><template v-else><Icon name="power" :size="14" /><ShiftHint corner /></template>
       </button>
       <button type="button" class="head-btn" title="Add a stack…" aria-label="Add a stack" data-testid="sidebar-add-stack" @click="adding = true">
         <Icon name="plus" :size="14" />
@@ -798,7 +799,7 @@ function toggleFavourite(s: StackEntry) {
         data-testid="sidebar-stack-menu-list"
       >
         <button type="button" class="opt" role="menuitem" @click="(closeMenu(), openStack(menu!.s))"><Icon name="layers" :size="14" /> Open</button>
-        <button v-if="menu.s.running" type="button" class="opt" role="menuitem" :disabled="!!hub.stopping[menu.s.id]" data-testid="sidebar-menu-stop" @click="stopStack(menu!.s)"><Icon name="power" :size="14" /> {{ hub.stopping[menu.s.id] ? 'Stopping…' : 'Stop all…' }}</button>
+        <button v-if="menu.s.running" type="button" class="opt" role="menuitem" :disabled="!!hub.stopping[menu.s.id]" :title="`${SHIFT_SKIP_HINT}.`" data-testid="sidebar-menu-stop" @click="stopStack(menu!.s)"><Icon name="power" :size="14" /> {{ hub.stopping[menu.s.id] ? 'Stopping…' : 'Stop all…' }}<ShiftHint class="menu-hint" /></button>
         <button type="button" class="opt" role="menuitem" @click="copyPath(menu!.s)"><Icon name="copy" :size="14" /> Copy path</button>
         <button type="button" class="opt" role="menuitem" data-testid="sidebar-menu-fav" @click="toggleFavourite(menu!.s)">
           <Icon name="star" :size="14" /> {{ favourites.has(menu.s.id) ? 'Remove from favourites' : 'Add to favourites' }}
@@ -824,11 +825,11 @@ function toggleFavourite(s: StackEntry) {
           class="opt danger"
           role="menuitem"
           :disabled="menu.s.running"
-          :title="menu.s.running ? 'Stop it first: a running stack is listed again at once' : 'Remove it from the dashboard; nothing on disk changes'"
+          :title="menu.s.running ? 'Stop it first: a running stack is listed again at once' : `Remove it from the dashboard; nothing on disk changes. ${SHIFT_SKIP_HINT}.`"
           data-testid="sidebar-menu-remove"
           @click="removeStack(menu!.s)"
         >
-          <Icon name="trash" :size="14" /> Remove from the dashboard…
+          <Icon name="trash" :size="14" /> Remove from the dashboard…<ShiftHint v-if="!menu.s.running" class="menu-hint" />
         </button>
       </div>
     </Teleport>
@@ -927,6 +928,13 @@ function toggleFavourite(s: StackEntry) {
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
+}
+.head-btn {
+  position: relative;
+}
+.ctx-menu .menu-hint {
+  margin-left: auto;
+  padding-left: 12px;
 }
 .head-btn:disabled {
   color: var(--text-faint);
