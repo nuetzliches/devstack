@@ -9,6 +9,15 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.49.0] - 2026-11-17
+
+A static service forwards paths to another server, as a reverse proxy in
+front of it would: a single-page app that calls its API on its own origin
+runs as a static build in a profile without a proxy of its own. The start
+page gets a search, a state filter, small tiles, a list and the sidebar's
+order menu, and a Shift icon marks the buttons whose confirmation
+Shift-click skips.
+
 ### Added
 
 - **A static service forwards paths to another server.** `forward = {
@@ -19,7 +28,6 @@ and listed with their assets on the
   single-page app that calls its API on its own origin now runs as a static
   build in an acceptance profile without a proxy of its own (#551,
   ADR-0110). Needs `requires = "0.49.0"`.
-
 - **An order menu on the start page.** The same menu as the sidebar's (by
   name, last opened first, last edited first; favourites always first) sits
   in the filter row and orders the tiles and the list. The order is one
@@ -40,6 +48,13 @@ and listed with their assets on the
   it; text and state are still there after a visit to a stack and back. A
   hidden stack stays out, but the line under the tiles says how many hidden
   ones match what was typed.
+- **A Shift icon on the buttons whose confirmation Shift-click skips**
+  (#549). Reload and Stop all on the stack page and in the restart banner,
+  Remove containers, Stop all stacks, Stop all and Remove in the stack menu,
+  and Remove of an upstream filter show a small Shift icon with the tooltip
+  "Shift-click skips the confirmation". Reload shows it only while the main
+  tree does not restart with fresh data, since only then may the dialog be
+  skipped.
 
 ## [0.48.0] - 2026-11-16
 
@@ -3528,7 +3543,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.48.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.49.0...HEAD
+[0.49.0]: https://github.com/nuetzliches/devstack/compare/v0.48.0...v0.49.0
 [0.48.0]: https://github.com/nuetzliches/devstack/compare/v0.47.0...v0.48.0
 [0.47.0]: https://github.com/nuetzliches/devstack/compare/v0.46.0...v0.47.0
 [0.46.0]: https://github.com/nuetzliches/devstack/compare/v0.45.1...v0.46.0
