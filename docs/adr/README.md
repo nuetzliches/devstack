@@ -190,3 +190,4 @@ stay.
 | [0105](0105-a-service-can-be-a-shortcut-card-on-the-overview.md) | A service can be a shortcut card on the overview, marked in the stack file | Accepted (card in the pull request); built |
 | [0106](0106-a-running-job-is-running-and-measured.md) | A running job is `running` and measured; it counts as done only when it completed | Accepted (card in the pull request); built |
 | [0107](0107-the-start-page-has-a-search-and-a-state-filter.md) | The start page has a search by name or folder and a filter by state | Accepted (card in the pull request); built |
+| [0108](0108-the-start-page-has-large-and-small-tiles-and-a-list.md) | The start page shows the stacks as large tiles, small tiles or a sortable list | Accepted (card in the pull request); built |

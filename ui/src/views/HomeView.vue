@@ -5,12 +5,16 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import type { StackEntry } from '@/api/types';
 import { useHub } from '@/stores/hub';
-import { useUi, type HomeState } from '@/stores/ui';
+import { useUi, type HomeState, type HomeView } from '@/stores/ui';
 import Icon from '@/components/icons/Icon.vue';
 import ScanStacks from '@/components/ScanStacks.vue';
 import AddStackDialog from '@/components/AddStackDialog.vue';
 import OpenersDialog from '@/components/OpenersDialog.vue';
 import StackTile from '@/components/StackTile.vue';
+import StackRow from '@/components/StackRow.vue';
+import SortTh from '@/components/SortTh.vue';
+import { useSort } from '@/lib/sort';
+import { stackFigures } from '@/lib/stackFigures';
 import { matchesQuery, openedTimes, orderStacks, savedOrder, useFavourites, useHidden } from '@/lib/stackOrder';
 
 const hub = useHub();
@@ -46,7 +50,12 @@ const needing = computed(() => attentionIds.value.size);
 // stack and back through the mark finds them as they were left). The chips'
 // figures count the listed stacks whatever is typed.
 const ui = useUi();
-const { homeQuery: query, homeState: state } = storeToRefs(ui);
+const { homeQuery: query, homeState: state, homeView: view } = storeToRefs(ui);
+const views: { key: HomeView; label: string; icon: 'grid' | 'grid3' | 'list' }[] = [
+  { key: 'large', label: 'Large tiles', icon: 'grid' },
+  { key: 'small', label: 'Small tiles', icon: 'grid3' },
+  { key: 'list', label: 'List', icon: 'list' },
+];
 const inState = (s: StackEntry, which: HomeState) => which === 'all' || (which === 'running' ? s.running : attentionIds.value.has(s.id));
 const chips = computed(() => [
   { key: 'all' as const, label: 'All', count: listed.value.length },
@@ -63,6 +72,24 @@ const shown = computed(() =>
     edited.value,
   ),
 );
+// The list: the tiles' order until a column is chosen, then that column's
+// (lib/sort.ts, as every table). The figures are the tile's.
+const rows = computed(() => shown.value.map((stack) => ({ stack, f: stackFigures(stack, hub) })));
+const sort = useSort(
+  rows,
+  {
+    name: (r) => r.stack.name,
+    state: (r) => r.f.look.rank,
+    services: (r) => r.f.services?.share ?? null,
+    lanes: (r) => r.f.lanes,
+    // The longest up first when descending: the earliest start is the largest negated.
+    up: (r) => (r.f.upSince === null ? null : -r.f.upSince),
+    commit: (r) => r.f.committedAt,
+    attention: (r) => r.f.items.length,
+  },
+  { id: 'home' },
+);
+
 // Hidden stacks stay out; while something is typed, the line says how many
 // of them it would have found, so a search never denies a stack that exists.
 const hiddenAll = computed(() => hub.stacks.filter((s) => isHidden(s.id, s.running)));
@@ -161,11 +188,55 @@ function manage() {
             {{ c.label }} <span class="faint tabular">{{ c.count }}</span>
           </button>
         </div>
+        <div class="btn-group views" role="group" aria-label="View">
+          <button
+            v-for="v in views"
+            :key="v.key"
+            type="button"
+            class="chip-toggle"
+            :aria-pressed="view === v.key"
+            :title="v.label"
+            :aria-label="v.label"
+            :data-testid="`overview-view-${v.key}`"
+            @click="view = v.key"
+          >
+            <Icon :name="v.icon" :size="14" />
+          </button>
+        </div>
       </div>
 
-      <div v-if="shown.length" class="tiles" data-testid="overview-tiles">
-        <StackTile v-for="s in shown" :key="s.id" :stack="s" :favourite="favourites.has(s.id)" @toggle-favourite="favourites.toggle(s.id)" />
-      </div>
+      <template v-if="shown.length">
+        <div v-if="view === 'list'" class="table-wrap list-wrap" data-testid="overview-list">
+          <table class="table list">
+            <thead>
+              <tr>
+                <th class="star-col"><span class="sr-only">Favourite</span></th>
+                <SortTh label="Name" :dir="sort.dirOf('name')" @toggle="sort.toggle('name')" />
+                <SortTh label="State" :dir="sort.dirOf('state')" @toggle="sort.toggle('state')" />
+                <SortTh label="Services" class="num" :dir="sort.dirOf('services')" @toggle="sort.toggle('services')" />
+                <SortTh label="Lanes" class="num" :dir="sort.dirOf('lanes')" @toggle="sort.toggle('lanes')" />
+                <SortTh label="Up" class="num hide-sm" :dir="sort.dirOf('up')" @toggle="sort.toggle('up')" />
+                <SortTh label="Last commit" class="num" :dir="sort.dirOf('commit')" @toggle="sort.toggle('commit')" />
+                <SortTh label="Attention" class="num" :dir="sort.dirOf('attention')" @toggle="sort.toggle('attention')" />
+                <th class="star-col"><span class="sr-only">Programs</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <StackRow v-for="r in sort.sorted.value" :key="r.stack.id" :stack="r.stack" :favourite="favourites.has(r.stack.id)" @toggle-favourite="favourites.toggle(r.stack.id)" />
+            </tbody>
+          </table>
+        </div>
+        <div v-else class="tiles" :class="{ small: view === 'small' }" data-testid="overview-tiles">
+          <StackTile
+            v-for="s in shown"
+            :key="s.id"
+            :stack="s"
+            :favourite="favourites.has(s.id)"
+            :compact="view === 'small'"
+            @toggle-favourite="favourites.toggle(s.id)"
+          />
+        </div>
+      </template>
       <p v-else-if="filtering" class="muted empty" data-testid="overview-empty">
         No stack matches.
         <button type="button" class="link" data-testid="overview-clear" @click="clearFilter">Clear the filter</button>
@@ -268,10 +339,30 @@ function manage() {
   text-decoration: underline;
   font: inherit;
 }
+.views {
+  margin-left: auto;
+}
 .tiles {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 290px), 1fr));
   gap: 14px;
+}
+.tiles.small {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 210px), 1fr));
+  gap: 10px;
+}
+.list-wrap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.star-col {
+  width: 1%;
+}
+@media (max-width: 760px) {
+  .hide-sm {
+    display: none;
+  }
 }
 .hidden-note {
   margin-top: 14px;
