@@ -9,6 +9,16 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **A public link keeps its connections to the service** (#559). The router
+  behind a named tunnel (on your machine and on a node of the pool) opened a
+  new connection for every request, which left a socket waiting two minutes
+  each, as `forward` did before 0.49.2. It now reuses them per service, on a
+  node together with the lane's tunnel. Every request is still checked
+  against the links that are open: a link you close refuses the next
+  request at once, even while a connection to its service is kept.
+
 ## [0.49.2] - 2026-11-17
 
 Fixed: a static service's `forward` keeps its connections to the target

@@ -9,7 +9,7 @@
 //! offer, nothing runs and the owners' machines carry the links.
 
 use super::{Shared, daemon_of};
-use crate::linkrouter::{self, Connector, Dial, Upstream};
+use crate::linkrouter::{self, Connector, Dial, Io, Way};
 use crate::publiclinks::{HostsAnswer, HostsReport, Issued, Offer};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -212,31 +212,40 @@ fn stack_of(d: &crate::lanerun::DaemonAddr) -> Result<Value, String> {
 }
 
 /// Where the router sends a host: the lane's port, through its daemon's
-/// tunnel, for the hosts the coordinator gave a record only.
+/// tunnel, for the hosts the coordinator gave a record only. The check is
+/// made here for every request; the tunnel is opened only when the router
+/// keeps no connection to that lane's port (#559).
 fn dialer(s: std::sync::Weak<super::Inner>, state: Arc<Mutex<State>>) -> Dial {
     Arc::new(move |host: String| {
-        let s = s.upgrade();
-        let route = {
+        let s = s
+            .upgrade()
+            .ok_or((503, "the node is stopping".to_string()))?;
+        let r = {
             let st = state.lock().unwrap();
             st.registered
                 .contains(&host)
                 .then(|| st.routes.get(&host).cloned())
                 .flatten()
-        };
-        Box::pin(async move {
-            let s = s.ok_or((503, "the node is stopping".to_string()))?;
-            let r = route.ok_or((404, "no public link is open at this address".to_string()))?;
-            let lease = s
-                .leases
-                .lock()
-                .unwrap()
-                .get(&r.lease)
-                .cloned()
-                .ok_or((404, "its lane is gone".to_string()))?;
-            let d = daemon_of(&s, lease)
-                .await
-                .map_err(|_| (502, "its lane's daemon does not answer".to_string()))?;
-            tunnel_to(&d, r.port, r.tls).await
+        }
+        .ok_or((404, "no public link is open at this address".to_string()))?;
+        let lease = s
+            .leases
+            .lock()
+            .unwrap()
+            .get(&r.lease)
+            .cloned()
+            .ok_or((404, "its lane is gone".to_string()))?;
+        let (port, tls) = (r.port, r.tls);
+        Ok(Way {
+            key: format!("lane:{}:{port}:{tls}", r.lease),
+            port,
+            tls,
+            open: Box::pin(async move {
+                let d = daemon_of(&s, lease)
+                    .await
+                    .map_err(|_| (502, "its lane's daemon does not answer".to_string()))?;
+                tunnel_to(&d, port).await
+            }),
         })
     })
 }
@@ -245,8 +254,7 @@ fn dialer(s: std::sync::Weak<super::Inner>, state: Arc<Mutex<State>>) -> Dial {
 async fn tunnel_to(
     d: &crate::lanerun::DaemonAddr,
     port: u16,
-    tls: bool,
-) -> Result<Upstream, (u16, String)> {
+) -> Result<Box<dyn Io>, (u16, String)> {
     let bad = |e: String| (502, format!("the lane's daemon: {e}"));
     let tcp = tokio::net::TcpStream::connect(&d.addr)
         .await
@@ -278,9 +286,5 @@ async fn tunnel_to(
     let up = hyper::upgrade::on(resp)
         .await
         .map_err(|e| bad(e.to_string()))?;
-    Ok(Upstream {
-        io: Box::new(hyper_util::rt::TokioIo::new(up)),
-        port,
-        tls,
-    })
+    Ok(Box::new(hyper_util::rt::TokioIo::new(up)))
 }

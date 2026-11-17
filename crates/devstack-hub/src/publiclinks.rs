@@ -90,15 +90,15 @@ impl PublicLinks {
             router_port,
             pool: Mutex::default(),
         });
-        // The router asks this hub where a host goes: a port here.
+        // The router asks this hub where a host goes, for every request: a
+        // port here (#559: the router keeps the connections, not this check).
         let dialer = Arc::downgrade(&me);
         let dial: Dial = Arc::new(move |host: String| {
-            let me = dialer.upgrade();
-            Box::pin(async move {
-                let me = me.ok_or((503, "the hub is stopping".to_string()))?;
-                let (port, tls) = me.route(&host).map_err(|w| (404, w.to_string()))?;
-                linkrouter::local(port, tls).await
-            })
+            let me = dialer
+                .upgrade()
+                .ok_or((503, "the hub is stopping".to_string()))?;
+            let (port, tls) = me.route(&host).map_err(|w| (404, w.to_string()))?;
+            Ok(linkrouter::local(port, tls))
         });
         tokio::spawn(linkrouter::serve(listener, dial));
         let watcher = me.clone();

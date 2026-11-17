@@ -1,6 +1,6 @@
 # ADR-0091: Public links can go through the user's own named tunnel, at stable addresses; the hub runs its one connector
 
-- **Status:** Accepted (card in the pull request); built; its step 3, the pool, built by [ADR-0092](0092-public-links-through-the-pool.md)
+- **Status:** Accepted (card in the pull request); built; its step 3, the pool, built by [ADR-0092](0092-public-links-through-the-pool.md); amended 2026-11-17 (the router keeps its connections to services, checked per request, #559)
 - **Date:** 2026-11-03
 - **Deciders:** project owner
 - **Related:** [ADR-0090](0090-a-service-can-get-a-public-link-by-hand.md) (public links as Quick Tunnels, which this extends; its points 1 to 3 hold here too), [ADR-0069](0069-devstack-mcp-can-carry-the-tools-of-upstream-mcp-servers.md) (the hub's keychain), [ADR-0053](0053-whoever-a-lane-is-shared-with-connects-to-it.md) (connecting a lane as a whole), [ADR-0045](0045-the-hub-notifies-the-desktop.md) (the hub follows every tree's events), [ADR-0023](0023-stack-file-compatibility.md), [ADR-0070](0070-a-review-card-comes-before-the-code-an-adr-records-what-was-built.md)
@@ -85,3 +85,34 @@ and `crates/devstack-env/src/lib.rs` (point 5), `crates/devstack/src/hubcmd.rs`
 (points 6, 7), `crates/devstack/tests/daemon_lifecycle.rs`
 (`a_named_tunnel_gives_stable_addresses_and_needs_the_hub`),
 `docs/stack-file.md` ("Stable addresses").
+
+## Amendment 2026-11-17: the router keeps its connections, checked per request (#559)
+
+The router (`linkrouter.rs`, shared by the hub and a node) opened a new
+connection to the service for every request and closed it first, leaving
+each in `TIME_WAIT` for two minutes: the class #556 fixed for a static
+service's `forward`. Its `Dial` was both the way to the service and the
+owner's check that the host is open, so a pool keyed by host would have
+passed a link its owner closed.
+
+The owner approved the review card in the conversation on **2026-11-17**,
+all three points:
+
+| # | Category | Point | Beats | Reversing costs |
+|---|---|---|---|---|
+| 1 | trust | Every request passes the owner's check before a byte goes to a service; the check (`Dial`) opens nothing, it says whether the host is open and where it goes, and only then a kept or new connection is taken. | A pool by host that skips the check for a kept connection | Low |
+| 2 | trust | Kept connections belong to the target (here: port and TLS; on a node: lease, port, TLS), never to the host name; one that no open link leads to idles until the service closes it, unreachable without passing the check. | Dropping a link's connections when it closes (an event per close, protecting nothing point 1 does not) | Low |
+| 3 | concept | The rules of #556: up to 32 idle per target, given back at the end of the answer; upgrades and streams that do not end keep their own; on a node the lane daemon's tunnel is reused with its connection. | Keeping the TCP connection and opening the tunnel each time | Low |
+
+As built: `Dial` returns a `Way` (`key`, `port`, `tls`, and `open`, the
+future that connects: TCP here, the lane's tunnel on a node) and is called
+for every request. The router keeps a `connpool::Pool` by `Way::key`, sends
+on a kept connection or opens one along `open` (TLS on top where the
+service speaks it), resends a request a kept connection handed back unsent
+on a new one, and gives a connection back through `GiveBack`. The hub's
+`route` and the node's registered-host and lease check stay where they
+were; the node's look-up of the lane's daemon moved into `open`. Tests:
+`linkrouter::tests::the_router_reuses_its_connections_to_a_service` (20
+requests, at most 2 connections; red with one per request), and in it a
+request after the link closed is a `404` while a connection to the service
+is kept and idle, which serves again once the link is opened again.
