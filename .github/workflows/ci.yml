@@ -72,12 +72,12 @@ jobs:
       - name: build
         working-directory: ui
         run: npm ci && npm run build
-      # Advisories for what ships (the dashboard's runtime dependencies): a
-      # warning here, required in the release workflow.
+      # Advisories for what ships (the packages with code in the dashboard's
+      # bundle, ADR-0111): a warning here, required in the release workflow.
       - name: npm audit
         working-directory: ui
         continue-on-error: true
-        run: npm audit --omit=dev
+        run: node scripts/audit-shipped.mjs
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ui-dist

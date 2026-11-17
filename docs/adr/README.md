@@ -193,3 +193,4 @@ stay.
 | [0108](0108-the-start-page-has-large-and-small-tiles-and-a-list.md) | The start page shows the stacks as large tiles, small tiles or a sortable list | Accepted (card in the pull request); built |
 | [0109](0109-the-order-of-the-stacks-is-one-choice-for-the-sidebar-and-the-start-page.md) | The order of the stacks is one choice for the sidebar and the start page | Accepted (card in the pull request); built |
 | [0110](0110-a-static-service-forwards-paths-to-another-server.md) | A static service forwards paths to another server, as a reverse proxy in front of it would | Accepted (card in the pull request); built |
+| [0111](0111-the-dashboards-advisory-gate-counts-what-the-bundle-holds.md) | The dashboard's advisory gate counts what the bundle holds, not npm's runtime tree | Accepted (card in the pull request); built |

@@ -30,8 +30,13 @@ patch version.
       through, its failed job is run again (`gh run rerun <run> --failed`).
 - [ ] **No known advisory.** CI only warns about one; the release workflow
       refuses it. Checked before the tag:
-      `cargo deny --all-features check advisories` and, in `ui/`,
-      `npm audit --omit=dev` (`cargo install cargo-deny --locked` once).
+      `cargo deny --all-features check advisories` and, in `ui/` after
+      `npm ci` and `npm run build`, `node scripts/audit-shipped.mjs`
+      (`cargo install cargo-deny --locked` once). The latter counts an npm
+      advisory only for a package with code in the dashboard's bundle (the
+      build lists them in `ui/bundle-packages.json`); one for a build tool
+      alone is listed, not counted
+      ([ADR-0111](adr/0111-the-dashboards-advisory-gate-counts-what-the-bundle-holds.md)).
 
 ## 2. The release pull request
 

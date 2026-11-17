@@ -57,10 +57,11 @@ jobs:
       - name: dashboard
         working-directory: ui
         run: npm ci && npm run build
-      # What ships has no known advisory (a warning in ci, required here).
+      # What ships has no known advisory (a warning in ci, required here):
+      # the packages with code in the bundle (ADR-0111).
       - name: npm audit
         working-directory: ui
-        run: npm audit --omit=dev
+        run: node scripts/audit-shipped.mjs
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ui-dist
