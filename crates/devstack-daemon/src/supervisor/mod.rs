@@ -1305,7 +1305,8 @@ impl Supervisor {
 
 /// `kind = "static"` services run devstack's own file server on their
 /// artifact (plan §3.4); with that command they are ordinary services for the
-/// pipeline, the proxy and the health check.
+/// pipeline, the proxy and the health check. Its forwards (ADR-0110) go in
+/// as written: their placeholders get their values like the rest of `run`.
 fn with_static_servers(mut stack: Stack) -> Stack {
     let exe = std::env::current_exe()
         .map(|p| p.to_string_lossy().into_owned())
@@ -1320,6 +1321,10 @@ fn with_static_servers(mut stack: Stack) -> Stack {
                     ""
                 }
             );
+            for (prefix, target) in &svc.forward {
+                svc.run
+                    .push_str(&format!(" --forward \"{prefix}={target}\""));
+            }
         }
     }
     stack
