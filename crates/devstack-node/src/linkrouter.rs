@@ -32,21 +32,32 @@ const GRACE: Duration = Duration::from_secs(20);
 pub trait Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
 impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send> Io for T {}
 
-/// A connection to the service a host goes to.
-pub struct Upstream {
-    pub io: Box<dyn Io>,
+/// Opens a connection to a service: TCP here, or a lane's tunnel on a node.
+pub type Open = Pin<Box<dyn Future<Output = Result<Box<dyn Io>, (u16, String)>> + Send>>;
+
+/// Where an open host goes, as its owner checked it; not connected yet
+/// (#559). The router keeps connections to services and reuses them, keyed
+/// by `key`, the target, never the host name: a link closed and opened again
+/// for another service never gets the old connection, and every request is
+/// checked before a kept connection is taken.
+pub struct Way {
+    /// The target: `local:<port>:<tls>` here, `lane:<lease>:<port>:<tls>` on
+    /// a node.
+    pub key: String,
     /// Its port, as a browser on its machine names it in `Host`.
     pub port: u16,
     /// It speaks TLS (a development certificate).
     pub tls: bool,
+    /// Opens a new connection, when none is kept.
+    pub open: Open,
 }
 
-/// Where a host goes: a connection, or the status and why not.
-pub type Dial = Arc<
-    dyn Fn(String) -> Pin<Box<dyn Future<Output = Result<Upstream, (u16, String)>> + Send>>
-        + Send
-        + Sync,
->;
+/// Where a host goes, or the status and why not. It only checks: it opens
+/// nothing (the router does, with [`Way::open`]).
+pub type Dial = Arc<dyn Fn(String) -> Result<Way, (u16, String)> + Send + Sync>;
+
+/// Idle connections to services, by [`Way::key`].
+type Kept = Arc<crate::connpool::Pool<String, Incoming>>;
 
 // ------------------------------------------------------- the connector
 
@@ -231,6 +242,7 @@ pub fn proc_options() -> devstack_proc::Options {
 
 /// Serve the router on `listener`, for the process's life.
 pub async fn serve(listener: tokio::net::TcpListener, dial: Dial) {
+    let kept: Kept = crate::connpool::Pool::new(crate::connpool::IDLE_MAX);
     loop {
         let Ok((stream, _)) = listener.accept().await else {
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -238,8 +250,10 @@ pub async fn serve(listener: tokio::net::TcpListener, dial: Dial) {
         };
         let _ = stream.set_nodelay(true);
         let dial = dial.clone();
+        let kept = kept.clone();
         tokio::spawn(async move {
-            let service = hyper::service::service_fn(move |r| handle(dial.clone(), r));
+            let service =
+                hyper::service::service_fn(move |r| handle(dial.clone(), kept.clone(), r));
             let _ = hyper::server::conn::http1::Builder::new()
                 .serve_connection(TokioIo::new(stream), service)
                 .with_upgrades()
@@ -260,6 +274,7 @@ fn text(status: StatusCode, body: String) -> hyper::Response<Body> {
 
 async fn handle(
     dial: Dial,
+    kept: Kept,
     req: Request<Incoming>,
 ) -> Result<hyper::Response<Body>, std::convert::Infallible> {
     let host = req
@@ -268,14 +283,15 @@ async fn handle(
         .and_then(|h| h.to_str().ok())
         .map(|h| h.split(':').next().unwrap_or(h).to_ascii_lowercase())
         .unwrap_or_default();
-    let up = match dial(host.clone()).await {
-        Ok(u) => u,
+    // Every request is checked, a kept connection or not.
+    let way = match dial(host.clone()) {
+        Ok(w) => w,
         Err((status, why)) => {
             let status = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
             return Ok(text(status, format!("devstack: {why}\n")));
         }
     };
-    Ok(forward(req, &host, up).await.unwrap_or_else(|e| {
+    Ok(forward(req, &host, way, kept).await.unwrap_or_else(|e| {
         text(
             StatusCode::BAD_GATEWAY,
             format!("devstack: the service does not answer: {e}\n"),
@@ -283,47 +299,63 @@ async fn handle(
     }))
 }
 
-/// A connection to `port` on this machine's loopback (IPv4, else IPv6: a
-/// dev server may listen on `::1` only).
-pub async fn local(port: u16, tls: bool) -> Result<Upstream, (u16, String)> {
-    let tcp = match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
-        Ok(s) => s,
-        Err(_) => tokio::net::TcpStream::connect(("::1", port))
-            .await
-            .map_err(|e| (502, format!("nothing answers on port {port}: {e}")))?,
-    };
-    let _ = tcp.set_nodelay(true);
-    Ok(Upstream {
-        io: Box::new(tcp),
+/// The way to `port` on this machine's loopback (IPv4, else IPv6: a dev
+/// server may listen on `::1` only).
+pub fn local(port: u16, tls: bool) -> Way {
+    Way {
+        key: format!("local:{port}:{tls}"),
         port,
         tls,
-    })
+        open: Box::pin(async move {
+            let tcp = match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
+                Ok(s) => s,
+                Err(_) => tokio::net::TcpStream::connect(("::1", port))
+                    .await
+                    .map_err(|e| (502, format!("nothing answers on port {port}: {e}")))?,
+            };
+            let _ = tcp.set_nodelay(true);
+            Ok(Box::new(tcp) as Box<dyn Io>)
+        }),
+    }
 }
 
-/// Forward a request over `up`, with the Host a browser on the service's
-/// machine sends; WebSockets pass through.
-async fn forward(
-    mut req: Request<Incoming>,
-    host: &str,
-    up: Upstream,
-) -> Result<hyper::Response<Body>, String> {
-    let port = up.port;
-    let io: Box<dyn Io> = if up.tls {
+/// A new HTTP/1.1 connection along `open`, with TLS where the service
+/// speaks it.
+async fn connect(
+    open: Open,
+    tls: bool,
+) -> Result<hyper::client::conn::http1::SendRequest<Incoming>, String> {
+    let io = open.await.map_err(|(_, why)| why)?;
+    let io: Box<dyn Io> = if tls {
         let name =
             rustls_pki_types::ServerName::try_from("localhost").map_err(|e| e.to_string())?;
         Box::new(
             tokio_rustls::TlsConnector::from(any_certificate())
-                .connect(name, up.io)
+                .connect(name, io)
                 .await
                 .map_err(|e| e.to_string())?,
         )
     } else {
-        up.io
+        io
     };
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(io))
+    let (sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(io))
         .await
         .map_err(|e| e.to_string())?;
     tokio::spawn(conn.with_upgrades());
+    Ok(sender)
+}
+
+/// Forward a request along `way`, with the Host a browser on the service's
+/// machine sends; WebSockets pass through. A kept connection to its target
+/// is used if there is one; read to its end, the answer's connection is kept
+/// for the next request.
+async fn forward(
+    mut req: Request<Incoming>,
+    host: &str,
+    way: Way,
+    kept: Kept,
+) -> Result<hyper::Response<Body>, String> {
+    let port = way.port;
     let client_upgrade = req
         .headers()
         .contains_key(header::UPGRADE)
@@ -342,7 +374,27 @@ async fn forward(
             header::HeaderValue::from_static("https"),
         );
     }
-    let mut resp = sender.send_request(req).await.map_err(|e| e.to_string())?;
+    // A kept connection the service closed while it was idle hands the
+    // request back unsent: it goes out on a new one.
+    let Way { key, tls, open, .. } = way;
+    let (sender, mut resp) = match kept.kept(&key) {
+        Some(mut s) => match s.try_send_request(req).await {
+            Ok(r) => (s, r),
+            Err(mut e) => match e.take_message() {
+                Some(back) => {
+                    let mut s = connect(open, tls).await?;
+                    let r = s.send_request(back).await.map_err(|e| e.to_string())?;
+                    (s, r)
+                }
+                None => return Err(e.into_error().to_string()),
+            },
+        },
+        None => {
+            let mut s = connect(open, tls).await?;
+            let r = s.send_request(req).await.map_err(|e| e.to_string())?;
+            (s, r)
+        }
+    };
     let upgraded = resp.status() == StatusCode::SWITCHING_PROTOCOLS && client_upgrade.is_some();
     strip_hop_by_hop(resp.headers_mut(), upgraded);
     if upgraded && let Some(client) = client_upgrade {
@@ -353,13 +405,14 @@ async fn forward(
                 let _ = tokio::io::copy_bidirectional(&mut c, &mut u).await;
             }
         });
+        // The upgraded connection is the WebSocket's now: not kept.
         let (parts, _) = resp.into_parts();
         return Ok(hyper::Response::from_parts(
             parts,
             Full::new(Bytes::new()).map_err(|n| match n {}).boxed(),
         ));
     }
-    Ok(resp.map(BodyExt::boxed))
+    Ok(crate::connpool::GiveBack::wrap(kept, key, sender, resp).map(BodyExt::boxed))
 }
 
 /// Remove the hop-by-hop headers (RFC 9110 §7.6.1); an upgrade keeps
@@ -576,13 +629,11 @@ mod tests {
         let router = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let at = router.local_addr().unwrap();
         let dial: Dial = Arc::new(move |host: String| {
-            Box::pin(async move {
-                if host == "web-shop.dev.io" {
-                    local(port, false).await
-                } else {
-                    Err((404, "no public link is open at this address".into()))
-                }
-            })
+            if host == "web-shop.dev.io" {
+                Ok(local(port, false))
+            } else {
+                Err((404, "no public link is open at this address".into()))
+            }
         });
         tokio::spawn(serve(router, dial));
         let get = |host: &'static str| async move {
@@ -603,5 +654,78 @@ mod tests {
         );
         let refused = get("other.dev.io").await;
         assert!(refused.starts_with("HTTP/1.1 404"), "{refused}");
+    }
+
+    /// A service that keeps its connections open and counts them (#559).
+    async fn counting_service() -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        let accepted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = accepted.clone();
+        tokio::spawn(async move {
+            while let Ok((s, _)) = l.accept().await {
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let svc = hyper::service::service_fn(|_req| async {
+                        Ok::<_, std::convert::Infallible>(hyper::Response::new(Full::new(
+                            Bytes::from("pong"),
+                        )))
+                    });
+                    let _ = hyper::server::conn::http1::Builder::new()
+                        .serve_connection(TokioIo::new(s), svc)
+                        .await;
+                });
+            }
+        });
+        (port, accepted)
+    }
+
+    /// `GET /` with `host` on a new connection to the router, closed after.
+    async fn get_at(at: std::net::SocketAddr, host: &str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut s = tokio::net::TcpStream::connect(at).await.unwrap();
+        s.write_all(
+            format!("GET / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n").as_bytes(),
+        )
+        .await
+        .unwrap();
+        let mut out = String::new();
+        s.read_to_string(&mut out).await.unwrap();
+        out
+    }
+
+    #[tokio::test]
+    async fn the_router_reuses_its_connections_to_a_service() {
+        let (port, accepted) = counting_service().await;
+        let router = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let at = router.local_addr().unwrap();
+        // The owner's links: which hosts are open now.
+        let open = Arc::new(std::sync::Mutex::new(vec!["web-shop.dev.io".to_string()]));
+        let links = open.clone();
+        let dial: Dial = Arc::new(move |host: String| {
+            if links.lock().unwrap().contains(&host) {
+                Ok(local(port, false))
+            } else {
+                Err((404, "no public link is open at this address".into()))
+            }
+        });
+        tokio::spawn(serve(router, dial));
+        for _ in 0..20 {
+            let r = get_at(at, "web-shop.dev.io").await;
+            assert!(r.starts_with("HTTP/1.1 200") && r.ends_with("pong"), "{r}");
+        }
+        let n = accepted.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(n <= 2, "20 requests opened {n} connections to the service");
+
+        // The owner closes the link: refused, although a connection to the
+        // service is kept and idle.
+        open.lock().unwrap().clear();
+        let r = get_at(at, "web-shop.dev.io").await;
+        assert!(r.starts_with("HTTP/1.1 404"), "a closed link passed: {r}");
+        // That connection was there: open again, it serves without a new one.
+        open.lock().unwrap().push("web-shop.dev.io".into());
+        let r = get_at(at, "web-shop.dev.io").await;
+        assert!(r.ends_with("pong"), "{r}");
+        assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), n);
     }
 }

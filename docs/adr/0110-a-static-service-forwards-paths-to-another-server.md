@@ -119,4 +119,5 @@ had the same flaw. Two places keep their own way: the service proxy's pool
 is tied to the drain of an instance it switches away from, and the public
 link router (`linkrouter.rs`) still opens a connection per request, since
 its `Dial` is also its check that a host is still open; a kept connection
-would pass a link its owner closed.
+would pass a link its owner closed. (It keeps its connections since #559,
+with that check made for every request: ADR-0091, amendment.)
