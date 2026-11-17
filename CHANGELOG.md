@@ -9,6 +9,12 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.49.3] - 2026-11-17
+
+Fixed: a public link keeps its connections to the service instead of
+opening one per request, on your machine and on a node of the pool; every
+request is still checked against the links that are open.
+
 ### Fixed
 
 - **A public link keeps its connections to the service** (#559). The router
@@ -3574,7 +3580,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.49.2...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.49.3...HEAD
+[0.49.3]: https://github.com/nuetzliches/devstack/compare/v0.49.2...v0.49.3
 [0.49.2]: https://github.com/nuetzliches/devstack/compare/v0.49.1...v0.49.2
 [0.49.1]: https://github.com/nuetzliches/devstack/compare/v0.48.0...v0.49.1
 [0.48.0]: https://github.com/nuetzliches/devstack/compare/v0.47.0...v0.48.0
