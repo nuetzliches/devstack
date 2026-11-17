@@ -9,6 +9,13 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.49.2] - 2026-11-17
+
+Fixed: a static service's `forward` keeps its connections to the target
+instead of opening one per request, which drained the ephemeral ports on
+Windows under an end-to-end suite; the hub keeps its connections to the
+daemons the same way.
+
 ### Fixed
 
 - **A static service's `forward` keeps its connections to the target**
@@ -3557,7 +3564,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.49.1...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.49.2...HEAD
+[0.49.2]: https://github.com/nuetzliches/devstack/compare/v0.49.1...v0.49.2
 [0.49.1]: https://github.com/nuetzliches/devstack/compare/v0.48.0...v0.49.1
 [0.48.0]: https://github.com/nuetzliches/devstack/compare/v0.47.0...v0.48.0
 [0.47.0]: https://github.com/nuetzliches/devstack/compare/v0.46.0...v0.47.0
