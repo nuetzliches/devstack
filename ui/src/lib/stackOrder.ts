@@ -4,7 +4,7 @@
 // made: opening a stack moves nothing while the page is open. Favourites
 // (ADR-0086) list first, each part in that order; marking one is the user's
 // own act on its row, so it moves at once.
-import { ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { persist } from './persist';
 
 export type StackOrder = 'name' | 'opened' | 'edited';
@@ -91,6 +91,54 @@ export function forgetHidden(id: string): void {
 type Named = { id: string; name: string };
 
 const byName = (a: Named, b: Named) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+
+// One choice of the order for the sidebar and the start page, so a choice in
+// either shows in both at once; read from the browser when a page opens.
+const chosenOrder = ref<StackOrder>(savedOrder());
+const chosenTimes = ref(0);
+
+export function useOrderChoice() {
+  chosenOrder.value = savedOrder();
+  return {
+    order: computed(() => chosenOrder.value),
+    /** Counts every choice, the order already chosen included: the snapshots are taken anew then. */
+    chosen: computed(() => chosenTimes.value),
+    choose(order: StackOrder) {
+      saveOrder(order);
+      chosenOrder.value = order;
+      chosenTimes.value++;
+    },
+  };
+}
+
+/**
+ * The stacks in the chosen order for one page (the sidebar, the start page):
+ * last opened and last edited are snapshots of that page, taken when it opens
+ * and when an order is chosen, so nothing moves under the pointer. A stack
+ * whose commit time is first known later joins the snapshot with it.
+ */
+export function useStackOrdering(stacks: () => readonly { id: string; last_commit?: number | null }[]) {
+  const { order, chosen, choose } = useOrderChoice();
+  const favourites = useFavourites();
+  const opened = ref(openedTimes());
+  const edited = ref<Record<string, number>>({});
+  function takeEdited(fresh: boolean) {
+    const next: Record<string, number> = fresh ? {} : { ...edited.value };
+    for (const s of stacks()) if (s.last_commit != null && !(s.id in next)) next[s.id] = s.last_commit;
+    edited.value = next;
+  }
+  watch(() => stacks().map((s) => `${s.id}:${s.last_commit ?? ''}`).join(','), () => takeEdited(false), { immediate: true });
+  watch(chosen, () => {
+    opened.value = openedTimes();
+    takeEdited(true);
+  });
+  return {
+    order,
+    choose,
+    /** `list` in the chosen order, the favourites first. */
+    sort: <T extends Named>(list: readonly T[]): T[] => orderStacks(list, order.value, opened.value, favourites.list(), edited.value),
+  };
+}
 
 /**
  * The stacks in the chosen order, the favourites first. By last opened, the

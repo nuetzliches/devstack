@@ -31,13 +31,9 @@ import {
   forgetHidden,
   forgetOpened,
   noteOpened,
-  openedTimes,
-  orderStacks,
-  savedOrder,
-  saveOrder,
   useFavourites,
   useHidden,
-  type StackOrder,
+  useStackOrdering,
 } from '@/lib/stackOrder';
 import { useHub } from '@/stores/hub';
 import { connectedTo, usePool } from '@/stores/pool';
@@ -47,6 +43,7 @@ import AddStackDialog from './AddStackDialog.vue';
 import GuestTile from './GuestTile.vue';
 import Icon from './icons/Icon.vue';
 import ShiftHint from './ShiftHint.vue';
+import StackOrderMenu from './StackOrderMenu.vue';
 
 const hub = useHub();
 const stack = useStack();
@@ -112,19 +109,11 @@ const runningStacks = computed(() => hub.stacks.filter((s) => s.running && !hub.
 // in the list. Last opened is the snapshot taken when the page loaded or the
 // choice was made, so opening a stack does not move it under the pointer.
 // Favourites come first, and a star moves its stack at once.
-const order = ref<StackOrder>(savedOrder());
-const openedSnapshot = ref(openedTimes());
 const favourites = useFavourites();
 // Last edited is a snapshot too: a commit moves no row while the page is open.
-// A stack seen later joins it with its time; the choice takes a fresh one.
-const editedSnapshot = ref<Record<string, number>>({});
-function snapshotEdited(fresh: boolean) {
-  const next: Record<string, number> = fresh ? {} : editedSnapshot.value;
-  for (const s of hub.stacks) if (s.last_commit != null && !(s.id in next)) next[s.id] = s.last_commit;
-  editedSnapshot.value = next;
-}
-watch(() => hub.stacks.map((s) => `${s.id}:${s.last_commit ?? ''}`).join(','), () => snapshotEdited(false), { immediate: true });
-const ordered = computed(() => orderStacks(hub.stacks, order.value, openedSnapshot.value, favourites.list(), editedSnapshot.value));
+// The order is one choice with the start page's (StackOrderMenu, lib/stackOrder.ts).
+const ordering = useStackOrdering(() => hub.stacks);
+const ordered = computed(() => ordering.sort(hub.stacks));
 
 // Hide (this browser only): a hidden stack leaves the list and waits under
 // "Hidden"; it stays registered, which "Remove" does not.
@@ -169,44 +158,6 @@ watch(
   },
   { immediate: true },
 );
-const orderMenu = ref(false);
-const orderEl = ref<HTMLElement | null>(null);
-const orderBtn = ref<HTMLElement | null>(null);
-const orderPos = ref({ x: 0, y: 0 });
-function openOrderMenu() {
-  const r = orderBtn.value!.getBoundingClientRect();
-  orderPos.value = { x: Math.max(4, r.right - 180), y: r.bottom + 2 };
-  orderMenu.value = true;
-  void nextTick(() => orderEl.value?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus());
-}
-function closeOrderMenu() {
-  orderMenu.value = false;
-}
-function chooseOrder(o: StackOrder) {
-  order.value = o;
-  saveOrder(o);
-  openedSnapshot.value = openedTimes();
-  snapshotEdited(true);
-  closeOrderMenu();
-}
-function onOrderDown(e: PointerEvent) {
-  if (orderEl.value?.contains(e.target as Node) || orderBtn.value?.contains(e.target as Node)) return;
-  closeOrderMenu();
-}
-function onOrderKey(e: KeyboardEvent) {
-  if (e.key === 'Escape') {
-    e.preventDefault();
-    closeOrderMenu();
-    orderBtn.value?.focus();
-  }
-}
-watch(orderMenu, (open) => {
-  const add = open ? 'addEventListener' : 'removeEventListener';
-  document[add]('pointerdown', onOrderDown as EventListener, true);
-  document[add]('keydown', onOrderKey as EventListener);
-  window[add]('blur', closeOrderMenu);
-});
-onBeforeUnmount(closeOrderMenu);
 
 /**
  * The worktrees of every stack, kept across navigation: replaced when news
@@ -517,20 +468,22 @@ function toggleFavourite(s: StackEntry) {
       >
         Stacks<Icon name="search" :size="12" class="head-search" :class="{ on: searching }" />
       </button>
-      <button
-        ref="orderBtn"
-        type="button"
-        class="head-btn"
-        :class="{ open: orderMenu }"
-        :title="`Order: ${order === 'name' ? 'by name' : order === 'edited' ? 'last edited first' : 'last opened first'}`"
-        aria-label="Order of the stacks"
-        aria-haspopup="menu"
-        :aria-expanded="orderMenu"
-        data-testid="sidebar-order"
-        @click="orderMenu ? closeOrderMenu() : openOrderMenu()"
-      >
-        <Icon name="arrowUpDown" :size="14" />
-      </button>
+      <StackOrderMenu v-slot="o" menu-test-id="sidebar-order-menu">
+        <button
+          :ref="o.setButton"
+          type="button"
+          class="head-btn"
+          :class="{ open: o.open }"
+          :title="o.title"
+          aria-label="Order of the stacks"
+          aria-haspopup="menu"
+          :aria-expanded="o.open"
+          data-testid="sidebar-order"
+          @click="o.toggle"
+        >
+          <Icon name="arrowUpDown" :size="14" />
+        </button>
+      </StackOrderMenu>
       <button
         type="button"
         class="head-btn"
@@ -758,36 +711,6 @@ function toggleFavourite(s: StackEntry) {
       </button>
     </div>
     <AddStackDialog :open="adding" @close="adding = false" />
-    <Teleport to="body">
-      <div
-        v-if="orderMenu"
-        ref="orderEl"
-        class="ctx-menu order-menu"
-        role="menu"
-        aria-label="Order of the stacks"
-        :style="{ left: `${orderPos.x}px`, top: `${orderPos.y}px` }"
-        data-testid="sidebar-order-menu"
-      >
-        <button
-          v-for="o in [
-            { value: 'name', label: 'By name' },
-            { value: 'opened', label: 'Last opened first' },
-            { value: 'edited', label: 'Last edited first' },
-          ] as const"
-          :key="o.value"
-          type="button"
-          class="opt"
-          role="menuitemradio"
-          :aria-checked="order === o.value"
-          :data-order="o.value"
-          @click="chooseOrder(o.value)"
-        >
-          <Icon v-if="order === o.value" name="check" :size="14" />
-          <span v-else class="check-space" aria-hidden="true" />
-          {{ o.label }}
-        </button>
-      </div>
-    </Teleport>
     <Teleport to="body">
       <div
         v-if="menu"
@@ -1164,13 +1087,6 @@ ul {
 }
 .ctx-menu .opt.danger:not(:disabled) {
   color: var(--danger);
-}
-.order-menu {
-  min-width: 180px;
-}
-.check-space {
-  width: 14px;
-  flex: none;
 }
 .ctx-menu .sep {
   height: 1px;

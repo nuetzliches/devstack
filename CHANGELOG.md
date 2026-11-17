@@ -11,6 +11,11 @@ and listed with their assets on the
 
 ### Added
 
+- **An order menu on the start page.** The same menu as the sidebar's (by
+  name, last opened first, last edited first; favourites always first) sits
+  in the filter row and orders the tiles and the list. The order is one
+  choice for the sidebar and the start page: choosing it in either shows in
+  both at once, where the start page used to take it only when it opened.
 - **Small tiles and a list on the start page.** A switch beside the search
   shows the stacks as large tiles (as before), as small tiles (the same tile,
   closer together, without the time up and the ports shift) or as a list: a

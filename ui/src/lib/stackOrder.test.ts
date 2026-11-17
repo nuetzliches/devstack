@@ -12,6 +12,7 @@ import {
   saveOrder,
   useFavourites,
   useHidden,
+  useStackOrdering,
 } from './stackOrder';
 
 const s = (id: string, name: string) => ({ id, name });
@@ -77,6 +78,40 @@ describe('the order of the stacks', () => {
     forgetHidden('b');
     expect(hidden.list()).toEqual([]);
     expect(JSON.parse(localStorage.getItem('devstack.sidebar.hidden') ?? 'null')).toEqual([]);
+  });
+});
+
+describe('the order of two pages', () => {
+  const list = [
+    { id: 'a', name: 'alpha', last_commit: 100 },
+    { id: 'b', name: 'beta', last_commit: 200 },
+  ];
+
+  it('is one choice: either page chooses, both follow, and the browser keeps it', () => {
+    const sidebar = useStackOrdering(() => list);
+    const start = useStackOrdering(() => list);
+    expect(sidebar.sort(list).map((s) => s.id)).toEqual(['a', 'b']);
+    start.choose('edited');
+    expect(sidebar.order.value).toBe('edited');
+    expect(sidebar.sort(list).map((s) => s.id)).toEqual(['b', 'a']);
+    expect(start.sort(list).map((s) => s.id)).toEqual(['b', 'a']);
+    expect(savedOrder()).toBe('edited');
+    sidebar.choose('name');
+    expect(start.sort(list).map((s) => s.id)).toEqual(['a', 'b']);
+  });
+
+  it('takes the snapshot of a commit time anew with every choice', async () => {
+    const stacks = [{ id: 'a', name: 'alpha', last_commit: 100 }, { id: 'b', name: 'beta', last_commit: 200 }];
+    const page = useStackOrdering(() => stacks);
+    page.choose('edited');
+    await Promise.resolve();
+    expect(page.sort(stacks).map((s) => s.id)).toEqual(['b', 'a']);
+    // A commit to `a` moves nothing until the order is chosen again.
+    stacks[0].last_commit = 300;
+    expect(page.sort(stacks).map((s) => s.id)).toEqual(['b', 'a']);
+    page.choose('edited');
+    await Promise.resolve();
+    expect(page.sort(stacks).map((s) => s.id)).toEqual(['a', 'b']);
   });
 });
 

@@ -279,6 +279,52 @@ describe('the search and the state filter of the start page', () => {
   });
 });
 
+describe('the order of the start page', () => {
+  const alpha = stack('aa01', 'alpha', { last_commit: 100 });
+  const beta = stack('bb02', 'beta', { last_commit: 200 });
+  const gamma = stack('cc03', 'gamma', { last_commit: 50 });
+  const choose = async (el: HTMLElement, order: string) => {
+    el.querySelector<HTMLElement>('[data-testid="overview-order"]')!.click();
+    await settle();
+    document.querySelector<HTMLElement>(`[data-testid="overview-order-menu"] [data-order="${order}"]`)!.click();
+    await settle();
+  };
+
+  it('orders the tiles by name, or by last edited, and keeps the choice in the sidebar’s place', async () => {
+    const { el, unmount } = await mounted([gamma, alpha, beta]);
+    expect(names(el)).toEqual(['alpha', 'beta', 'gamma']);
+    await choose(el, 'edited');
+    expect(names(el)).toEqual(['beta', 'alpha', 'gamma']);
+    expect(localStorage.getItem('devstack.sidebar.order')).toBe('"edited"');
+    // The menu is closed by a choice, and shows it ticked when opened again.
+    expect(document.querySelector('[data-testid="overview-order-menu"]')).toBeNull();
+    el.querySelector<HTMLElement>('[data-testid="overview-order"]')!.click();
+    await settle();
+    expect(document.querySelector('[data-testid="overview-order-menu"] [aria-checked="true"]')?.getAttribute('data-order')).toBe('edited');
+    unmount();
+  });
+
+  it('is the order the sidebar chose, and the list follows it until a column is chosen', async () => {
+    localStorage.setItem('devstack.sidebar.order', '"edited"');
+    const { el, unmount } = await mounted([gamma, alpha, beta]);
+    expect(names(el)).toEqual(['beta', 'alpha', 'gamma']);
+    el.querySelector<HTMLElement>('[data-testid="overview-view-list"]')!.click();
+    await settle();
+    expect(names(el)).toEqual(['beta', 'alpha', 'gamma']);
+    await choose(el, 'name');
+    expect(names(el)).toEqual(['alpha', 'beta', 'gamma']);
+    unmount();
+  });
+
+  it('puts the favourites first whatever the order', async () => {
+    useFavourites().toggle('cc03');
+    const { el, unmount } = await mounted([gamma, alpha, beta]);
+    await choose(el, 'edited');
+    expect(names(el)).toEqual(['gamma', 'beta', 'alpha']);
+    unmount();
+  });
+});
+
 describe('the views of the start page', () => {
   const billing = stack('gh78', 'Billing', { repo: '/work/ledger' });
   const view = (el: HTMLElement, key: string) => el.querySelector<HTMLElement>(`[data-testid="overview-view-${key}"]`)!;
