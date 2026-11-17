@@ -319,3 +319,110 @@ output = "dist"
     assert_eq!(a.services["ocr"].stop, None);
     assert!(s.services["mailer"].stop.is_none());
 }
+
+#[test]
+fn a_static_profile_forwards_paths_to_the_api() {
+    use devstack_config::{FORWARD_SINCE, validate::warnings};
+    let s = load(
+        r#"
+[compose.app]
+project  = "shop"
+files    = ["compose.yml"]
+services = ["otel"]
+
+[profiles.acceptance.services.web]
+kind    = "static"
+build   = "npm run build"
+output  = "dist/web"
+forward = { "/api" = "{service.api.url}", "/file" = "{service.api.url}", "/otel" = "{compose.app.otel.4318}" }
+"#,
+    )
+    .unwrap();
+    let a = s.with_profile("acceptance").unwrap();
+    let web = &a.services["web"];
+    assert_eq!(web.forward.len(), 3);
+    assert_eq!(web.forward["/api"], "{service.api.url}");
+    assert!(
+        s.services["web"].forward.is_empty(),
+        "the dev server keeps its own proxy"
+    );
+    let w = warnings(&s);
+    assert!(
+        w.iter()
+            .any(|i| i.path == "profiles.acceptance.services.web.forward"
+                && i.message.contains(FORWARD_SINCE)),
+        "{w:?}"
+    );
+}
+
+#[test]
+fn a_forward_is_checked() {
+    let static_web = |forward: &str| {
+        load(&format!(
+            r#"
+[compose.app]
+project  = "shop"
+files    = ["compose.yml"]
+services = ["otel"]
+
+[services.secure]
+run    = "secure --port {{port}}"
+port   = 5443
+health = {{ http = "/health", timeout = "30s", insecure_tls = true }}
+
+[profiles.x]
+skip = ["compose.app.otel"]
+
+[profiles.x.services.web]
+kind    = "static"
+build   = "npm run build"
+output  = "dist/web"
+forward = {forward}
+"#
+        ))
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+    };
+    assert_eq!(static_web(r#"{ "/api" = "{service.api.url}" }"#), Ok(()));
+    assert_eq!(
+        static_web(r#"{ "/api" = "http://127.0.0.1:5000/" }"#),
+        Ok(())
+    );
+    assert_eq!(
+        static_web(r#"{ "/api" = "${API_URL}" }"#),
+        Ok(()),
+        "known at the start only"
+    );
+    for (forward, says) in [
+        (r#"{ "api" = "{service.api.url}" }"#, "starts with `/`"),
+        (r#"{ "/" = "{service.api.url}" }"#, "every request"),
+        (r#"{ "/api/" = "{service.api.url}" }"#, "trailing"),
+        (r#"{ "/api" = "{service.api.url}/v1" }"#, "without a path"),
+        (r#"{ "/api" = "{service.secure.url}" }"#, "plain HTTP"),
+        (
+            r#"{ "/api" = "{service.ghost.url}" }"#,
+            "no service `ghost`",
+        ),
+        (r#"{ "/api" = "{service.mailer.url}" }"#, "has no port"),
+        (
+            r#"{ "/otel" = "{compose.app.otel.4318}" }"#,
+            "leaves `compose.app.otel` out",
+        ),
+    ] {
+        let e = static_web(forward).unwrap_err();
+        assert!(e.contains("forward") && e.contains(says), "{forward}: {e}");
+    }
+    // Only a static service forwards.
+    let e = load(
+        r#"
+[profiles.x.services.web]
+forward = { "/api" = "{service.api.url}" }
+"#,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        e.contains("services.web.forward") && e.contains("belongs to `kind = \"static\"`"),
+        "{e}"
+    );
+}

@@ -150,6 +150,9 @@ pub struct ServiceProfile {
     /// What ends what `run` started outside its process tree (ADR-0059).
     pub stop: Option<String>,
     pub spa: Option<bool>,
+    /// Added to the service's `forward` (ADR-0110).
+    #[serde(default)]
+    pub forward: BTreeMap<String, String>,
     pub cwd: Option<String>,
     pub health: Option<Health>,
     /// Added to the service's `env`, over the profile's.
@@ -286,6 +289,7 @@ impl Stack {
                 }
                 if k != Kind::Static {
                     svc.spa = None;
+                    svc.forward.clear();
                 }
                 if k != Kind::Service {
                     svc.hot_reload = None;
@@ -312,6 +316,9 @@ impl Stack {
             }
             if o.spa.is_some() {
                 svc.spa = o.spa;
+            }
+            for (k, v) in &o.forward {
+                svc.forward.insert(k.clone(), v.clone());
             }
             if o.cwd.is_some() {
                 svc.cwd = o.cwd.clone();
@@ -916,6 +923,13 @@ pub struct Service {
     /// `kind = "static"`: answer paths without a file extension with
     /// `index.html` (client-side routes of a single-page app). Default `true`.
     pub spa: Option<bool>,
+    /// `kind = "static"`: requests below a path prefix go to another server,
+    /// as a reverse proxy in front of the bundle would send them (ADR-0110):
+    /// `{ "/api" = "{service.api.url}" }`. The longest prefix wins, at a
+    /// segment boundary; the path goes on unchanged; a target is an origin
+    /// (`http://host:port`).
+    #[serde(default)]
+    pub forward: BTreeMap<String, String>,
     /// Working directory relative to the repository.
     pub cwd: Option<String>,
     /// Paths whose change starts a candidate build (ADR-0003).

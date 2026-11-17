@@ -239,8 +239,8 @@ Rules `devstack check` enforces:
 
 - `service`, `job`: `build` and `output` go together (both or neither).
 - `devserver`, `tool`: no `build`, no `output`.
-- `static`: needs `build`, `output` and `port`, has no `run`; `spa` belongs
-  to `static` only.
+- `static`: needs `build`, `output` and `port`, has no `run`; `spa` and
+  `forward` belong to `static` only.
 - Every other kind needs `run`.
 - `job`: no `port`, no `health`. `tool`: no `health`.
 - `health` needs `port`; `proxy = true` only for a `service`, `static` or
@@ -275,9 +275,41 @@ file extension get `index.html` (client-side routes) unless `spa = false`;
 a file whose name carries its content hash (`index-Bd3x9_kQ.js`,
 `main.3f2a1b9c.css`) may be cached for a year, every other file
 (`index.html`, `config.json`, a manifest) is sent with `no-cache` and an
-`ETag`, so a promoted build shows at the next load. The API the bundle
-calls must be reachable from the browser as the bundle expects it (an
-absolute URL, or the same origin through your own proxy setup).
+`ETag`, so a promoted build shows at the next load.
+
+A bundle that calls its API on its own origin (a relative `/api`, as behind
+a reverse proxy in production) names where those paths go with `forward`
+([ADR-0110](adr/0110-a-static-service-forwards-paths-to-another-server.md),
+devstack 0.49.0 and later):
+
+```toml
+forward = { "/api" = "{service.api.url}", "/file" = "{service.api.url}", "/otel" = "{compose.app.otel-collector.4318}" }
+```
+
+- A request whose path is a prefix or lies below it (`/api`, `/api/…`,
+  `/api?…`; not `/apix`) goes to the target; the longest prefix wins. The
+  path and query go on unchanged, and a forwarded path never gets a file or
+  `index.html`.
+- A prefix is a path of plain segments (letters, digits, `-._~`) without a
+  trailing `/`; `/` alone is not one.
+- A target is an origin, `http://host:port`, without a path; it takes the
+  placeholders of `env` (`{service.<name>.url}`, `{compose.…}`, `${VAR}`)
+  and gets their values when the site starts. HTTPS targets (a service with
+  `health.insecure_tls`) are not supported; `devstack check` says so, and
+  refuses a container the profile `skip`s.
+- As a reverse proxy: `Host` stays as the browser sent it, `X-Forwarded-For`,
+  `-Host` and `-Proto` are added (kept where a proxy in front set them), the
+  answer is streamed (server-sent events, downloads) and a WebSocket upgrade
+  passes. A target that does not answer is a `502` naming it, at once.
+- Wherever the site's port is reachable, so are its forwards: a public link
+  to the site (`devstack tunnel`) reaches the API through it too.
+
+`forward` belongs to `kind = "static"` (a dev server has its own proxy
+config) and can be set in a profile
+(`[profiles.<name>.services.<service>]`), where it adds to the service's.
+Without `forward`, the API must be reachable from the browser as the bundle
+expects it (an absolute URL, or the same origin through your own proxy
+setup).
 
 ### Builds and artifacts ([ADR-0002](adr/0002-processes-run-from-immutable-artifacts.md))
 
@@ -1050,6 +1082,7 @@ need      = { memory = "8G" }            # a lane with it needs at least this, o
 kind   = "static"                        # a build served as files instead of a dev server
 build  = "npm run build -- --configuration e2e"
 output = "dist/web/browser"
+forward = { "/api" = "{service.api.url}" }   # the relative /api the dev server's proxy served
 
 [profiles.lite]
 description = "daily work without the heavy containers"
@@ -1067,9 +1100,10 @@ devstack lane start <lane> --profile acceptance --run  # from the main tree
   `{is_main}`), `autostart`, `skip` (below), `command` (one of `[commands]`), `need` (as
   `[lanes.need]`, each part the larger of the two; a lane with the profile
   is measured on its own, its runs are the profile's), and
-  per service `kind`, `build`, `output`, `run`, `stop`, `spa`, `cwd`,
-  `health` and `env`. A service it does not name runs as the file says. Its `env` is
-  added to every service's, a service's own `env` in the profile on top.
+  per service `kind`, `build`, `output`, `run`, `stop`, `spa`, `forward`,
+  `cwd`, `health` and `env`. A service it does not name runs as the file says. Its `env` is
+  added to every service's, a service's own `env` in the profile on top;
+  a service's `forward` in the profile adds to its own.
   `watch`, `port` and the other keys stay as the file says.
 - **`skip`** ([ADR-0058](adr/0058-a-profile-can-leave-out-containers-and-services.md))
   leaves out what the profile does not need: a container
@@ -1081,7 +1115,7 @@ devstack lane start <lane> --profile acceptance --run  # from the main tree
   compose.app.cache` starts it on demand, and a port `main_ports` holds
   for it stays held and refuses connections while it is down. A service
   that starts and needs a skipped container's address (a `{compose.…}`
-  placeholder in its `run`, `env`, `workers.env` or `ensure_dirs`, the
+  placeholder in its `run`, `env`, `workers.env`, `ensure_dirs` or `forward`, the
   profile's `env` included, or a `rewrite_hosts` entry) is an error, since
   its start would fail: skip it too, or keep the container. One that only
   waits for it (`after`) starts without waiting. On a node a skipped
@@ -1090,7 +1124,7 @@ devstack lane start <lane> --profile acceptance --run  # from the main tree
 - **Another `kind` drops what only the old one takes:** a dev server made
   `static` loses its `run` and `stop` (unless the profile gives them), `rebuild` and
   `restart_on`; a `devserver` or `tool` loses `build` and `output`; `spa`
-  stays with `static` only, `hot_reload` with `service`, `timeout` with
+  and `forward` stay with `static` only, `hot_reload` with `service`, `timeout` with
   `job`; a `job` or `tool` loses `health` and `proxy`. What the profile sets
   itself comes on top.
 - **Its name** uses letters, digits, `-` and `_`; `description` is optional,

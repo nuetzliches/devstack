@@ -209,6 +209,49 @@ impl Check<'_> {
         }
     }
 
+    /// A `forward` target (ADR-0110): its placeholders as in `env`, and an
+    /// origin `http://host:port` once they have a value. A `${VAR}` has one
+    /// only at the start, where the static server checks it.
+    fn forward_target(&mut self, path: &str, s: &str) {
+        self.text(
+            path,
+            s,
+            Scope::Service {
+                port: true,
+                artifact: true,
+            },
+        );
+        let Ok(segs) = interpolate::parse(s) else {
+            return; // reported above
+        };
+        let mut probe = String::new();
+        for seg in &segs {
+            match seg {
+                Segment::Literal(l) => probe.push_str(l),
+                Segment::Env { .. } => return,
+                Segment::Placeholder(ph) => probe.push_str(&match ph {
+                    Placeholder::ServiceUrl(n) => match self.stack.services.get(n) {
+                        Some(svc) => format!("{}://127.0.0.1:1", svc.scheme()),
+                        None => return, // reported above
+                    },
+                    // `https://` with a named tunnel: not a local origin.
+                    Placeholder::ServicePublicUrl(_) => "https://public".into(),
+                    Placeholder::ComposePort { part, .. } => part.of("127.0.0.1:1"),
+                    Placeholder::ServicePort(_) | Placeholder::Port => "1".into(),
+                    Placeholder::IsMain => "true".into(),
+                    Placeholder::LaneSuffix => String::new(),
+                    Placeholder::Repo
+                    | Placeholder::Artifact
+                    | Placeholder::Lane
+                    | Placeholder::ComposeProject(_) => "/path".into(),
+                }),
+            }
+        }
+        if let Err(why) = crate::forward::origin(&probe) {
+            self.err(path, format!("`{s}`: {why}"));
+        }
+    }
+
     fn compose_service(&mut self, path: &str, what: &str, group: &str, service: &str) {
         match self.stack.compose.get(group) {
             None => self.err(path, format!("`{what}`: no compose group `{group}`")),
@@ -266,6 +309,11 @@ fn skipped_needs(c: &mut Check, stack: &Stack) {
                 .iter()
                 .enumerate()
                 .map(|(i, d)| (format!("{p}.ensure_dirs[{i}]"), d.as_str())),
+        );
+        texts.extend(
+            svc.forward
+                .iter()
+                .map(|(k, t)| (format!("{p}.forward.\"{k}\""), t.as_str())),
         );
         for (at, t) in texts {
             let Ok(segs) = interpolate::parse(t) else {
@@ -653,6 +701,19 @@ pub fn validate(stack: &Stack) -> Vec<Issue> {
         }
         if svc.spa.is_some() && svc.kind != Kind::Static {
             c.err(format!("{p}.spa"), "`spa` belongs to `kind = \"static\"`");
+        }
+        if !svc.forward.is_empty() && svc.kind != Kind::Static {
+            c.err(
+                format!("{p}.forward"),
+                "`forward` belongs to `kind = \"static\"`: another kind's own server forwards (a dev server's proxy config)", // ADR-0110
+            );
+        }
+        for (prefix, target) in &svc.forward {
+            let at = format!("{p}.forward.\"{prefix}\"");
+            if let Err(why) = crate::forward::prefix(prefix) {
+                c.err(&at, format!("`{prefix}`: {why}"));
+            }
+            c.forward_target(&at, target);
         }
         if svc.hot_reload.is_some() && (svc.kind != Kind::Service || svc.build.is_none()) {
             c.err(
@@ -1330,6 +1391,36 @@ pub fn warnings(stack: &Stack) -> Vec<Issue> {
                 message: format!(
                     "a devstack before {v} does not know this key and fails on it with \"unknown field\": `requires = \"{v}\"` makes it ask to be updated instead",
                     v = crate::SHORTCUT_SINCE
+                ),
+            });
+        }
+    }
+    let forward = crate::version_order(crate::FORWARD_SINCE);
+    if stack
+        .stack
+        .requires
+        .as_deref()
+        .is_none_or(|r| crate::version_order(r) < forward)
+    {
+        let profiled = stack.profiles.iter().flat_map(|(p, prof)| {
+            prof.services
+                .iter()
+                .filter(|(_, s)| !s.forward.is_empty())
+                .map(move |(n, _)| format!("profiles.{p}.services.{n}.forward"))
+        });
+        let paths: Vec<String> = stack
+            .services
+            .iter()
+            .filter(|(_, s)| !s.forward.is_empty())
+            .map(|(n, _)| format!("services.{n}.forward"))
+            .chain(profiled)
+            .collect();
+        for path in paths {
+            out.push(Issue {
+                path,
+                message: format!(
+                    "a devstack before {v} does not know this key and fails on it with \"unknown field\": `requires = \"{v}\"` makes it ask to be updated instead",
+                    v = crate::FORWARD_SINCE
                 ),
             });
         }

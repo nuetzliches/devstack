@@ -3,10 +3,19 @@
 //! the service's process (`devstack serve-static <dir> --port <p>`), so the
 //! candidate pipeline, the proxy and the health check treat it like any
 //! service, and an end-to-end run pins a build id.
+//!
+//! Its `forward`s (ADR-0110) send requests below a path prefix to another
+//! server, as a reverse proxy in front of the bundle would in production:
+//! a single-page app that calls its API at a relative `/api` finds it on its
+//! own origin.
 
 use axum::body::Body;
-use axum::http::{HeaderMap, HeaderValue, Response, StatusCode, Uri, header};
+use axum::extract::{ConnectInfo, Request};
+use axum::http::{HeaderValue, Response, StatusCode, Uri, Version, header};
+use hyper_util::rt::TokioIo;
+use std::net::SocketAddr;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 fn content_type(path: &Path) -> &'static str {
     match path
@@ -82,28 +91,155 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Serve `root` on 127.0.0.1:`port` until the process ends.
-pub fn serve(root: PathBuf, port: u16, spa: bool) -> Result<(), String> {
+/// Where a forward sends its requests: `http://host:port`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Target {
+    host: String,
+    port: u16,
+}
+
+/// The `--forward PREFIX=URL` arguments, checked as `devstack check` does.
+pub fn forwards(args: &[String]) -> Result<Vec<(String, Target)>, String> {
+    use devstack_config::forward;
+    args.iter()
+        .map(|a| {
+            let (prefix, url) = a
+                .split_once('=')
+                .ok_or_else(|| format!("--forward `{a}`: takes PREFIX=URL"))?;
+            forward::prefix(prefix).map_err(|e| format!("--forward `{prefix}`: {e}"))?;
+            let (host, port) =
+                forward::origin(url).map_err(|e| format!("--forward {prefix}: `{url}`: {e}"))?;
+            Ok((prefix.to_string(), Target { host, port }))
+        })
+        .collect()
+}
+
+/// Serve `root` on 127.0.0.1:`port` until the process ends; requests below
+/// a prefix of `forward` (`PREFIX=URL`) go to its target.
+pub fn serve(root: PathBuf, port: u16, spa: bool, forward: &[String]) -> Result<(), String> {
     if !root.join("index.html").is_file() && spa {
         return Err(format!("{} has no index.html", root.display()));
     }
+    let forwards = forwards(forward)?;
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     rt.block_on(async move {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
             .await
             .map_err(|e| format!("port {port}: {e}"))?;
-        let app = axum::Router::new().fallback(move |uri: Uri, headers: HeaderMap| {
+        axum::serve(
+            listener,
+            app(root, spa, forwards).into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .map_err(|e| e.to_string())
+    })
+}
+
+fn app(root: PathBuf, spa: bool, forwards: Vec<(String, Target)>) -> axum::Router {
+    let forwards = Arc::new(forwards);
+    axum::Router::new().fallback(
+        move |ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request| {
             let root = root.clone();
+            let forwards = forwards.clone();
             async move {
-                let tag = headers
+                // A forwarded prefix never falls back to a file.
+                if let Some((_, to)) = devstack_config::forward::pick(&forwards, req.uri().path()) {
+                    return pass(to, peer, req).await;
+                }
+                let tag = req
+                    .headers()
                     .get(header::IF_NONE_MATCH)
                     .and_then(|v| v.to_str().ok())
                     .map(str::to_string);
-                file(&root, uri.path(), spa, tag.as_deref()).await
+                file(&root, req.uri().path(), spa, tag.as_deref()).await
+            }
+        },
+    )
+}
+
+/// Send `req` on to `to`, as a reverse proxy does: the path unchanged,
+/// `Host` as the browser sent it, `X-Forwarded-*` saying where it came from
+/// (kept where a proxy in front, a tunnel, set them), hop-by-hop headers on
+/// their hop, the answer streamed (SSE, a download) and an upgrade
+/// (WebSocket) joined. An unreachable target is a 502 at once: nothing here
+/// knows whether it is starting.
+async fn pass(to: &Target, peer: SocketAddr, mut req: Request) -> Response<Body> {
+    let fail = |e: String| {
+        Response::builder()
+            .status(StatusCode::BAD_GATEWAY)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .body(Body::from(format!(
+                "devstack: forward to http://{}:{}: {e}\n",
+                to.host, to.port
+            )))
+            .unwrap()
+    };
+    let client_upgrade = req
+        .headers()
+        .contains_key(header::UPGRADE)
+        .then(|| hyper::upgrade::on(&mut req));
+    let host = req
+        .headers()
+        .get(header::HOST)
+        .cloned()
+        .or_else(|| req.uri().authority().and_then(|a| a.as_str().parse().ok()));
+    let h = req.headers_mut();
+    crate::proxy::strip_hop_by_hop(h, client_upgrade.is_some());
+    let from = match h.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        Some(before) => format!("{before}, {}", peer.ip()),
+        None => peer.ip().to_string(),
+    };
+    if let Ok(v) = from.parse() {
+        h.insert("x-forwarded-for", v);
+    }
+    if !h.contains_key("x-forwarded-proto") {
+        h.insert("x-forwarded-proto", HeaderValue::from_static("http"));
+    }
+    if let Some(host) = host {
+        if !h.contains_key("x-forwarded-host") {
+            h.insert("x-forwarded-host", host.clone());
+        }
+        h.insert(header::HOST, host);
+    }
+    // HTTP/1.1 to the target, the request target in origin form.
+    let path = req
+        .uri()
+        .path_and_query()
+        .map_or("/", |p| p.as_str())
+        .to_string();
+    *req.uri_mut() = path.parse().unwrap_or_else(|_| Uri::from_static("/"));
+    *req.version_mut() = Version::HTTP_11;
+
+    let stream = match tokio::net::TcpStream::connect((to.host.as_str(), to.port)).await {
+        Ok(s) => s,
+        Err(e) => return fail(e.to_string()),
+    };
+    let _ = stream.set_nodelay(true);
+    let (mut sender, conn) = match hyper::client::conn::http1::handshake(TokioIo::new(stream)).await
+    {
+        Ok(c) => c,
+        Err(e) => return fail(e.to_string()),
+    };
+    tokio::spawn(conn.with_upgrades());
+    let mut resp = match sender.send_request(req).await {
+        Ok(r) => r,
+        Err(e) => return fail(e.to_string()),
+    };
+    let upgraded = resp.status() == StatusCode::SWITCHING_PROTOCOLS && client_upgrade.is_some();
+    crate::proxy::strip_hop_by_hop(resp.headers_mut(), upgraded);
+    if upgraded && let Some(client_upgrade) = client_upgrade {
+        let target_upgrade = hyper::upgrade::on(&mut resp);
+        tokio::spawn(async move {
+            if let (Ok(c), Ok(t)) = (client_upgrade.await, target_upgrade.await) {
+                let (mut c, mut t) = (TokioIo::new(c), TokioIo::new(t));
+                let _ = tokio::io::copy_bidirectional(&mut c, &mut t).await;
             }
         });
-        axum::serve(listener, app).await.map_err(|e| e.to_string())
-    })
+        let (parts, _) = resp.into_parts();
+        return Response::from_parts(parts, Body::empty());
+    }
+    let (parts, body) = resp.into_parts();
+    Response::from_parts(parts, Body::new(body))
 }
 
 /// Whether a file's name carries a hash of its content (`main-3f2a1b9c.js`,
@@ -242,6 +378,171 @@ mod tests {
         assert!(matches_etag("\"a\", W/\"b\"", "\"b\""));
         assert!(matches_etag("*", "\"b\""));
         assert!(!matches_etag("\"a\"", "\"b\""));
+    }
+
+    /// The API behind a forward: echoes what it got, streams an event that
+    /// never ends, and echoes on a WebSocket.
+    async fn api() -> u16 {
+        use axum::extract::ws::{Message, WebSocketUpgrade};
+        use axum::routing::{any, get};
+        let echo = |req: Request| async move {
+            let h = |n: &str| {
+                req.headers()
+                    .get(n)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("-")
+                    .to_string()
+            };
+            format!(
+                "{} {} host={} xff={} xfh={} xfp={}",
+                req.method(),
+                req.uri(),
+                h("host"),
+                h("x-forwarded-for"),
+                h("x-forwarded-host"),
+                h("x-forwarded-proto")
+            )
+        };
+        let sse = || async {
+            use tokio_stream::StreamExt;
+            let first =
+                tokio_stream::once(Ok::<_, std::io::Error>(bytes::Bytes::from("data: one\n\n")));
+            Response::builder()
+                .header(header::CONTENT_TYPE, "text/event-stream")
+                .body(Body::from_stream(first.chain(tokio_stream::pending())))
+                .unwrap()
+        };
+        let ws = |up: WebSocketUpgrade| async {
+            up.on_upgrade(|mut s| async move {
+                while let Some(Ok(Message::Text(t))) = s.recv().await {
+                    let _ = s.send(Message::Text(t)).await;
+                }
+            })
+        };
+        let app = axum::Router::new()
+            .route("/api/sse", get(sse))
+            .route("/api/ws", get(ws))
+            .fallback(any(echo));
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(l, app).await });
+        port
+    }
+
+    async fn site(root: &Path, forward: &[String]) -> u16 {
+        let app = app(root.to_path_buf(), true, forwards(forward).unwrap());
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            axum::serve(l, app.into_make_service_with_connect_info::<SocketAddr>()).await
+        });
+        port
+    }
+
+    /// Send `raw` and read until `until` shows up (or the connection ends).
+    async fn talk(port: u16, raw: &[u8], until: &str) -> (tokio::net::TcpStream, String) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut c = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        c.write_all(raw).await.unwrap();
+        let mut got = Vec::new();
+        let mut buf = [0u8; 4096];
+        let read = async {
+            while !String::from_utf8_lossy(&got).contains(until) {
+                match c.read(&mut buf).await.unwrap() {
+                    0 => break,
+                    n => got.extend_from_slice(&buf[..n]),
+                }
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(10), read)
+            .await
+            .expect("an answer in time");
+        let text = String::from_utf8_lossy(&got).into_owned();
+        (c, text)
+    }
+
+    #[tokio::test]
+    async fn a_forward_reaches_the_api_on_the_sites_origin() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("index.html"), "<app>").unwrap();
+        let api = api().await;
+        let closed = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let port = site(
+            d.path(),
+            &[
+                format!("/api=http://127.0.0.1:{api}"),
+                format!("/gone=http://127.0.0.1:{closed}/"),
+            ],
+        )
+        .await;
+        let get = |path: &str| {
+            format!("GET {path} HTTP/1.1\r\nHost: shop.test:{port}\r\nConnection: close\r\n\r\n")
+        };
+
+        // The path and query go on unchanged, Host as sent, X-Forwarded-*.
+        let (_, r) = talk(port, get("/api/users/7?q=a%20b").as_bytes(), "\0").await;
+        assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+        assert!(
+            r.contains(&format!(
+                "GET /api/users/7?q=a%20b host=shop.test:{port} xff=127.0.0.1 xfh=shop.test:{port} xfp=http"
+            )),
+            "{r}"
+        );
+        // Not at a segment boundary, or not below a prefix: the app.
+        for path in ["/apix", "/customers/42", "/"] {
+            let (_, r) = talk(port, get(path).as_bytes(), "\0").await;
+            assert!(r.contains("<app>"), "{path}: {r}");
+        }
+        // A server-sent event arrives while its stream is still open.
+        let (_, r) = talk(port, get("/api/sse").as_bytes(), "data: one").await;
+        assert!(
+            r.contains("text/event-stream") && r.contains("data: one"),
+            "{r}"
+        );
+        // A WebSocket is joined through.
+        let upgrade = format!(
+            "GET /api/ws HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+        );
+        let (mut c, r) = talk(port, upgrade.as_bytes(), "\r\n\r\n").await;
+        assert!(r.starts_with("HTTP/1.1 101"), "{r}");
+        {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let mask = [1u8, 2, 3, 4];
+            let mut frame = vec![0x81, 0x80 | 2];
+            frame.extend_from_slice(&mask);
+            frame.extend(b"hi".iter().zip(mask).map(|(b, m)| b ^ m));
+            c.write_all(&frame).await.unwrap();
+            let mut back = [0u8; 4];
+            tokio::time::timeout(std::time::Duration::from_secs(10), c.read_exact(&mut back))
+                .await
+                .expect("the echo in time")
+                .unwrap();
+            assert_eq!(back, [0x81, 2, b'h', b'i']);
+        }
+        // A target that does not answer: 502 at once, naming it.
+        let (_, r) = talk(port, get("/gone/x").as_bytes(), "\0").await;
+        assert!(
+            r.starts_with("HTTP/1.1 502") && r.contains(&format!("127.0.0.1:{closed}")),
+            "{r}"
+        );
+    }
+
+    #[test]
+    fn a_forward_argument_is_checked_at_the_start() {
+        assert!(forwards(&["/api=http://127.0.0.1:5000".into()]).is_ok());
+        for bad in [
+            "/api",
+            "api=http://127.0.0.1:5000",
+            "/api=https://127.0.0.1:5001",
+            "/api=http://127.0.0.1:5000/v1",
+        ] {
+            assert!(forwards(&[bad.into()]).is_err(), "{bad}");
+        }
     }
 
     #[tokio::test]

@@ -139,6 +139,7 @@ build = "git --version"
 output = "src/Site"
 watch = ["src/Site/**"]
 port = {site_port}
+forward = {{ "/info" = "{{service.api.url}}" }}
 
 [commands.ping]
 description = "health"
@@ -597,6 +598,9 @@ fn lifecycle(with_compose: bool) {
         get_on(s.site_port, "/assets/missing.js").is_none(),
         "a missing file is a 404"
     );
+    // Its `forward` (ADR-0110): the API on the site's own origin.
+    let info = get_on(s.site_port, "/info").unwrap_or_default();
+    assert!(info.contains("\"pid\""), "the API through the site: {info}");
     let status = s.ok(&["status"]);
     assert!(status.contains("healthy"), "{status}");
     assert!(

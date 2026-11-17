@@ -237,6 +237,10 @@ enum Cmd {
         /// Without the single-page-app fallback to index.html.
         #[arg(long)]
         no_spa: bool,
+        /// `PREFIX=http://host:port`: requests below the prefix go there
+        /// (a `forward` of the service); repeatable.
+        #[arg(long, value_name = "PREFIX=URL")]
+        forward: Vec<String>,
     },
     /// The builds of a service, newest first: which went live, failed, were
     /// replaced by a newer change or wait for promote.
@@ -1425,6 +1429,15 @@ mod tests {
                 no_spa: true,
                 ..
             }
+        ));
+        assert!(matches!(
+            parse(&[
+                "serve-static", "dist", "--port", "8080",
+                "--forward", "/api=http://127.0.0.1:5000",
+                "--forward", "/file=http://127.0.0.1:5000",
+            ])
+            .cmd,
+            Cmd::ServeStatic { forward, .. } if forward.len() == 2
         ));
         assert!(matches!(
             parse(&["shim", "run", "--flag", "-x"]).cmd,

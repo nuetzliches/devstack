@@ -8,9 +8,13 @@ use std::path::Path;
 pub(crate) fn run(file: &Path, cmd: Cmd) -> Result<()> {
     match cmd {
         Cmd::Daemon => devstack_daemon::serve(file).map_err(|e| anyhow::anyhow!(e)),
-        Cmd::ServeStatic { dir, port, no_spa } => {
-            devstack_daemon::staticsrv::serve(dir, port, !no_spa).map_err(|e| anyhow::anyhow!(e))
-        }
+        Cmd::ServeStatic {
+            dir,
+            port,
+            no_spa,
+            forward,
+        } => devstack_daemon::staticsrv::serve(dir, port, !no_spa, &forward)
+            .map_err(|e| anyhow::anyhow!(e)),
         Cmd::Shim { args } => {
             #[cfg(unix)]
             devstack_proc::shim_main(&args);

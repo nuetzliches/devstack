@@ -97,7 +97,10 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   `[profiles.<name>]` changes how the stack runs for an acceptance run or a
   light review: `workers`, `data = "fresh"`, `env` with the tree's
   addresses, `autostart`, per service `kind = "static"` with `build` and
-  `output`, and the suite as `command`. Each profile is checked as the stack
+  `output`, and the suite as `command`. A static bundle that calls its API
+  on its own origin (relative `/api`, the dev server's proxy config) gets
+  `forward = { "/api" = "{service.api.url}" }` in place of that proxy
+  (ADR-0110; `requires = "0.49.0"`), not a Caddy or Node proxy of its own. Each profile is checked as the stack
   it makes; add `requires = "0.11.0"` to `[stack]`. A light profile for
   daily work leaves heavy containers out with `skip` (ADR-0058):
   `skip = ["compose.search", "compose.app.scanner", "indexer"]` (a whole
