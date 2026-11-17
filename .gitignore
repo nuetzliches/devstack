@@ -2,6 +2,7 @@
 # No trailing slash: a lane's linked node_modules (a symlink) is ignored too.
 node_modules
 /ui/dist/
+/ui/bundle-packages.json
 .devstack/
 *.stackdump
 .env

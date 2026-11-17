@@ -1,10 +1,57 @@
 import { fileURLToPath, URL } from 'node:url';
-import { readFileSync } from 'node:fs';
-import { defineConfig } from 'vite';
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { defineConfig, type Plugin } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import { VitePWA } from 'vite-plugin-pwa';
 
-const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string };
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as {
+  version: string;
+  dependencies?: Record<string, string>;
+};
+
+/** The package a module path below `node_modules` belongs to, if any. */
+function packageOf(id: string): string | undefined {
+  const parts = id.replace(/\\/g, '/').split('/node_modules/');
+  if (parts.length < 2) return undefined;
+  const [first, second] = parts[parts.length - 1].split('/');
+  return first.startsWith('@') ? `${first}/${second}` : first;
+}
+
+/**
+ * Writes `bundle-packages.json`: the packages whose code the build puts into
+ * `dist`, for the advisory gate (scripts/audit-shipped.mjs, ADR-0111). The
+ * service worker is bundled by workbox in a build of its own that this does
+ * not see: every installed `workbox-*` package counts as shipped. So do the
+ * declared `dependencies`: `vue` ships as `@vue/*`, and an advisory names
+ * `vue`.
+ */
+function bundlePackages(): Plugin {
+  const found = new Set<string>();
+  return {
+    name: 'devstack:bundle-packages',
+    apply: 'build',
+    generateBundle(_, bundle) {
+      for (const chunk of Object.values(bundle)) {
+        if (chunk.type !== 'chunk') continue;
+        for (const id of Object.keys(chunk.modules)) {
+          const name = packageOf(id);
+          if (name) found.add(name);
+        }
+      }
+    },
+    closeBundle() {
+      const modules = fileURLToPath(new URL('./node_modules', import.meta.url));
+      for (const name of readdirSync(modules)) {
+        if (name.startsWith('workbox-')) found.add(name);
+      }
+      for (const name of Object.keys(pkg.dependencies ?? {})) found.add(name);
+      writeFileSync(
+        fileURLToPath(new URL('./bundle-packages.json', import.meta.url)),
+        `${JSON.stringify([...found].sort(), null, 2)}\n`,
+      );
+    },
+  };
+}
 
 /** The part of the service worker's CacheStorage the shell fallback uses. */
 type ShellCaches = { match(url: string, options: { ignoreSearch: boolean }): Promise<Response | undefined> };
@@ -34,6 +81,7 @@ export default defineConfig(({ mode }) => {
     },
     plugins: [
       vue(),
+      bundlePackages(),
       VitePWA({
         registerType: 'autoUpdate',
         injectRegister: null,
