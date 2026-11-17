@@ -3,6 +3,8 @@ import { computed, ref, watch, watchEffect } from 'vue';
 import { persist } from '@/lib/persist';
 
 export type ThemePref = 'system' | 'light' | 'dark';
+/** The start page's state filter: every stack, the ones that run, the ones that need attention. */
+export type HomeState = 'all' | 'running' | 'attention';
 export type ToastKind = 'success' | 'error' | 'info' | 'warning';
 export type Toast = { id: number; kind: ToastKind; title: string; message?: string };
 
@@ -167,11 +169,23 @@ export const useUi = defineStore('ui', () => {
     persist.setSession('sidebar.filter.query', query);
   });
 
+  // The start page's search and state filter: kept for the same reason, so a
+  // way to a stack and back through the "devstack" mark finds them as left.
+  const homeQuery = ref(persist.getSession<string>('home.filter.query') ?? '');
+  const savedState = persist.getSession<HomeState>('home.filter.state');
+  const homeState = ref<HomeState>(savedState === 'running' || savedState === 'attention' ? savedState : 'all');
+  watch([homeQuery, homeState], ([query, state]) => {
+    persist.setSession('home.filter.query', query);
+    persist.setSession('home.filter.state', state);
+  });
+
   return {
     theme,
     effectiveTheme,
     filterOpen,
     filterQuery,
+    homeQuery,
+    homeState,
     cycleTheme,
     toasts,
     toast,

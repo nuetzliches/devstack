@@ -9,6 +9,16 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **A search and a state filter on the start page.** A field above the tiles
+  finds a stack by its name or its repository folder (every word typed must
+  match), and three chips, "All", "Running" and "Needs attention", each with
+  its count, narrow the tiles by state. `/` jumps to the field, Esc clears
+  it; text and state are still there after a visit to a stack and back. A
+  hidden stack stays out, but the line under the tiles says how many hidden
+  ones match what was typed.
+
 ## [0.48.0] - 2026-11-16
 
 The dashboard opens on a start page with every stack as a tile, a service
