@@ -9,6 +9,18 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **A static service's `forward` keeps its connections to the target**
+  (#556). It opened a new connection for every request and closed it, so
+  each left a socket waiting two minutes; an end-to-end suite of about 1000
+  tests drained the ephemeral ports on Windows, and pages and API calls
+  failed with `ERR_ADDRESS_IN_USE` or `502`. Each target now keeps up to 32
+  idle connections and reuses them, as a reverse proxy does; server-sent
+  events and WebSockets keep a connection of their own. The hub keeps its
+  connections to the daemons the same way, so a dashboard that stays open
+  no longer leaves a socket behind for every call.
+
 ## [0.49.1] - 2026-11-17
 
 A static service forwards paths to another server, as a reverse proxy in
