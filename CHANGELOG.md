@@ -11,6 +11,15 @@ and listed with their assets on the
 
 ### Added
 
+- **A static service forwards paths to another server.** `forward = {
+  "/api" = "{service.api.url}" }` on a `kind = "static"` service, also in a
+  profile, sends requests below a prefix on as a reverse proxy in front of
+  the bundle would: the path unchanged, `Host` kept, `X-Forwarded-*` added,
+  answers streamed (server-sent events), WebSocket upgrades passed. A
+  single-page app that calls its API on its own origin now runs as a static
+  build in an acceptance profile without a proxy of its own (#551,
+  ADR-0110). Needs `requires = "0.49.0"`.
+
 - **An order menu on the start page.** The same menu as the sidebar's (by
   name, last opened first, last edited first; favourites always first) sits
   in the filter row and orders the tiles and the list. The order is one
