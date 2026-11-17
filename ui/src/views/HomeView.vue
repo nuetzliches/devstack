@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // `/`: every stack as a tile, in the sidebar's order (favourites first,
 // hidden stacks left out); with no stack yet, the way to find them.
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { storeToRefs } from 'pinia';
 import type { StackEntry } from '@/api/types';
 import { useHub } from '@/stores/hub';
@@ -11,11 +11,12 @@ import ScanStacks from '@/components/ScanStacks.vue';
 import AddStackDialog from '@/components/AddStackDialog.vue';
 import OpenersDialog from '@/components/OpenersDialog.vue';
 import StackTile from '@/components/StackTile.vue';
+import StackOrderMenu from '@/components/StackOrderMenu.vue';
 import StackRow from '@/components/StackRow.vue';
 import SortTh from '@/components/SortTh.vue';
 import { useSort } from '@/lib/sort';
 import { stackFigures } from '@/lib/stackFigures';
-import { matchesQuery, openedTimes, orderStacks, savedOrder, useFavourites, useHidden } from '@/lib/stackOrder';
+import { matchesQuery, useFavourites, useHidden, useStackOrdering } from '@/lib/stackOrder';
 
 const hub = useHub();
 const addOne = ref(false);
@@ -23,21 +24,10 @@ const managing = ref(false);
 const favourites = useFavourites();
 const hidden = useHidden();
 
-// The order the sidebar has, read when the page opens; last opened and last
-// edited are snapshots there too, so nothing moves under the pointer. A
-// stack whose commit time is first known later joins with it.
-const order = savedOrder();
-const opened = openedTimes();
-const edited = ref<Record<string, number>>({});
-watch(
-  () => hub.stacks.map((s) => `${s.id}:${s.last_commit ?? ''}`).join(','),
-  () => {
-    const next = { ...edited.value };
-    for (const s of hub.stacks) if (s.last_commit != null && !(s.id in next)) next[s.id] = s.last_commit;
-    edited.value = next;
-  },
-  { immediate: true },
-);
+// The order is the sidebar's, one choice for both: the menu beside the views
+// sets it here too. Last opened and last edited are snapshots of this page,
+// so nothing moves under the pointer (lib/stackOrder.ts).
+const ordering = useStackOrdering(() => hub.stacks);
 
 // A stack that runs is never hidden: it would be missed (as in the sidebar).
 const isHidden = (id: string, running: boolean) => hidden.has(id) && !running;
@@ -63,15 +53,7 @@ const chips = computed(() => [
   { key: 'attention' as const, label: 'Needs attention', count: listed.value.filter((s) => attentionIds.value.has(s.id)).length },
 ]);
 const filtering = computed(() => query.value.trim() !== '' || state.value !== 'all');
-const shown = computed(() =>
-  orderStacks(
-    listed.value.filter((s) => inState(s, state.value) && matchesQuery(s, query.value)),
-    order,
-    opened,
-    favourites.list(),
-    edited.value,
-  ),
-);
+const shown = computed(() => ordering.sort(listed.value.filter((s) => inState(s, state.value) && matchesQuery(s, query.value))));
 // The list: the tiles' order until a column is chosen, then that column's
 // (lib/sort.ts, as every table). The figures are the tile's.
 const rows = computed(() => shown.value.map((stack) => ({ stack, f: stackFigures(stack, hub) })));
@@ -188,6 +170,22 @@ function manage() {
             {{ c.label }} <span class="faint tabular">{{ c.count }}</span>
           </button>
         </div>
+        <StackOrderMenu v-slot="o" menu-test-id="overview-order-menu">
+          <button
+            :ref="o.setButton"
+            type="button"
+            class="chip-toggle order-btn"
+            :class="{ open: o.open }"
+            :title="o.title"
+            aria-label="Order of the stacks"
+            aria-haspopup="menu"
+            :aria-expanded="o.open"
+            data-testid="overview-order"
+            @click="o.toggle"
+          >
+            <Icon name="arrowUpDown" :size="14" /> Order
+          </button>
+        </StackOrderMenu>
         <div class="btn-group views" role="group" aria-label="View">
           <button
             v-for="v in views"
@@ -339,8 +337,12 @@ function manage() {
   text-decoration: underline;
   font: inherit;
 }
-.views {
+/* The order and the views sit together at the end of the row. */
+.order-btn {
   margin-left: auto;
+}
+.order-btn.open {
+  background: var(--surface-hover);
 }
 .tiles {
   display: grid;
