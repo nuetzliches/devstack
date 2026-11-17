@@ -9,14 +9,16 @@ and listed with their assets on the
 
 ## [Unreleased]
 
-## [0.49.0] - 2026-11-17
+## [0.49.1] - 2026-11-17
 
 A static service forwards paths to another server, as a reverse proxy in
 front of it would: a single-page app that calls its API on its own origin
 runs as a static build in a profile without a proxy of its own. The start
 page gets a search, a state filter, small tiles, a list and the sidebar's
 order menu, and a Shift icon marks the buttons whose confirmation
-Shift-click skips.
+Shift-click skips. 0.49.0 was tagged but not published: the release gate
+refused a build tool's advisory, and now counts only what the dashboard's
+bundle holds.
 
 ### Added
 
@@ -3543,8 +3545,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.49.0...HEAD
-[0.49.0]: https://github.com/nuetzliches/devstack/compare/v0.48.0...v0.49.0
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.49.1...HEAD
+[0.49.1]: https://github.com/nuetzliches/devstack/compare/v0.48.0...v0.49.1
 [0.48.0]: https://github.com/nuetzliches/devstack/compare/v0.47.0...v0.48.0
 [0.47.0]: https://github.com/nuetzliches/devstack/compare/v0.46.0...v0.47.0
 [0.46.0]: https://github.com/nuetzliches/devstack/compare/v0.45.1...v0.46.0
