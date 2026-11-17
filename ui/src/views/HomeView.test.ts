@@ -44,6 +44,7 @@ let fake: FakeTransport;
 
 beforeEach(() => {
   localStorage.clear();
+  sessionStorage.clear();
   setActivePinia(createPinia());
   fake = new FakeTransport();
   t.current = fake;
@@ -165,5 +166,115 @@ describe('the start page', () => {
     const { el, unmount } = await mounted([shop]);
     expect(tile(el, 'ab12').querySelector('[data-testid="tile-link"]')?.getAttribute('href')).toBe('#/s/ab12');
     unmount();
+  });
+});
+
+describe('the search and the state filter of the start page', () => {
+  const billing = stack('gh78', 'Billing', { repo: '/work/ledger' });
+  const search = (el: HTMLElement) => el.querySelector<HTMLInputElement>('[data-testid="overview-search"]')!;
+  const type = async (el: HTMLElement, text: string) => {
+    search(el).value = text;
+    search(el).dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+  };
+  const chip = (el: HTMLElement, key: string) => el.querySelector<HTMLElement>(`[data-testid="overview-chip-${key}"]`)!;
+  const attention = (events: { onMessage: (m: unknown) => void }, ...ids: string[]) =>
+    events.onMessage({
+      type: 'attention',
+      items: ids.map((stackId) => ({ stack: stackId, lane: null, service: 'api', text: 'api: failed', detail: '', level: 'error' })),
+    });
+
+  it('finds a stack by its name or its repository folder, every word, whatever the case', async () => {
+    const { el, unmount } = await mounted([shop, crm, billing]);
+    await type(el, 'BILL');
+    expect(names(el)).toEqual(['Billing']);
+    await type(el, 'ledger');
+    expect(names(el)).toEqual(['Billing']);
+    await type(el, 'work billing');
+    expect(names(el)).toEqual(['Billing']);
+    await type(el, 'work shop');
+    expect(names(el)).toEqual([]);
+    await type(el, '');
+    expect(names(el)).toEqual(['Billing', 'crm', 'shop']);
+    unmount();
+  });
+
+  it('counts the stacks per state and narrows to the ones that run or need attention', async () => {
+    const { el, events, unmount } = await mounted([shop, crm, billing]);
+    attention(events, 'cd34');
+    await settle();
+    expect(chip(el, 'all').textContent?.replace(/\s+/g, ' ').trim()).toBe('All 3');
+    expect(chip(el, 'running').textContent).toContain('1');
+    expect(chip(el, 'attention').textContent).toContain('1');
+    chip(el, 'running').click();
+    await settle();
+    expect(names(el)).toEqual(['shop']);
+    expect(chip(el, 'running').getAttribute('aria-pressed')).toBe('true');
+    chip(el, 'attention').click();
+    await settle();
+    expect(names(el)).toEqual(['crm']);
+    chip(el, 'all').click();
+    await settle();
+    expect(names(el)).toEqual(['Billing', 'crm', 'shop']);
+    unmount();
+  });
+
+  it('combines the state with the text, and says so when nothing matches', async () => {
+    const { el, unmount } = await mounted([shop, crm]);
+    chip(el, 'running').click();
+    await type(el, 'crm');
+    expect(names(el)).toEqual([]);
+    expect(el.querySelector('[data-testid="overview-tiles"]')).toBeNull();
+    expect(el.querySelector('[data-testid="overview-empty"]')?.textContent).toContain('No stack matches');
+    el.querySelector<HTMLElement>('[data-testid="overview-clear"]')!.click();
+    await settle();
+    expect(search(el).value).toBe('');
+    expect(chip(el, 'all').getAttribute('aria-pressed')).toBe('true');
+    expect(names(el)).toEqual(['crm', 'shop']);
+    unmount();
+  });
+
+  it('keeps hidden stacks out, and says how many of them the search would have found', async () => {
+    useHidden().hide('gh78');
+    const { el, unmount } = await mounted([shop, billing]);
+    expect(el.querySelector('[data-testid="overview-hidden"]')?.textContent).toContain('1 hidden stack is not shown');
+    await type(el, 'bill');
+    expect(names(el)).toEqual([]);
+    expect(el.querySelector('[data-testid="overview-hidden"]')?.textContent).toContain('1 hidden stack matches');
+    await type(el, 'shop');
+    expect(el.querySelector('[data-testid="overview-hidden"]')?.textContent).toContain('1 hidden stack is not shown');
+    unmount();
+  });
+
+  it('jumps to the search with /, and Esc clears it, then leaves it', async () => {
+    const { el, unmount } = await mounted([shop, crm]);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '/', bubbles: true }));
+    expect(document.activeElement).toBe(search(el));
+    await type(el, 'crm');
+    // A `/` typed into a field is text, not a jump.
+    const typed = new KeyboardEvent('keydown', { key: '/', bubbles: true, cancelable: true });
+    search(el).dispatchEvent(typed);
+    expect(typed.defaultPrevented).toBe(false);
+    search(el).dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await settle();
+    expect(search(el).value).toBe('');
+    expect(document.activeElement).toBe(search(el));
+    search(el).dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(document.activeElement).not.toBe(search(el));
+    unmount();
+  });
+
+  it('is found as it was left when the page is opened again', async () => {
+    const first = await mounted([shop, crm]);
+    await type(first.el, 'crm');
+    chip(first.el, 'attention').click();
+    await settle();
+    first.unmount();
+    // A new page of the same tab: the store is new, the session storage stays.
+    setActivePinia(createPinia());
+    const again = await mounted([shop, crm]);
+    expect(search(again.el).value).toBe('crm');
+    expect(chip(again.el, 'attention').getAttribute('aria-pressed')).toBe('true');
+    again.unmount();
   });
 });

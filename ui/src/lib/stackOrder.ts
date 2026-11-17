@@ -112,6 +112,19 @@ export function orderStacks<T extends Named>(
   return [...stacks].sort((a, b) => fav(a) - fav(b) || within(a, b));
 }
 
+const wordsOf = (query: string) => query.toLowerCase().split(/\s+/).filter(Boolean);
+const ownText = (s: Named & { repo: string }) => `${s.name} ${s.repo}`.toLowerCase();
+
+/**
+ * Whether what was typed matches the stack itself: every word of it is part
+ * of the stack's name or repository folder, whatever the case. Nothing typed
+ * matches every stack.
+ */
+export function matchesQuery(stack: Named & { repo: string }, query: string): boolean {
+  const own = ownText(stack);
+  return wordsOf(query).every((w) => own.includes(w));
+}
+
 /**
  * The stacks that match what was typed: every word of it is part of the
  * stack's name or repository folder, or of the label of one of its worktrees
@@ -123,14 +136,13 @@ export function filterStacks<T extends Named & { repo: string }>(
   query: string,
   labels: (s: T) => readonly string[],
 ): { stacks: T[]; byWorktree: Set<string> } {
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const words = wordsOf(query);
   if (!words.length) return { stacks: [...stacks], byWorktree: new Set() };
   const byWorktree = new Set<string>();
   const kept = stacks.filter((s) => {
-    const own = `${s.name} ${s.repo}`.toLowerCase();
-    const all = `${own} ${labels(s).join(' ')}`.toLowerCase();
+    const all = `${ownText(s)} ${labels(s).join(' ')}`.toLowerCase();
     if (!words.every((w) => all.includes(w))) return false;
-    if (!words.every((w) => own.includes(w))) byWorktree.add(s.id);
+    if (!matchesQuery(s, query)) byWorktree.add(s.id);
     return true;
   });
   return { stacks: kept, byWorktree };

@@ -4,6 +4,7 @@ import {
   forgetFavourite,
   forgetHidden,
   forgetOpened,
+  matchesQuery,
   noteOpened,
   openedTimes,
   orderStacks,
@@ -104,5 +105,13 @@ describe('the filter of the stacks', () => {
   it('needs every word, in the name or in a worktree', () => {
     expect(filterStacks(list, 'shop cart', labels).stacks.map((x) => x.id)).toEqual(['a']);
     expect(filterStacks(list, 'shop search', labels).stacks).toEqual([]);
+  });
+
+  it('matches the stack itself by every word of name and folder, never by a worktree', () => {
+    expect(matchesQuery(list[1], '')).toBe(true);
+    expect(matchesQuery(list[1], 'BILLING ledger')).toBe(true);
+    expect(matchesQuery(list[1], 'billing shop')).toBe(false);
+    // `feat` is a worktree label of "shop" only: the stack itself does not match.
+    expect(matchesQuery(list[0], 'feat')).toBe(false);
   });
 });
