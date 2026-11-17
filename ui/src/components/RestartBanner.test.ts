@@ -71,6 +71,27 @@ describe('the restart banner', () => {
     expect(el.querySelector('[data-testid="banner-restart-stack"]')?.textContent).toContain('Reload');
   });
 
+  it('marks its Reload as skippable with Shift, unless main restarts with fresh data', async () => {
+    const { el, configChanged } = await mounted('0.9.8');
+    configChanged.value = true;
+    await nextTick();
+    const button = () => el.querySelector('[data-testid="banner-restart-stack"]')!;
+    expect(button().querySelector('[data-testid="shift-hint"]')).not.toBeNull();
+    expect(button().getAttribute('title')).toContain('Shift-click skips the confirmation');
+    const snapshot = (profile: string) => ({
+      type: 'snapshot',
+      stack: { name: 'shop', repo: '/src/shop', version: '0.9.8', services: [], infra: [], groups: [], commands: [], profile, profiles: [{ name: 'e2e', fresh: false }, { name: 'acc', fresh: true }] },
+    });
+    const events = (t.current as FakeTransport).stream('/hub/stacks/shop/api/v1/events');
+    events.handlers.onMessage(snapshot('acc') as never);
+    await nextTick();
+    expect(button().querySelector('[data-testid="shift-hint"]')).toBeNull();
+    expect(button().getAttribute('title')).toBeNull();
+    events.handlers.onMessage(snapshot('e2e') as never);
+    await nextTick();
+    expect(button().querySelector('[data-testid="shift-hint"]')).not.toBeNull();
+  });
+
   it('says another devstack is installed, and that the changed stack file applies with it', async () => {
     const { el, configChanged } = await mounted('0.9.7');
     expect(el.querySelector('[data-testid="daemon-outdated"]')?.textContent).toContain('shop runs devstack 0.9.7, devstack 0.9.8 is installed.');

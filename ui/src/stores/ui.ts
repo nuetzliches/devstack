@@ -6,6 +6,9 @@ export type ThemePref = 'system' | 'light' | 'dark';
 export type ToastKind = 'success' | 'error' | 'info' | 'warning';
 export type Toast = { id: number; kind: ToastKind; title: string; message?: string };
 
+/** What a button whose confirmation Shift can skip says of it (tooltip and ShiftHint). */
+export const SHIFT_SKIP_HINT = 'Shift-click skips the confirmation';
+
 export type ConfirmRequest = {
   title: string;
   text: string;

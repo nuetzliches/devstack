@@ -1453,6 +1453,15 @@ export const useStack = defineStore('stack', () => {
   const restartLanes = computed(() => restartPlan(lanesOf.value === id.value ? lanes.value : [], entry.value?.daemon?.carries_lanes));
 
   /**
+   * A restart starts main again with a profile that has fresh data: its
+   * volumes go, so Shift-click does not skip that confirmation.
+   */
+  const restartFresh = computed(() => {
+    const profile = mainView.value?.profile ?? undefined;
+    return !!profile && !!view.value?.profiles?.find((p) => p.name === profile)?.fresh;
+  });
+
+  /**
    * Down, wait until the daemon is gone, up: picks up the installed devstack
    * and a changed stack file. The daemon leaves its lanes to the next one
    * (ADR-0052): those on nodes keep running, those here restart with it.
@@ -1465,7 +1474,7 @@ export const useStack = defineStore('stack', () => {
     const lanesText = restartLanesText(restartLanes.value);
     // The main tree starts again with the profile it runs with (ADR-0041 point 2).
     const profile = mainView.value?.profile ?? undefined;
-    const fresh = !!profile && !!view.value?.profiles?.find((p) => p.name === profile)?.fresh;
+    const fresh = restartFresh.value;
     const profileText = profile ? ` main starts again with the profile ${profile}${fresh ? ', with fresh data: its volumes go' : ''}.` : '';
     const ok = await ui.confirm({
       title: `Reload ${name}`,
@@ -1694,5 +1703,5 @@ export const useStack = defineStore('stack', () => {
     startStack,
     stopStack,
     removeContainers,
-    restartStack, restartLanes, shareLane };
+    restartStack, restartLanes, restartFresh, shareLane };
 });
