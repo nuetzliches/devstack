@@ -93,7 +93,11 @@ Every `FAIL` names what is missing. Fix those first.
 
 Join as a member of its own, with a name that tells it apart from the
 machine's Windows side (here `<machine>-wsl`), and agree to telemetry so the
-maintainers can follow the spike without access to the machine:
+maintainers can follow the spike without access to the machine. Run it
+inside the distribution (`wsl -d Ubuntu-24.04`), not in PowerShell: on
+Windows, `join` finds the machine's existing membership and answers
+"joined … as <its id>" at once, with no new request. Inside WSL it says
+"asked to join as <a new id>" and waits for the approval.
 
 ```sh
 devstack join https://<coordinator>:4260 --fingerprint <fp> --name <machine>-wsl --telemetry
