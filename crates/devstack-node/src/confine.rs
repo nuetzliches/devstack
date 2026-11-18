@@ -284,12 +284,18 @@ fn model_problems(
         if !empty(&s.cgroup_parent) {
             no("`cgroup_parent`".into());
         }
-        if let Some(r) = s
-            .runtime
-            .as_deref()
-            .filter(|r| !matches!(*r, "" | "runc" | "nvidia"))
-        {
-            no(format!("`runtime: {r}`"));
+        // Not `nvidia` either: it hands a container the GPUs its
+        // environment names, past the lease's (ADR-0112); a GPU comes with
+        // `gpus` or a device reservation, which `pin_gpus` holds to the lease.
+        if let Some(r) = s.runtime.as_deref().filter(|r| !matches!(*r, "" | "runc")) {
+            no(format!(
+                "`runtime: {r}`{}",
+                if r == "nvidia" {
+                    " (ask for GPUs with `gpus` and `[lanes.need] gpus`)"
+                } else {
+                    ""
+                }
+            ));
         }
         let opts: Vec<&String> = s
             .security_opt
@@ -747,8 +753,61 @@ pub fn pin_gpus(
         {
             devices.iter_mut().filter(|d| is_gpu(d)).for_each(&mut pin);
         }
+        // What the NVIDIA runtime reads: exactly the GPUs just pinned, else
+        // none, whatever the service's image or file says.
+        let mut ids: Vec<String> = Vec::new();
+        let pinned = s
+            .get("gpus")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .chain(
+                s.pointer("/deploy/resources/reservations/devices")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter(|d| is_gpu(d)),
+            );
+        for id in pinned
+            .filter_map(|d| d.get("device_ids").and_then(Value::as_array))
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            if !ids.iter().any(|x| x == id) {
+                ids.push(id.to_string());
+            }
+        }
+        visible_devices(
+            s,
+            if ids.is_empty() {
+                "void".into()
+            } else {
+                ids.join(",")
+            },
+        );
     }
     finish_gpus(bad)
+}
+
+/// `NVIDIA_VISIBLE_DEVICES` of a service as `config` wrote it (a map, or a
+/// list of `K=V`): set to `value`, replacing what was there.
+fn visible_devices(s: &mut Value, value: String) {
+    const KEY: &str = "NVIDIA_VISIBLE_DEVICES";
+    let Some(o) = s.as_object_mut() else { return };
+    let env = o
+        .entry("environment")
+        .or_insert_with(|| Value::Object(Default::default()));
+    if let Some(list) = env.as_array() {
+        let mut m = serde_json::Map::new();
+        for e in list.iter().filter_map(Value::as_str) {
+            let (k, v) = e.split_once('=').unwrap_or((e, ""));
+            m.insert(k.to_string(), v.into());
+        }
+        *env = Value::Object(m);
+    }
+    if let Some(m) = env.as_object_mut() {
+        m.insert(KEY.into(), value.into());
+    }
 }
 
 /// A device reservation that asks for GPUs: the only kind a node allows.
@@ -1168,6 +1227,39 @@ mod tests {
         assert_eq!(
             s["left"]["gpus"][0]["device_ids"],
             serde_json::json!(["GPU-x"])
+        );
+    }
+
+    #[test]
+    fn a_gpu_reaches_a_container_only_through_the_lease() {
+        // The nvidia runtime would hand out what the environment names.
+        let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let raw = serde_json::json!({"services": {"x": {"image": "a", "runtime": "nvidia"}}});
+        let model: Model = serde_json::from_value(raw.clone()).unwrap();
+        let e = check("app", &raw, &model, &src, Network::Internet, &[], &[]).unwrap_err();
+        assert!(e.contains("`runtime: nvidia`"), "{e}");
+
+        // Every started container is told exactly the lease's GPUs, or none,
+        // whatever its image or Compose file says.
+        let mut raw = serde_json::json!({"services": {
+            "held": {"image": "a", "gpus": [{"count": 1}]},
+            "plain": {"image": "a", "environment": {"NVIDIA_VISIBLE_DEVICES": "all", "MODE": "x"}}
+        }});
+        let model: Model = serde_json::from_value(raw.clone()).unwrap();
+        pin_gpus(&mut raw, &model, &[], &["GPU-a".into(), "GPU-b".into()]).unwrap();
+        let env = |s: &str| raw["services"][s]["environment"]["NVIDIA_VISIBLE_DEVICES"].clone();
+        assert_eq!(env("held"), "GPU-a");
+        assert_eq!(env("plain"), "void");
+        assert_eq!(raw["services"]["plain"]["environment"]["MODE"], "x");
+
+        let mut raw = serde_json::json!({"services": {"plain": {"image": "a"}}});
+        let model: Model = serde_json::from_value(raw.clone()).unwrap();
+        pin_gpus(&mut raw, &model, &[], &[]).unwrap();
+        assert_eq!(
+            raw["services"]["plain"]["environment"]["NVIDIA_VISIBLE_DEVICES"],
+            "void"
         );
     }
 

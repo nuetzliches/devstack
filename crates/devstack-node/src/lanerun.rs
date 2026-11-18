@@ -107,6 +107,20 @@ fn gpus_arg(ids: &[String]) -> Option<String> {
     (!ids.is_empty()).then(|| format!("\"device={}\"", ids.join(",")))
 }
 
+/// What the NVIDIA runtime reads in the lane container: its GPUs, else none,
+/// whatever its image's `ENV` says (a runtime set as Docker's default would
+/// hand it every GPU otherwise).
+fn visible_devices_env(ids: &[String]) -> String {
+    format!(
+        "NVIDIA_VISIBLE_DEVICES={}",
+        if ids.is_empty() {
+            "void".to_string()
+        } else {
+            ids.join(",")
+        }
+    )
+}
+
 /// Where the lane's daemon is reached, and its token.
 #[derive(Debug, Clone, Serialize)]
 pub struct DaemonAddr {
@@ -963,6 +977,7 @@ impl LaneRun {
         let memory = self.memory_limit.map(|m| format!("{m}b"));
         let cpus = self.cpu_limit.map(|c| format!("{c:.2}"));
         let gpus = gpus_arg(&self.gpus);
+        let visible = visible_devices_env(&self.gpus);
         let pids = PIDS_LIMIT.to_string();
         let mut args: Vec<&str> = vec![
             "run",
@@ -1054,6 +1069,7 @@ impl LaneRun {
         if let Some(g) = &gpus {
             args.extend(["--gpus", g.as_str()]);
         }
+        args.extend(["-e", visible.as_str()]);
         args.extend([
             image.as_str(),
             "/opt/devstack/devstack",
@@ -1356,6 +1372,12 @@ mod tests {
         assert_eq!(
             gpus_arg(&["GPU-a".into(), "GPU-b".into()]).as_deref(),
             Some("\"device=GPU-a,GPU-b\"")
+        );
+        // Whatever its image's ENV says.
+        assert_eq!(visible_devices_env(&[]), "NVIDIA_VISIBLE_DEVICES=void");
+        assert_eq!(
+            visible_devices_env(&["GPU-a".into()]),
+            "NVIDIA_VISIBLE_DEVICES=GPU-a"
         );
     }
 

@@ -1726,6 +1726,17 @@ async fn admit(
     if let Err(why) = crate::policy::NodePolicy::admits_all(&all, &who, &tags, &lease.repo) {
         return Err(err(StatusCode::FORBIDDEN, format!("{}: {why}", s.name)));
     }
+    // Switched off while others' lanes run (`--no-new-lanes`, ADR-0113):
+    // said so, not as an offer of nothing.
+    if !s.share.enabled {
+        return Err(err(
+            StatusCode::CONFLICT,
+            format!(
+                "{} takes no new lanes: its owner stopped sharing it",
+                s.name
+            ),
+        ));
+    }
     if lease.warm
         && crate::policy::NodePolicy::strictest(&all).is_some_and(|p| p.warm == Some(false))
     {

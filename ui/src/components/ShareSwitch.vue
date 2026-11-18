@@ -23,9 +23,13 @@ const GIB = 2 ** 30;
 const cpuCap = ref('');
 const memCap = ref('');
 const distro = ref('');
+// The form follows what is saved only when that changes (saved here or
+// elsewhere): a reading every few seconds brings the same values in a new
+// object, which must not undo what is being typed.
 watch(
-  sw,
-  (v) => {
+  () => [sw.value.max_cpus, sw.value.max_memory, sw.value.distro].join('|'),
+  () => {
+    const v = sw.value;
     cpuCap.value = v.max_cpus !== undefined ? String(v.max_cpus) : '';
     memCap.value = v.max_memory !== undefined ? String(Math.round((v.max_memory / GIB) * 10) / 10) : '';
     distro.value = v.distro ?? '';

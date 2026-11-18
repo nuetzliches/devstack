@@ -36,6 +36,20 @@ pub const DEFAULT_PORT: u16 = 4261;
 /// started again only after [`BACKOFF`].
 const SETTLE: Duration = Duration::from_secs(30);
 const BACKOFF: Duration = Duration::from_secs(60);
+/// How long a blocked switch's checks hold before they run again unasked:
+/// on Windows each one starts `wsl.exe` and PowerShell, which keeps the WSL
+/// VM awake.
+const RECHECK: Duration = Duration::from_secs(60);
+/// Why an agent ended, when it said nothing: inside the hub (Linux) its
+/// lines go to the hub's log.
+const ENDED: &str = if cfg!(target_os = "linux") {
+    "the node agent ended: its lines are in the hub's log (hub.log in devstack's state folder)"
+} else {
+    "the node agent ended"
+};
+/// How long stopping the agent inside the hub waits for its blocking work.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+const STOP_WAIT: Duration = Duration::from_secs(5);
 /// Where the hub on Windows puts the membership's copy in the distribution.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub const WSL_DIR: &str = "/var/lib/devstack-node";
@@ -205,17 +219,27 @@ pub struct Running {
 }
 
 /// The step from what runs (`running`) towards what the switch says, with
-/// `guests` other members' lanes here.
-pub fn decide(enabled: bool, running: Option<Running>, guests: usize) -> Act {
+/// `guests` other members' lanes here. `stray`: an agent this hub did not
+/// start may run (an earlier hub's in WSL, its first look at the pool): it
+/// is ended, or replaced by one that takes no new lanes while guests run.
+pub fn decide(enabled: bool, running: Option<Running>, guests: usize, stray: bool) -> Act {
     match (enabled, running) {
         (true, None) => Act::Start { new_lanes: true },
         (true, Some(r)) if !r.new_lanes || r.stale => Act::Restart { new_lanes: true },
         (true, Some(_)) => Act::Nothing,
+        (false, None) if stray && guests > 0 => Act::Restart { new_lanes: false },
+        (false, None) if stray => Act::Stop,
         (false, None) => Act::Nothing,
         (false, Some(_)) if guests == 0 => Act::Stop,
         (false, Some(r)) if r.new_lanes => Act::Restart { new_lanes: false },
         (false, Some(_)) => Act::Nothing,
     }
+}
+
+/// Other members' lanes here: what the coordinator says, else (it could not
+/// be asked) the last count known, never none for want of an answer.
+pub fn guests_or(asked: Option<usize>, last: usize) -> usize {
+    asked.unwrap_or(last)
 }
 
 /// The agent's arguments after `devstack` (Windows runs it as a process; on
@@ -325,6 +349,9 @@ impl Agent {
                 wsl::kill_agent(&distro, pool);
                 let _ = child.kill();
                 let _ = child.wait();
+                // The key does not stay where no agent needs it; a restart
+                // copies it again.
+                wsl::remove_membership(&distro, pool);
             }
             Run::None => {}
         }
@@ -339,6 +366,13 @@ struct Pools {
     /// When an agent of the pool last failed: not started again before
     /// [`BACKOFF`].
     failed: BTreeMap<String, Instant>,
+    /// Pools whose agent is being replaced: it counts as running, so the
+    /// hub does not report the machine meanwhile (#170).
+    replacing: std::collections::BTreeSet<String>,
+    /// Pools looked at once: before, an earlier hub's agent may still run.
+    seen: std::collections::BTreeSet<String>,
+    /// When a blocked switch's checks last ran ([`RECHECK`]).
+    checked: BTreeMap<String, Instant>,
 }
 
 static POOLS: OnceLock<Mutex<Pools>> = OnceLock::new();
@@ -351,17 +385,17 @@ pub fn start(state: PathBuf) {
     std::thread::spawn(move || {
         loop {
             for (pool, dir) in devstack_node::member::pools(&state) {
-                round(&pool, &dir);
+                round(&pool, &dir, false);
             }
             std::thread::sleep(EVERY);
         }
     });
 }
 
-/// Act on a changed switch now, not at the next round.
+/// Act on a changed switch now, not at the next round; its checks run again.
 pub fn poke(pool: &str, dir: &Path) {
     let (p, d) = (pool.to_string(), dir.to_path_buf());
-    std::thread::spawn(move || round(&p, &d));
+    std::thread::spawn(move || round(&p, &d, true));
 }
 
 /// The pool's agent as last seen.
@@ -375,9 +409,10 @@ pub fn host(pool: &str) -> Host {
 /// Whether an agent of the hub runs for the pool: the hub does not report
 /// the machine then (#170).
 pub fn runs(pool: &str) -> bool {
-    POOLS
-        .get()
-        .is_some_and(|p| p.lock().unwrap().agents.contains_key(pool))
+    POOLS.get().is_some_and(|p| {
+        let p = p.lock().unwrap();
+        p.agents.contains_key(pool) || p.replacing.contains(pool)
+    })
 }
 
 fn set(pool: &str, f: impl FnOnce(&mut Host)) {
@@ -388,11 +423,15 @@ fn set(pool: &str, f: impl FnOnce(&mut Host)) {
 
 /// One look at a pool: the switch, what runs, and the step between them.
 /// Serialised per hub: two rounds of one pool never act at once.
-fn round(pool: &str, dir: &Path) {
+fn round(pool: &str, dir: &Path, poked: bool) {
     static ONE: Mutex<()> = Mutex::new(());
     let _one = ONE.lock().unwrap();
     let Some(pools) = POOLS.get() else { return };
     let sw = Switch::load(dir);
+    // The first look at the pool: on Windows an earlier hub's agent may
+    // still run in the distribution, unseen (its lock is in WSL).
+    let stray =
+        cfg!(windows) && sw.distro.is_some() && pools.lock().unwrap().seen.insert(pool.to_string());
     let local = devstack_node::member::Local::new(dir);
     let member = match local.membership() {
         Ok(Some(m)) if m.state == devstack_node::store::State::Approved => m,
@@ -406,7 +445,16 @@ fn round(pool: &str, dir: &Path) {
             return;
         }
     };
-    let guests = crate::share::guests(pool).map_or(0, |g| g.len());
+    // Asked only where an agent runs or may: not every 5 s of every hub.
+    let ours = sw.enabled || stray || pools.lock().unwrap().agents.contains_key(pool);
+    let guests = if ours {
+        guests_or(
+            crate::share::guests(pool).map(|g| g.len()),
+            host(pool).guests,
+        )
+    } else {
+        0
+    };
     let granted = if sw.enabled || pools.lock().unwrap().agents.contains_key(pool) {
         local
             .members()
@@ -449,7 +497,7 @@ fn round(pool: &str, dir: &Path) {
                         .rev()
                         .find(|l| !l.trim().is_empty())
                         .cloned()
-                        .unwrap_or_else(|| "the node agent ended".into()),
+                        .unwrap_or_else(|| ENDED.into()),
                 );
             }
             drop(p);
@@ -483,7 +531,7 @@ fn round(pool: &str, dir: &Path) {
         return;
     }
 
-    match decide(sw.enabled, running, guests) {
+    match decide(sw.enabled, running, guests, stray) {
         Act::Nothing => {
             let st = match running {
                 Some(r) if r.new_lanes => State::Running,
@@ -520,8 +568,18 @@ fn round(pool: &str, dir: &Path) {
         }
         Act::Stop => {
             let agent = pools.lock().unwrap().agents.remove(pool);
-            if let Some(a) = agent {
-                a.stop(pool);
+            match agent {
+                Some(a) => a.stop(pool),
+                // An earlier hub's, and its copy of the membership.
+                #[cfg(windows)]
+                None => {
+                    if let Some(d) = &sw.distro {
+                        wsl::kill_agent(d, pool);
+                        wsl::remove_membership(d, pool);
+                    }
+                }
+                #[cfg(not(windows))]
+                None => {}
             }
             set(pool, |h| {
                 h.state = State::Off;
@@ -531,35 +589,63 @@ fn round(pool: &str, dir: &Path) {
         }
         Act::Start { new_lanes } | Act::Restart { new_lanes } => {
             let failed_at = pools.lock().unwrap().failed.get(pool).copied();
-            if failed_at.is_some_and(|t| t.elapsed() < BACKOFF) && running.is_none() {
+            if failed_at.is_some_and(|t| t.elapsed() < BACKOFF) && running.is_none() && new_lanes {
                 return;
             }
-            if let Some(why) = sw.problem() {
-                set(pool, |h| {
-                    h.state = State::Blocked;
-                    h.detail = Some(why);
-                });
-                return;
+            // Taking no new lanes needs nothing checked: it only narrows
+            // what runs already, and a check that fails must not leave the
+            // node taking lanes after it was switched off.
+            if new_lanes {
+                // Blocked, the checks run again once a minute or when asked.
+                let recheck = pools.lock().unwrap().checked.get(pool).copied();
+                if !poked
+                    && host(pool).state == State::Blocked
+                    && recheck.is_some_and(|t| t.elapsed() < RECHECK)
+                {
+                    return;
+                }
+                pools
+                    .lock()
+                    .unwrap()
+                    .checked
+                    .insert(pool.to_string(), Instant::now());
+                if let Some(why) = sw.problem() {
+                    set(pool, |h| {
+                        h.state = State::Blocked;
+                        h.detail = Some(why);
+                    });
+                    return;
+                }
             }
-            let Some(ip) = local_address(&member.coordinator) else {
-                set(pool, |h| {
-                    h.state = State::Blocked;
-                    h.detail = Some(format!(
-                        "No address of this machine reaches the coordinator at {}.",
-                        member.coordinator
-                    ));
-                });
-                return;
+            let ip = local_address(&member.coordinator);
+            let api = match (ip, host(pool).api) {
+                (Some(ip), _) => format!("https://{ip}:{}", sw.port()),
+                // Draining keeps the address it had.
+                (None, Some(api)) if !new_lanes => api,
+                (None, _) => {
+                    set(pool, |h| {
+                        h.state = State::Blocked;
+                        h.detail = Some(format!(
+                            "No address of this machine reaches the coordinator at {}.",
+                            member.coordinator
+                        ));
+                    });
+                    return;
+                }
             };
-            let api = format!("https://{ip}:{}", sw.port());
-            if let Err(why) = ready(pool, &sw) {
+            if new_lanes && let Err(why) = ready(pool, &sw) {
                 set(pool, |h| {
                     h.state = State::Blocked;
                     h.detail = Some(why);
                 });
                 return;
             }
-            let old = pools.lock().unwrap().agents.remove(pool);
+            // Until the new one runs, the machine is the agents' to report.
+            let old = {
+                let mut p = pools.lock().unwrap();
+                p.replacing.insert(pool.to_string());
+                p.agents.remove(pool)
+            };
             if let Some(a) = old {
                 a.stop(pool);
             }
@@ -573,6 +659,7 @@ fn round(pool: &str, dir: &Path) {
                 Ok(agent) => {
                     let mut p = pools.lock().unwrap();
                     p.failed.remove(pool);
+                    p.replacing.remove(pool);
                     p.agents.insert(pool.to_string(), agent);
                     let h = p.hosts.entry(pool.to_string()).or_default();
                     h.state = if new_lanes {
@@ -582,11 +669,11 @@ fn round(pool: &str, dir: &Path) {
                     };
                 }
                 Err(e) => {
-                    pools
-                        .lock()
-                        .unwrap()
-                        .failed
-                        .insert(pool.to_string(), Instant::now());
+                    {
+                        let mut p = pools.lock().unwrap();
+                        p.failed.insert(pool.to_string(), Instant::now());
+                        p.replacing.remove(pool);
+                    }
                     set(pool, |h| {
                         h.state = State::Failed;
                         h.detail = Some(e);
@@ -698,6 +785,9 @@ fn launch(
                 if let Err(e) = r {
                     keep(&out, e);
                 }
+                // A blocking task of a lane's start (a build) does not hold
+                // the stop: the hub waits a few seconds, not minutes.
+                rt.shutdown_timeout(STOP_WAIT);
             })
             .map_err(|e| e.to_string())?;
         Ok(Agent {
@@ -997,7 +1087,11 @@ echo "memory=$(awk '/MemTotal/ {print $2 * 1024}' /proc/meminfo)""#;
             .collect();
         let mkdir = sh(
             distro,
-            &format!("umask 077 && mkdir -p '{target}' && chmod 700 '{WSL_DIR}' '{target}'"),
+            &format!(
+                "umask 077 && mkdir -p {t} && chmod 700 {w} {t}",
+                t = quote(target),
+                w = quote(WSL_DIR)
+            ),
         )
         .stdin(Stdio::null())
         .output()
@@ -1005,7 +1099,7 @@ echo "memory=$(awk '/MemTotal/ {print $2 * 1024}' /proc/meminfo)""#;
         if !mkdir.status.success() {
             return Err(format!(
                 "cannot make {target} in `{distro}`: {}",
-                String::from_utf8_lossy(&mkdir.stderr).trim()
+                text(&mkdir.stderr)
             ));
         }
         for f in files {
@@ -1017,12 +1111,15 @@ echo "memory=$(awk '/MemTotal/ {print $2 * 1024}' /proc/meminfo)""#;
                 continue;
             }
             let bytes = std::fs::read(f.path()).map_err(|e| format!("{name}: {e}"))?;
-            let mut child = sh(distro, &format!("umask 077 && cat > '{target}/{name}'"))
-                .stdin(Stdio::piped())
-                .stdout(Stdio::null())
-                .stderr(Stdio::piped())
-                .spawn()
-                .map_err(|e| format!("wsl.exe: {e}"))?;
+            let mut child = sh(
+                distro,
+                &format!("umask 077 && cat > {}", quote(&format!("{target}/{name}"))),
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("wsl.exe: {e}"))?;
             {
                 use std::io::Write;
                 let mut stdin = child.stdin.take().ok_or("wsl.exe: no stdin")?;
@@ -1032,10 +1129,7 @@ echo "memory=$(awk '/MemTotal/ {print $2 * 1024}' /proc/meminfo)""#;
             }
             let out = child.wait_with_output().map_err(|e| e.to_string())?;
             if !out.status.success() {
-                return Err(format!(
-                    "{name} into `{distro}`: {}",
-                    String::from_utf8_lossy(&out.stderr).trim()
-                ));
+                return Err(format!("{name} into `{distro}`: {}", text(&out.stderr)));
             }
         }
         Ok(())
@@ -1052,12 +1146,34 @@ echo "memory=$(awk '/MemTotal/ {print $2 * 1024}' /proc/meminfo)""#;
         .output();
     }
 
+    /// Removes the membership's copy from the distribution once its agent is
+    /// gone (the switch off, or another distribution chosen).
+    pub fn remove_membership(distro: &str, pool: &str) {
+        let _ = sh(
+            distro,
+            &format!("rm -rf -- {}", quote(&format!("{WSL_DIR}/{pool}"))),
+        )
+        .stdin(Stdio::null())
+        .output();
+    }
+
+    /// `s` as one word for `sh`, whatever it holds.
+    pub fn quote(s: &str) -> String {
+        format!("'{}'", s.replace('\'', r"'\''"))
+    }
+
+    /// A line `wsl.exe` printed itself (UTF-16) or the agent printed (UTF-8),
+    /// readable either way.
+    pub fn text(bytes: &[u8]) -> String {
+        decode(bytes).replace('\0', "").trim_end().to_string()
+    }
+
     pub fn spawn_agent(
         distro: &str,
         args: &[String],
         output: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     ) -> Result<std::process::Child, String> {
-        let quoted: Vec<String> = args.iter().map(|a| format!("'{a}'")).collect();
+        let quoted: Vec<String> = args.iter().map(|a| quote(a)).collect();
         let mut child = sh(distro, &format!("exec devstack {}", quoted.join(" ")))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -1080,8 +1196,11 @@ echo "memory=$(awk '/MemTotal/ {print $2 * 1024}' /proc/meminfo)""#;
             let out = output.clone();
             std::thread::spawn(move || {
                 use std::io::BufRead;
-                for line in std::io::BufReader::new(pipe).lines().map_while(Result::ok) {
-                    super::keep(&out, line);
+                let mut r = std::io::BufReader::new(pipe);
+                let mut line = Vec::new();
+                while r.read_until(b'\n', &mut line).is_ok_and(|n| n > 0) {
+                    super::keep(&out, text(&line));
+                    line.clear();
                 }
             });
         }
@@ -1096,26 +1215,62 @@ mod tests {
     #[test]
     fn the_switch_and_what_runs_give_the_step() {
         let run = |new_lanes, stale| Some(Running { new_lanes, stale });
-        assert_eq!(decide(true, None, 0), Act::Start { new_lanes: true });
-        assert_eq!(decide(true, run(true, false), 3), Act::Nothing);
+        assert_eq!(decide(true, None, 0, false), Act::Start { new_lanes: true });
+        assert_eq!(decide(true, run(true, false), 3, false), Act::Nothing);
         assert_eq!(
-            decide(true, run(true, true), 0),
+            decide(true, run(true, true), 0, false),
             Act::Restart { new_lanes: true }
         );
         assert_eq!(
-            decide(true, run(false, false), 1),
+            decide(true, run(false, false), 1, false),
             Act::Restart { new_lanes: true }
         );
-        assert_eq!(decide(false, None, 2), Act::Nothing);
+        assert_eq!(decide(false, None, 2, false), Act::Nothing);
         // Off with guests: no new lanes, the running ones go on.
         assert_eq!(
-            decide(false, run(true, false), 2),
+            decide(false, run(true, false), 2, false),
             Act::Restart { new_lanes: false }
         );
-        assert_eq!(decide(false, run(false, false), 2), Act::Nothing);
+        assert_eq!(decide(false, run(false, false), 2, false), Act::Nothing);
         // The last one ended: the agent goes.
-        assert_eq!(decide(false, run(false, false), 0), Act::Stop);
-        assert_eq!(decide(false, run(true, false), 0), Act::Stop);
+        assert_eq!(decide(false, run(false, false), 0, false), Act::Stop);
+        assert_eq!(decide(false, run(true, false), 0, false), Act::Stop);
+    }
+
+    #[test]
+    fn an_earlier_hubs_agent_is_ended_or_kept_for_its_guests() {
+        // Off, its lanes still running: one that takes no new lanes.
+        assert_eq!(
+            decide(false, None, 2, true),
+            Act::Restart { new_lanes: false }
+        );
+        // Off, no guests: it goes.
+        assert_eq!(decide(false, None, 0, true), Act::Stop);
+        // On: a new one replaces it.
+        assert_eq!(decide(true, None, 0, true), Act::Start { new_lanes: true });
+    }
+
+    #[test]
+    fn guests_not_known_are_the_last_count_not_none() {
+        assert_eq!(guests_or(None, 2), 2);
+        assert_eq!(guests_or(Some(0), 2), 0);
+        // Not asked yet and no answer: none known.
+        assert_eq!(guests_or(None, 0), 0);
+    }
+
+    #[test]
+    fn words_for_sh_and_lines_of_wsl_exe() {
+        assert_eq!(wsl::quote("a b"), "'a b'");
+        assert_eq!(wsl::quote("it's"), r"'it'\''s'");
+        let utf16: Vec<u8> = "There is no distribution\r\n"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        assert_eq!(wsl::text(&utf16), "There is no distribution");
+        assert_eq!(
+            wsl::text(b"listening on 0.0.0.0:4261\n"),
+            "listening on 0.0.0.0:4261"
+        );
     }
 
     #[test]

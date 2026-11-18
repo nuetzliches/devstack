@@ -48,9 +48,29 @@ and listed with their assets on the
   `deploy`) in a lane without `[lanes.need] gpus`, or more GPUs than the
   lane holds, is refused on a node, naming the service; before, any lane
   could take every GPU of the node. On this machine nothing changes.
+- **`runtime: nvidia` is refused on a node**, and every container of a
+  lane there is told exactly its GPUs, or none, in
+  `NVIDIA_VISIBLE_DEVICES`: the runtime with that variable (set by many
+  CUDA images) handed a container every GPU of the node, past the lane's
+  (a finding of the security review before 0.50.0). Ask for GPUs with
+  `gpus` and `[lanes.need] gpus`.
 
 ### Fixed
 
+- **The share switch's agent, found in review before 0.50.0** (none of it
+  released). The hub no longer reports the machine itself while its agent
+  is replaced, and a node agent an earlier hub left running in WSL is
+  ended, or kept without new lanes while others' lanes run, instead of
+  running on unseen; turned off, the agent takes no new lanes even when a
+  check fails, and a coordinator that does not answer for a moment no
+  longer counts as "no lanes of others here" (which ended the agent under
+  them). On Linux, stopping the agent no longer waits for a build of a
+  lane; on Windows, a blocked switch checks the distribution once a minute
+  (it kept WSL awake), the membership's copy leaves the distribution with
+  the agent, and `wsl.exe`'s own messages read right. The share form keeps
+  what is typed while the page reads the switch again; `--gpus` is
+  forgotten with the lane's stop and carried over a daemon's restart; a
+  node that takes no new lanes says so.
 - **A machine's GPUs show beside its CPU and memory.** Where a lane
   starts, the pool's capacity and **This machine** gave a GPU at most as
   "1 GPU (0 %)" in a footnote, and only one offered to the pool: a GPU of
