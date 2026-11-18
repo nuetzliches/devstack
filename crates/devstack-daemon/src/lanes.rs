@@ -3150,6 +3150,7 @@ impl Lanes {
             self.take_up_remote(l);
         }
         self.unfollowed();
+        self.unlaunched();
         for l in local {
             self.take_up_local(l);
         }
@@ -3186,6 +3187,27 @@ impl Lanes {
                 workers: false,
                 node: Some(c),
             });
+        }
+    }
+
+    /// The starts on nodes a daemon before this one began and did not finish
+    /// (#563): their leases were admitted there, the lanes never followed.
+    /// Released, as a start that fails releases its lease, and said with the
+    /// lane; the node would otherwise keep the lease for its grace and
+    /// refuse the lane's next start as running there already.
+    fn unlaunched(&self) {
+        let names: Vec<String> = self.known.lock().unwrap().keys().cloned().collect();
+        for name in names {
+            if let Some(Ok(u)) =
+                crate::remote::release_unlaunched(&self.rt, &name, &self.state_dir(&name))
+            {
+                self.not_carried(
+                    &name,
+                    "remote",
+                    &u.node.name,
+                    "its start there was cut off; its lease there is released, `devstack up` starts it again",
+                );
+            }
         }
     }
 
