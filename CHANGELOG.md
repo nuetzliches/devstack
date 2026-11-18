@@ -19,6 +19,15 @@ and listed with their assets on the
   job with `build`) now goes through its build at that start; an unchanged
   tree reuses its artifact, a changed one builds (ADR-0016, addendum
   2026-11-18).
+- **A kept connection the upstream closed no longer turns a request into
+  a 502** (#556, #559). Since connections to a forward's target, a public
+  link's service and a daemon are kept, a request written on one just as
+  the upstream closed it for its keep-alive timeout (Node.js after 5 s)
+  failed with "connection closed before message completed", and the
+  static server, the link router and the service proxy answered 502. Such
+  a request now goes out once more on a new connection when it is safe to
+  repeat (an idempotent method without a body), and a connection idle for
+  4 s or longer is not reused.
 - **A node lets go of a lane whose container is gone** (#565). A lane
   container stopped by hand on the node (or exited, or removed) kept its
   lease for the whole grace, an hour on a dedicated node: the lane's
