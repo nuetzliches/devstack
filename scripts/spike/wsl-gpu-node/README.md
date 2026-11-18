@@ -116,7 +116,7 @@ agent and leave the shell open (it runs in the foreground):
 
 ```sh
 devstack node agent --listen 0.0.0.0:4261 --api https://<windows-lan-address>:4261 \
-  --max-cpus 8 --max-memory-gib 16
+  --max-cpus 8 --max-memory-gib 8
 ```
 
 Choose the caps for what the machine can spare, and below what WSL itself
@@ -134,13 +134,18 @@ devstack node members node <machine>-wsl on
 
 ## 7. Maintainers: a lane that needs the GPU
 
-`devstack pool` lists the node with its GPU. Then, in a worktree of this
-branch, from `scripts/spike/wsl-gpu-node/gpu-smoke`:
+`devstack pool` lists the node with its GPU. A lane's stack file must be at
+the root of its worktree (a stack in a subfolder is no lane), so copy the
+two files of `gpu-smoke` into a repository of their own, give it a
+worktree, and start the lane from there:
 
 ```sh
+mkdir gpu-smoke && cp <this branch>/scripts/spike/wsl-gpu-node/gpu-smoke/* gpu-smoke/
+cd gpu-smoke && git init -b main && git add . && git commit -m gpu-smoke
+git worktree add -b smoke ../gpu-smoke-lane && cd ../gpu-smoke-lane
 devstack up --on <pool>:<machine>-wsl
 devstack logs smi                  # nvidia-smi's table: the container has the GPU
-devstack down
+devstack lane stop
 ```
 
 ## What goes back
