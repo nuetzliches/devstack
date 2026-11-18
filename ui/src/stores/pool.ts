@@ -2,7 +2,8 @@
 // reads them from their coordinators with this machine's certificates. Read
 // when shown, and again when the hub says a pool changed (`pools` on
 // `/hub/events`, ADR-0073): never on a timer, but while this machine waits
-// for its approval (it has no certificate to follow a stream with yet). The
+// for its approval (it has no certificate to follow a stream with yet), and
+// while the join form is shown (`devstack join` tells the page nothing). The
 // pool area shows one pool at a time (`current`); lanes start and move to the
 // nodes of all of them.
 import { defineStore } from 'pinia';
@@ -246,6 +247,32 @@ export const usePool = defineStore('pool', () => {
       clearInterval(pendingTimer);
       pendingTimer = null;
     }
+  }
+
+  /** While the join form is shown: look every 10 s whether this machine joined a pool elsewhere. */
+  let joinTimer: ReturnType<typeof setInterval> | null = null;
+  let joinForms = 0;
+  async function joinedElsewhere() {
+    try {
+      const r = await api().request<PoolEntry[]>('GET', paths.pools);
+      if (!r.ok || !Array.isArray(r.body)) return;
+      const known = new Set(pools.value.filter((p) => p.joined).map((p) => p.name));
+      // Read it all: a pending membership then waits for its approval as above.
+      if (r.body.some((p) => p.joined && !known.has(p.name))) void load();
+    } catch {
+      /* the hub away: look again next time */
+    }
+  }
+  function watchJoin() {
+    joinForms++;
+    joinTimer ??= setInterval(() => void joinedElsewhere(), 10_000);
+    return () => {
+      joinForms = Math.max(0, joinForms - 1);
+      if (joinForms === 0 && joinTimer) {
+        clearInterval(joinTimer);
+        joinTimer = null;
+      }
+    };
   }
 
   /** Read once now, and again on each change the hub tells, while someone shows the pool; `stop` when gone. */
@@ -568,6 +595,7 @@ export const usePool = defineStore('pool', () => {
     load,
     loadShare,
     watch,
+    watchJoin,
     busy,
     approve: one('approve', approve),
     remove: one('remove', remove),

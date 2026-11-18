@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Joining a pool from here, as `devstack join` does; with `another`, beside
 // this machine's other pools under a name of its own (ADR-0034).
-import { computed, ref } from 'vue';
+import { computed, onBeforeUnmount, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import Icon from '@/components/icons/Icon.vue';
 import { usePool } from '@/stores/pool';
@@ -9,6 +9,8 @@ import { usePool } from '@/stores/pool';
 const props = defineProps<{ another?: boolean }>();
 const pool = usePool();
 const router = useRouter();
+// Joined with `devstack join` meanwhile: the pool shows without a reload.
+onBeforeUnmount(pool.watchJoin());
 
 const url = ref('');
 const fp = ref('');

@@ -823,6 +823,35 @@ describe('pool store', () => {
     }
   });
 
+  it('shows a pool joined with `devstack join` while the join form is open, and once approved', async () => {
+    vi.useFakeTimers();
+    try {
+      let state: string | null = null;
+      fake.on('/hub/pools', () => ok([{ name: 'default', joined: !!state, state }]));
+      fake.on('/hub/pool', () => ok(state ? { joined: true, me: { id: 'a', name: 'pc', state, coordinator: 'https://c' }, nodes: [], leases: [] } : { joined: false }));
+      const pool = usePool();
+      const stop = pool.watch();
+      const stopJoin = pool.watchJoin();
+      await vi.runOnlyPendingTimersAsync();
+      expect(pool.overview?.joined).toBe(false);
+      // Asked on the command line; then an admin approves it.
+      state = 'pending';
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(pool.overview?.me?.state).toBe('pending');
+      stopJoin();
+      state = 'approved';
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(pool.overview?.me?.state).toBe('approved');
+      // Nothing reads it on a timer any more.
+      const reads = fake.requests.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(fake.requests.length).toBe(reads);
+      stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('opens a shared service only as a web page (H-4)', async () => {
     const opened: string[] = [];
     vi.spyOn(window, 'open').mockImplementation((url) => {
