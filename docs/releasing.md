@@ -87,6 +87,14 @@ git tag -a vX.Y.Z -m "devstack X.Y.Z" <merge-commit>
 git push origin vX.Y.Z
 ```
 
+The push may answer `remote: Cannot create ref due to creations being
+restricted`: the ruleset `release tags` restricts `v*` tags, an admin
+bypasses it, and the tag is created all the same (`git ls-remote origin
+vX.Y.Z` shows it). The release workflow then starts from the push, at
+times only minutes later. Do not start `release.yml` by hand
+(`workflow_dispatch`) while waiting: for 0.16.0 that ran two releases side
+by side.
+
 The release workflow checks that the tag matches `Cargo.toml` and
 `ui/package.json` and that the tagged commit is on `main`, then:
 
