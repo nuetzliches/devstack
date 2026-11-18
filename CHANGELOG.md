@@ -9,6 +9,19 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.50.0] - 2026-11-18
+
+A machine of the pool can offer its GPU, and a lane can ask for one. The
+share switch is back and makes the machine a node: on Linux the hub runs
+the node agent, on Windows in a WSL2 distribution, which the hub checks and
+helps set up. A node gives a lane exactly the GPUs it asked for and no
+other lane (`[lanes.need] gpus`, or `--gpus` for one start), and the
+dashboard shows each machine's GPUs and where a lane with a GPU can go. On
+a node, `runtime: nvidia` is refused and a lane's Compose services may ask
+for no GPU beyond the lane's. Lighter shortcut buttons. Fixed: `.devstack/`
+no longer shows in `git status`, a pool joined on the command line shows
+in the open join form. Takes a node agent of this release for the GPUs.
+
 ### Added
 
 - **A start in the pool can ask for GPUs** (ADR-0114). `devstack up --on
@@ -54,6 +67,10 @@ and listed with their assets on the
   CUDA images) handed a container every GPU of the node, past the lane's
   (a finding of the security review before 0.50.0). Ask for GPUs with
   `gpus` and `[lanes.need] gpus`.
+- **Shortcut buttons are lighter and name the service** (#582): the open
+  button carries the service's name without "Open", the port tag in the
+  card's head goes (the address under the button shows it), and a card is
+  as wide as its name needs, up to 340 px.
 
 ### Fixed
 
@@ -91,6 +108,12 @@ and listed with their assets on the
   start), as it does for the skill folders; the repository's
   `.gitignore` is not touched, and a `.gitignore` already in the folder is
   left as it is. `devstack build` no longer asks to add the line.
+- **A pool joined with `devstack join` shows while the join form is open**
+  (#576): the page kept the form until a reload after an admin approved
+  the machine; it now asks the hub for its pools every 10 s while the form
+  is shown.
+- **The timeline's pause marker shows the app's tooltip**, not the
+  browser's (#583, #584).
 
 ## [0.49.4] - 2026-11-18
 
@@ -3720,7 +3743,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.49.4...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.50.0...HEAD
+[0.50.0]: https://github.com/nuetzliches/devstack/compare/v0.49.4...v0.50.0
 [0.49.4]: https://github.com/nuetzliches/devstack/compare/v0.49.3...v0.49.4
 [0.49.3]: https://github.com/nuetzliches/devstack/compare/v0.49.2...v0.49.3
 [0.49.2]: https://github.com/nuetzliches/devstack/compare/v0.49.1...v0.49.2
