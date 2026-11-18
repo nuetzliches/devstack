@@ -17,7 +17,9 @@ pub fn run(stack: &Stack, repo: &Path, name: &str) -> Result<()> {
     if svc.build.is_none() {
         bail!("service `{name}` has no `build`");
     }
-    warn_if_state_is_not_ignored(repo);
+    // `.devstack/` must not be committed (the snapshot already skips it):
+    // its own `.gitignore` keeps it out of git.
+    devstack_daemon::ensure_state_dir(&repo.join(".devstack"))?;
     let layout = Layout::new(repo.join(".devstack"));
     let mut snap = Snapshot::open(repo, &layout.lane(lane))?;
     let s = snap.sync()?;
@@ -68,17 +70,5 @@ pub fn run(stack: &Stack, repo: &Path, name: &str) -> Result<()> {
         }
         Outcome::Cancelled { .. } => bail!("build of `{name}` was cancelled"),
         Outcome::Stale { .. } => bail!("the sources of `{name}` changed while it built; try again"),
-    }
-}
-
-/// `.devstack/` must not be committed, and the snapshot already skips it.
-fn warn_if_state_is_not_ignored(repo: &Path) {
-    let ignored = std::process::Command::new("git")
-        .args(["check-ignore", "-q", ".devstack/"])
-        .current_dir(repo)
-        .status()
-        .is_ok_and(|s| s.success());
-    if !ignored {
-        eprintln!("note: add `.devstack/` to .gitignore; it holds snapshots, artifacts and logs");
     }
 }

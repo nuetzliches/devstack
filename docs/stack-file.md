@@ -322,6 +322,12 @@ Other placeholders are not known to a build (lanes share its artifact), and
 the build id (a hash of the inputs); `run` starts from `{artifact}`. The same
 inputs never build twice, and a rollback needs no build.
 
+Snapshots, artifacts, logs and the daemon's state live in `.devstack/`
+beside the stack file; a lane keeps its own in the main tree's folder. The
+folder holds a `.gitignore` that ignores it, written at a daemon's start
+when it is missing, so git never lists it and the repository's own `.gitignore`
+needs no line for it. A `.gitignore` already there is left as it is.
+
 What goes into the build id:
 
 - the files `watch` matches (every file of the repository without `watch`),
