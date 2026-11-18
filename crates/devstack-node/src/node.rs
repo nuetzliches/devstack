@@ -3616,16 +3616,24 @@ fn running_lanes() -> Option<HashSet<String>> {
 /// (`starting` has it), nor one not started yet. Seen so in this round
 /// and the one before (`missed`, carried from round to round): a lane that
 /// starts between the look at its container and the look at `starting`
-/// is not taken for gone.
+/// is not taken for gone. Nor one whose slot is busy (`busy`): its start
+/// waits there, before it is in `starting`, for the lane's last lease to
+/// take its containers down.
 fn gone_leases(
     leases: &HashMap<String, NodeLease>,
     running: &HashSet<String>,
     starting: &HashSet<String>,
+    busy: &HashSet<String>,
     missed: &mut HashSet<String>,
 ) -> Vec<String> {
     let now: HashSet<String> = leases
         .values()
-        .filter(|l| l.stack_file.is_some() && !starting.contains(&l.id) && !running.contains(&l.id))
+        .filter(|l| {
+            l.stack_file.is_some()
+                && !starting.contains(&l.id)
+                && !running.contains(&l.id)
+                && !l.slot.as_ref().is_some_and(|s| busy.contains(s))
+        })
         .map(|l| l.id.clone())
         .collect();
     let mut gone: Vec<String> = now.intersection(missed).cloned().collect();
@@ -3872,9 +3880,10 @@ async fn background(s: Shared) {
         // their grace. Nothing ends while Docker does not answer.
         if let Ok(Some(running)) = tokio::task::spawn_blocking(running_lanes).await {
             let starting: HashSet<String> = s.starting.lock().unwrap().keys().cloned().collect();
+            let busy: HashSet<String> = s.slot_busy.lock().unwrap().keys().cloned().collect();
             let gone: Vec<NodeLease> = {
                 let mut leases = s.leases.lock().unwrap();
-                let ids = gone_leases(&leases, &running, &starting, &mut missed);
+                let ids = gone_leases(&leases, &running, &starting, &busy, &mut missed);
                 let out: Vec<NodeLease> = ids.iter().filter_map(|id| leases.remove(id)).collect();
                 if !out.is_empty() {
                     s.save(&leases);
@@ -4393,19 +4402,41 @@ mod tests {
         let running: HashSet<String> = ["runs".to_string()].into();
         // A start under way, and one that failed: both in `starting`.
         let starting: HashSet<String> = ["starting".to_string(), "failed".to_string()].into();
+        let none = HashSet::new();
         let mut missed = HashSet::new();
         // The first round only notes it.
-        assert!(gone_leases(&leases, &running, &starting, &mut missed).is_empty());
+        assert!(gone_leases(&leases, &running, &starting, &none, &mut missed).is_empty());
         assert_eq!(
-            gone_leases(&leases, &running, &starting, &mut missed),
+            gone_leases(&leases, &running, &starting, &none, &mut missed),
             ["gone".to_string()]
         );
         // Its container came back between two rounds: it stays.
         let mut missed = HashSet::new();
-        gone_leases(&leases, &running, &starting, &mut missed);
+        gone_leases(&leases, &running, &starting, &none, &mut missed);
         let back: HashSet<String> = ["runs".to_string(), "gone".to_string()].into();
-        assert!(gone_leases(&leases, &back, &starting, &mut missed).is_empty());
-        assert!(gone_leases(&leases, &running, &starting, &mut missed).is_empty());
+        assert!(gone_leases(&leases, &back, &starting, &none, &mut missed).is_empty());
+        assert!(gone_leases(&leases, &running, &starting, &none, &mut missed).is_empty());
+    }
+
+    #[test]
+    fn a_start_waiting_for_its_slot_is_not_gone() {
+        // Started (its stack file is set), waiting for the lane's last
+        // lease to take its containers down: no container, not starting yet.
+        let leases: HashMap<String, NodeLease> =
+            [("waits".to_string(), lease("waits", true))].into();
+        let busy: HashSet<String> = ["waits".to_string()].into();
+        let (running, starting) = (HashSet::new(), HashSet::new());
+        let mut missed = HashSet::new();
+        for _ in 0..3 {
+            assert!(gone_leases(&leases, &running, &starting, &busy, &mut missed).is_empty());
+        }
+        // Its slot free again and still no container after two rounds: gone.
+        let none = HashSet::new();
+        gone_leases(&leases, &running, &starting, &none, &mut missed);
+        assert_eq!(
+            gone_leases(&leases, &running, &starting, &none, &mut missed),
+            ["waits".to_string()]
+        );
     }
 
     #[test]

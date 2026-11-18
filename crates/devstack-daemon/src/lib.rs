@@ -468,9 +468,11 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
         // (ADR-0052), taken up beside the main tree's start.
         {
             let lanes = lanes.clone();
+            // Read here, before a start through the API can note its own.
+            let left = lanes.unlaunched_left();
             let _ = std::thread::Builder::new()
                 .name("lanes-take-up".into())
-                .spawn(move || lanes.take_up());
+                .spawn(move || lanes.take_up(left));
         }
         let (stopping_tx, stopping_rx) = tokio::sync::oneshot::channel::<()>();
         let stopping_info = (info_path(&state_dir), info.clone());
