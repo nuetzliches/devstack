@@ -45,8 +45,8 @@ pub struct RemoteState {
     /// `sharing`, `port 3000`, `lease`, `disk`), each until that works again: a
     /// sync that works does not hide a port that is not forwarded.
     pub errors: std::collections::BTreeMap<String, String>,
-    /// The lease is over (an admin ended it, or it expired): the lane no
-    /// longer runs there.
+    /// The lease is over (an admin ended it, it expired, or its lane
+    /// container stopped, #565): the lane no longer runs there.
     pub ended: bool,
     /// Its services that run now (healthy or running), by name.
     pub active: Vec<String>,
@@ -1608,7 +1608,8 @@ impl RemoteLane {
                 Err(devstack_node::nodeclient::ClientError::Status(404, _)) => {
                     return self.end(
                         format!(
-                            "the lease on {} is over (an admin ended it, or it expired): \
+                            "the lease on {} is over (an admin ended it, it expired, \
+                             or the lane's container stopped there): \
                              `devstack up --on {}` starts the lane again",
                             self.node.name, self.node.name
                         ),

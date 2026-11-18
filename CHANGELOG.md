@@ -19,6 +19,16 @@ and listed with their assets on the
   job with `build`) now goes through its build at that start; an unchanged
   tree reuses its artifact, a changed one builds (ADR-0016, addendum
   2026-11-18).
+- **A node lets go of a lane whose container is gone** (#565). A lane
+  container stopped by hand on the node (or exited, or removed) kept its
+  lease for the whole grace, an hour on a dedicated node: the lane's
+  `status` and `up` failed on its daemon, and a requester that had lost
+  the lease got `409 ... runs here already`. The node now ends such a
+  lease within half a minute, as an expired one, and the requester's
+  daemon says that `devstack up` starts the lane again. A warm lease
+  (ADR-0065), whose daemon ended while its `prepare` ran, lives at most
+  3 minutes without a renewal instead of the grace. Takes a node agent of
+  this release.
 
 ## [0.49.3] - 2026-11-17
 

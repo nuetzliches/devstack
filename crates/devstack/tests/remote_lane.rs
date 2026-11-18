@@ -727,6 +727,36 @@ fn a_lane_runs_on_a_node_of_the_pool() {
         body.contains("ok"),
         "GET /health on {port} after the lane was taken up again: {body}"
     );
+    // Its lane container stopped by hand on the node: the node ends the
+    // lease as an expired one instead of holding it for its grace (#565),
+    // the daemon hears so at its next renewal, and the lane starts again.
+    let stopped = Command::new("sh")
+        .args([
+            "-c",
+            "docker ps -q --filter label=devstack.lease | xargs -r docker stop",
+        ])
+        .status()
+        .expect("docker stop");
+    assert!(stopped.success(), "docker stop: {stopped}");
+    let until = Instant::now() + Duration::from_secs(180);
+    loop {
+        let log =
+            std::fs::read_to_string(main.join(".devstack").join("daemon.log")).unwrap_or_default();
+        if log.contains("\"remote_lane_ended\"") {
+            break;
+        }
+        assert!(
+            Instant::now() < until,
+            "the node kept the lease of a lane whose container is gone: {log}"
+        );
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    cli(&wt, &["up", "--on", "ci-node"]);
+    let body = http_get(port, "/health");
+    assert!(
+        body.contains("ok"),
+        "GET /health on {port} after the lane whose container was gone started again: {body}"
+    );
     // Stopped, its lease goes and the node is clear.
     cli(&main, &["lane", "stop", "wt"]);
     node_is_clear();
