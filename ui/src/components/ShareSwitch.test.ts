@@ -86,6 +86,21 @@ describe('the share switch', () => {
     expect(el.querySelector('[data-testid="share-state"]')?.textContent).toContain('Waiting for an admin');
   });
 
+  it('keeps what is typed when the same switch is read again', async () => {
+    const el = await mounted(status({ switch: { enabled: true, max_cpus: 4 }, host: { state: 'running', guests: 0 } }));
+    const cpus = el.querySelector<HTMLInputElement>('[data-testid="share-cap-cpus"]')!;
+    cpus.value = '6';
+    cpus.dispatchEvent(new Event('input'));
+    // The poll: the same values in a new object.
+    usePool().share = status({ switch: { enabled: true, max_cpus: 4 }, host: { state: 'running', guests: 0 } });
+    await nextTick();
+    expect(cpus.value).toBe('6');
+    // Saved elsewhere: the form follows.
+    usePool().share = status({ switch: { enabled: true, max_cpus: 2 }, host: { state: 'running', guests: 0 } });
+    await nextTick();
+    expect(cpus.value).toBe('2');
+  });
+
   it('sends the switch with the chosen distribution', async () => {
     const el = await mounted(status({ switch: { enabled: false }, host: { state: 'off', guests: 0, distros: ['Ubuntu-24.04'] } }));
     const fake = t.current!;

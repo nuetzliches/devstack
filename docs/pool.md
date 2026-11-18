@@ -595,7 +595,12 @@ entry with the `nvidia` driver) gets those too: `count: n` the first n,
 may ask for none: the start says to set `[lanes.need] gpus`. A warm lease
 holds none. The node reports each GPU as free, held by a lane, or not
 offered; the pool area shows which. The node needs `nvidia-smi` and the
-NVIDIA Container Toolkit.
+NVIDIA Container Toolkit. A GPU reaches a lane only this way: `runtime:
+nvidia` is refused, and every container of the lane (its own included)
+is told exactly its GPUs, or none, in `NVIDIA_VISIBLE_DEVICES`, whatever
+its image says. Set `accept-nvidia-visible-devices-envvar-when-unprivileged
+= false` in the toolkit's `/etc/nvidia-container-runtime/config.toml` too:
+then the variable alone gives no container a GPU.
 
 The coordinator places by the policy and the node admits by it, and by
 its own `policy.json`. An admin can

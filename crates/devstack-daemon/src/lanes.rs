@@ -498,6 +498,10 @@ struct CarriedLane {
     /// On a node: its lease and ports; absent: it ran on this machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     node: Option<crate::remote::Carried>,
+    /// The GPUs its start asked for (`--gpus`, ADR-0114), for its next
+    /// restart or move.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    gpus: Option<devstack_node::share::GpuNeed>,
 }
 
 const CARRY_FILE: &str = "restart.json";
@@ -1851,6 +1855,7 @@ impl Lanes {
         self.missing.lock().unwrap().remove(name);
         self.profiles.lock().unwrap().remove(name);
         self.workers.lock().unwrap().remove(name);
+        self.gpus.lock().unwrap().remove(name);
         // Logged there; a lane that is forgotten has nobody to tell.
         let _ = self.remove_infra(name);
         // Its kept data on the nodes it ran on goes too (ADR-0038 point 4);
@@ -2647,9 +2652,11 @@ impl Lanes {
             ));
         }
         let t0 = std::time::Instant::now();
-        // A profile holds while the lane runs (ADR-0041).
+        // A profile holds while the lane runs (ADR-0041), and so do the GPUs
+        // its start asked for (ADR-0114); a cold restart took both before.
         self.profiles.lock().unwrap().remove(name);
         self.workers.lock().unwrap().remove(name);
+        self.gpus.lock().unwrap().remove(name);
         // Stopped: a start or move that failed before is no longer news.
         self.forget_failed(Some(name));
         let remote = self.remote.lock().unwrap().remove(name);
@@ -3120,6 +3127,7 @@ impl Lanes {
     fn carry_now(&self) -> Carry {
         let profiles = self.profiles.lock().unwrap().clone();
         let workers = self.workers.lock().unwrap().clone();
+        let gpus = self.gpus.lock().unwrap().clone();
         let mut lanes: Vec<CarriedLane> = self
             .map
             .lock()
@@ -3130,6 +3138,7 @@ impl Lanes {
                 profile: profiles.get(n).cloned(),
                 workers: l.sup.lane_workers(),
                 node: None,
+                gpus: None,
             })
             .collect();
         lanes.extend(
@@ -3143,6 +3152,7 @@ impl Lanes {
                     profile: profiles.get(n).cloned(),
                     workers: workers.contains(n),
                     node: Some(r.carried()),
+                    gpus: gpus.get(n).copied(),
                 }),
         );
         for name in self.pending.lock().unwrap().iter() {
@@ -3213,6 +3223,7 @@ impl Lanes {
                 profile: None,
                 workers: false,
                 node: Some(c),
+                gpus: None,
             });
         }
     }
@@ -3368,6 +3379,9 @@ impl Lanes {
         if l.workers {
             self.workers.lock().unwrap().insert(l.name.clone());
         }
+        if let Some(g) = l.gpus {
+            self.gpus.lock().unwrap().insert(l.name.clone(), g);
+        }
         let lease = c.lease.clone();
         let adopted = crate::remote::RemoteLane::adopt(
             &self.rt,
@@ -3392,6 +3406,7 @@ impl Lanes {
             Err(e) => {
                 self.profiles.lock().unwrap().remove(&l.name);
                 self.workers.lock().unwrap().remove(&l.name);
+                self.gpus.lock().unwrap().remove(&l.name);
                 // Said here: not again as a lane nobody followed.
                 crate::remote::forget_followed(&self.state_dir(&l.name), &lease);
                 self.not_carried(&l.name, "remote", &node, &e);
@@ -4080,6 +4095,25 @@ impl Lanes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_gpus_a_start_asked_for_are_carried_over_a_restart() {
+        let l = CarriedLane {
+            name: "train".into(),
+            profile: None,
+            workers: false,
+            node: None,
+            gpus: Some(devstack_node::share::GpuNeed {
+                count: 1,
+                memory: 12 << 30,
+            }),
+        };
+        let back: CarriedLane = serde_json::from_str(&serde_json::to_string(&l).unwrap()).unwrap();
+        assert_eq!(back.gpus, l.gpus);
+        // A file an earlier daemon wrote has none.
+        let old: CarriedLane = serde_json::from_str(r#"{"name":"x"}"#).unwrap();
+        assert_eq!(old.gpus, None);
+    }
 
     #[test]
     fn only_the_repository_and_its_worktrees_are_its_trees() {
