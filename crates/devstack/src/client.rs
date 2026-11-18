@@ -528,7 +528,7 @@ pub fn ensure_daemon(stack_file: &Path, state_dir: &Path) -> Result<Client> {
         }
     }
     wait_for_stopping(state_dir);
-    std::fs::create_dir_all(state_dir)?;
+    devstack_daemon::ensure_state_dir(state_dir)?;
     // stdout/stderr (a panic, say); the daemon's own diagnostic log is
     // daemon.log. Appended: a second `up` at the same moment must not empty
     // the file the first daemon writes to; started anew once it is large.

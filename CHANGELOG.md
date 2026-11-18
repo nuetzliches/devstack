@@ -9,6 +9,19 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **The state folder `.devstack/` no longer shows up in `git status`.**
+  After the first `devstack up` in a repository whose `.gitignore` did not
+  list it, the folder with the daemon's state, logs, snapshots and
+  artifacts appeared as untracked, and the line had to be added by hand.
+  devstack now writes a `.gitignore` with `*` into the folder when one is
+  missing there (the daemon's start, the CLI before it starts one,
+  `devstack build`; a folder an earlier version made gets it at the next
+  start), as it does for the skill folders; the repository's
+  `.gitignore` is not touched, and a `.gitignore` already in the folder is
+  left as it is. `devstack build` no longer asks to add the line.
+
 ## [0.49.4] - 2026-11-18
 
 Lanes on a node of the pool no longer get stuck: a node lets go of a lane
