@@ -2104,7 +2104,14 @@ async fn placement(
             ..Default::default()
         },
         need_from: None,
-        floor: None,
+        // GPUs it needs, as the lease will say (ADR-0114).
+        floor: q.gpus.filter(|n| *n > 0).map(|count| crate::share::Need {
+            gpus: Some(crate::share::GpuNeed {
+                count,
+                memory: q.gpu_memory.unwrap_or(0),
+            }),
+            ..Default::default()
+        }),
         profile: q.profile.filter(|p| !p.is_empty()),
         devstack: Some(Release::this()),
         warm: false,
@@ -2124,6 +2131,11 @@ struct PlacementQuery {
     disk: Option<u64>,
     #[serde(default)]
     profile: Option<String>,
+    /// GPUs it needs, each with `gpu_memory` bytes (ADR-0114).
+    #[serde(default)]
+    gpus: Option<u32>,
+    #[serde(default)]
+    gpu_memory: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]

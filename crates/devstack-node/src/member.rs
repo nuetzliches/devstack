@@ -578,7 +578,11 @@ impl Local {
                 })
                 .collect::<String>()
         };
-        let profile = profile.map_or(String::new(), |p| format!("&profile={}", enc(p)));
+        let mut profile = profile.map_or(String::new(), |p| format!("&profile={}", enc(p)));
+        // GPUs it needs (ADR-0114): an older coordinator ignores them.
+        if let Some(g) = need.gpus.filter(|g| g.count > 0) {
+            profile.push_str(&format!("&gpus={}&gpu_memory={}", g.count, g.memory));
+        }
         self.get(&format!(
             "/v1/placement?repo={}&lane={}&cpus={}&memory={}&disk={}{profile}",
             enc(repo),

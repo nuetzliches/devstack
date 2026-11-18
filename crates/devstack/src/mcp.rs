@@ -488,6 +488,7 @@ pub fn tools() -> Vec<Value> {
             json!({
                 "timeout_s": { "type": "integer", "minimum": 1, "description": "Give up waiting after this many seconds in all (default 600): starting Docker (up to 180 s) and the daemon (up to 120 s) count too, and are waited for to the end; the stack keeps starting" },
                 "on": { "type": "string", "description": "In a worktree only. Where it runs (ADR-0025): a node of the pool (its name or member id), `pool` for the coordinator to choose (warm first), `<pool>:<node>` in another pool, `local` for this machine. Without it: where this machine starts lanes by default (`devstack pool default-on`; `local` unless the user set it). The worktree's files go to that machine: unless the default says so, ask the user before starting elsewhere; `placement` shows where it could go" },
+                "gpus": { "type": "string", "description": "With `on`: GPUs the lane needs beyond its stack file (ADR-0114), `N` or `N:MEMORY` each (`1`, `1:12G`); the pool places it only where so many are free" },
                 "profile": { "type": "string", "description": "A profile of the stack file (ADR-0041): how it runs for a purpose, e.g. an acceptance run. In the main tree only when the daemon starts; a profile with fresh data there needs `yes`" },
                 "run": { "type": "boolean", "description": "With `profile`: once ready, run the profile's command and return its result" },
                 "yes": { "type": "boolean", "description": "Confirm what the profile asks; ask the user first" },
@@ -583,6 +584,7 @@ pub fn tools() -> Vec<Value> {
             json!({
                 "lane": { "type": "string", "description": "The lane's name or branch (see `lanes`)" },
                 "on": { "type": "string", "description": "Where it runs (ADR-0025): a node of the pool (its name or member id), `pool` for the coordinator to choose (warm first), `<pool>:<node>` in another pool, `local` for this machine. Without it: where this machine starts lanes by default (`devstack pool default-on`; `local` unless the user set it). The worktree's files go to that machine: unless the default says so, ask the user before starting elsewhere; `placement` shows where it could go" },
+                "gpus": { "type": "string", "description": "With `on`: GPUs the lane needs beyond its stack file (ADR-0114), `N` or `N:MEMORY` each (`1`, `1:12G`); the pool places it only where so many are free" },
                 "profile": { "type": "string", "description": "A profile of the stack file (ADR-0041), e.g. for an acceptance run of this lane's commit" },
                 "run": { "type": "boolean", "description": "With `profile`: once ready, run the profile's command in the lane and return its result" },
                 "timeout_s": { "type": "integer", "description": "How long to wait for its services and containers (default 600)" },
@@ -725,6 +727,20 @@ fn name_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
     Ok(v)
 }
 
+/// `gpus` as `--gpus` takes it (ADR-0114): a string `N[:MEMORY]` or a number.
+fn gpus_arg(args: &Value) -> Result<Option<devstack_node::share::GpuNeed>> {
+    let s = match &args["gpus"] {
+        Value::Null => return Ok(None),
+        Value::Number(n) => n.to_string(),
+        Value::String(s) if s.trim().is_empty() => return Ok(None),
+        Value::String(s) => s.clone(),
+        _ => anyhow::bail!("`gpus`: `N` or `N:MEMORY`, e.g. `1:12G`"),
+    };
+    crate::parse_gpus(&s)
+        .map(Some)
+        .map_err(|e| anyhow::anyhow!("`gpus`: {e}"))
+}
+
 fn connect(file: &Path) -> Result<Client> {
     if !file.is_file() {
         anyhow::bail!(
@@ -773,6 +789,7 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             };
             let sd = client::state_dir(file)?;
             let profile = args["profile"].as_str().filter(|p| !p.trim().is_empty());
+            let gpus = gpus_arg(args)?;
             let yes = args["yes"] == true;
             let wanted = client::profile_start(file, profile, args["run"] == true)?;
             let main_profile = wanted.as_ref().filter(|_| client::worktree().is_none());
@@ -832,7 +849,8 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                 && (on.is_some() || c.lane().is_none_or(|l| l == "-"))
             {
                 // A start on a node is followed within the same timeout.
-                let name = c.join_lane(wt, false, false, on, profile, Some(left()), |_| {})?;
+                let name =
+                    c.join_lane(wt, false, false, on, profile, gpus, Some(left()), |_| {})?;
                 // Its node runs another devstack (ADR-0031 point 8): said
                 // with the outcome.
                 if on.is_some()
@@ -961,7 +979,9 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             let on = args["on"].as_str().filter(|o| !o.trim().is_empty());
             let profile = args["profile"].as_str().filter(|p| !p.trim().is_empty());
             let run = args["run"] == true;
-            let started = client::start_lane(file, lane, on, profile, run, Some(timeout), |_| {})?;
+            let gpus = gpus_arg(args)?;
+            let started =
+                client::start_lane(file, lane, on, gpus, profile, run, Some(timeout), |_| {})?;
             let wanted = started.wanted.as_ref();
             let mut notes = format!("lane `{}` started\n", started.name);
             if let Some(w) = &started.warning {

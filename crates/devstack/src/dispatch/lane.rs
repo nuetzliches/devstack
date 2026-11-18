@@ -10,11 +10,12 @@ pub(crate) fn run(file: &Path, action: LaneAction) -> Result<()> {
         LaneAction::Start {
             name,
             on,
+            gpus,
             profile,
             run,
         } => {
             let name = named(file, name, "start", true)?;
-            client::lane_start(file, &name, on.as_deref(), profile.as_deref(), run)
+            client::lane_start(file, &name, on.as_deref(), gpus, profile.as_deref(), run)
         }
         LaneAction::Stop { name } => client::lane_stop(file, &named(file, name, "stop", false)?),
         LaneAction::Reset { name } => client::lane_reset(file, &named(file, name, "reset", false)?),

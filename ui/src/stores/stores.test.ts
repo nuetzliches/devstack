@@ -731,6 +731,17 @@ describe('stack store', () => {
     }
     const ups = () => fake.requests.filter((r) => r.path.endsWith('/feat/v1/up'));
 
+    it('sends the GPUs asked for with a start in the pool, never with one here', async () => {
+      const stack = await shownStack();
+      fake.stream('/hub/stacks/shop/api/v1/events').handlers.onMessage({ type: 'lanes', lanes: [{ ...lane, active: false }] });
+      fake.on('/hub/stacks/shop/api/v1/lanes', (method) => (method === 'POST' ? { status: 409, ok: false, body: { error: 'stop' } } : ok([])));
+      await stack.startLane('feat', 'pool', undefined, 2);
+      await stack.startLane('feat', undefined, undefined, 2);
+      const bodies = fake.requests.filter((r) => r.method === 'POST' && r.path.endsWith('/v1/lanes')).map((r) => r.body as Record<string, unknown>);
+      expect(bodies[0]?.gpus).toEqual({ count: 2 });
+      expect(bodies[1]?.gpus).toBeUndefined();
+    });
+
     it('starts its services once it runs there', async () => {
       const { events, done } = await startOnNode();
       expect(ups()).toHaveLength(0);

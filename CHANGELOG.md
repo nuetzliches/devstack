@@ -11,6 +11,15 @@ and listed with their assets on the
 
 ### Added
 
+- **A start in the pool can ask for GPUs** (ADR-0114). `devstack up --on
+  pool --gpus 1` (`1:12G`: each with 12 GiB or more), `devstack lane start
+  --gpus`, the MCP tools' `gpus` and a choice beside the lane's start in
+  the dashboard raise the lane's need for that start, without a change to
+  the stack file; the coordinator places it only where so many GPUs are
+  free. The dashboard's order of the nodes now counts a lane's GPU need,
+  the stack file's included, and marks a machine without a fitting free
+  GPU.
+
 - **A lane on a node gets the GPUs it asked for, and no other lane does**
   (ADR-0112). A lane with `[lanes.need] gpus` holds that many of the node's
   free GPUs for as long as its lease lives; its container gets exactly

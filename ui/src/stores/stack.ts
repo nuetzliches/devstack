@@ -180,14 +180,14 @@ export const useStack = defineStore('stack', () => {
   }
 
   /** Start a worktree's lane of a stack that does not run: its daemon comes up, the main tree's services stay stopped. */
-  async function startOfflineLane(l: LaneView, on: string | null, profile?: string) {
+  async function startOfflineLane(l: LaneView, on: string | null, profile?: string, gpus?: number) {
     const sid = id.value;
     if (!sid || !beginStart(l, on)) return;
     const unmark = mark('lane-start', l.name);
     const r = await act({
       label: on ? `Start ${l.name} on ${on === 'pool' ? 'the pool' : on}` : `Start ${l.name}`,
       path: paths.laneStart(sid),
-      body: { path: l.path, ...(on ? { on } : {}), ...(profile ? { profile } : {}) },
+      body: { path: l.path, ...(on ? { on } : {}), ...(profile ? { profile } : {}), ...(on && gpus ? { gpus: { count: gpus } } : {}) },
       success: on ? `${l.name} starts on ${on === 'pool' ? 'the pool' : on}; its stack's daemon comes up first` : `${l.name} starts here; its stack's daemon comes up first`,
     });
     // What follows is the start's own to show (`starts`).
@@ -460,7 +460,7 @@ export const useStack = defineStore('stack', () => {
 
   /** Start a lane not started yet (what `devstack up` in its worktree does), then show it. */
   /** `on`: a node of the pool, or `pool` (the coordinator chooses); absent: this machine. */
-  async function startLane(name: string, on?: string, profile?: string) {
+  async function startLane(name: string, on?: string, profile?: string, gpus?: number) {
     const l = lanes.value.find((x) => x.name === name);
     const sid0 = id.value;
     if (!sid0 || !l || !beginStart(l, on ?? null)) return;
@@ -470,7 +470,7 @@ export const useStack = defineStore('stack', () => {
       const res = await act({
         label: on ? `Start lane ${name} on ${on === 'pool' ? 'the pool' : on}` : `Start lane ${name}`,
         path: daemonPath(sid0, v1.lanes),
-        body: { ...(on ? { path: l.path, on } : { path: l.path, infra: true }), ...(profile ? { profile } : {}) },
+        body: { ...(on ? { path: l.path, on } : { path: l.path, infra: true }), ...(profile ? { profile } : {}), ...(on && gpus ? { gpus: { count: gpus } } : {}) },
         success: false,
       });
       if (!res.ok) return;

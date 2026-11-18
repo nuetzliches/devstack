@@ -95,8 +95,8 @@ export const paths = {
   poolSharedConnect: (lease: string) => `/hub/pool/shared/${enc(lease)}/connect`,
   poolSharedDisconnect: (lease: string) => `/hub/pool/shared/${enc(lease)}/disconnect`,
   poolDefaultOn: '/hub/pool/default-on',
-  poolPlacement: (pool: string, repo: string, lane: string, profile?: string) =>
-    `/hub/pool/placement?repo=${enc(repo)}&lane=${enc(lane)}${pool !== 'default' ? `&pool=${enc(pool)}` : ''}${profile ? `&profile=${enc(profile)}` : ''}`,
+  poolPlacement: (pool: string, repo: string, lane: string, profile?: string, gpus?: number) =>
+    `/hub/pool/placement?repo=${enc(repo)}&lane=${enc(lane)}${pool !== 'default' ? `&pool=${enc(pool)}` : ''}${profile ? `&profile=${enc(profile)}` : ''}${gpus ? `&gpus=${gpus}` : ''}`,
   poolShare: '/hub/pool/share',
   poolApprove: (id: string) => `/hub/pool/members/${enc(id)}/approve`,
   poolRemove: (id: string) => `/hub/pool/members/${enc(id)}/remove`,

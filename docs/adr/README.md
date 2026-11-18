@@ -195,3 +195,4 @@ stay.
 | [0110](0110-a-static-service-forwards-paths-to-another-server.md) | A static service forwards paths to another server, as a reverse proxy in front of it would | Accepted (card in the pull request); built; amended 2026-11-17 (connections to the target kept, #556) |
 | [0111](0111-the-dashboards-advisory-gate-counts-what-the-bundle-holds.md) | The dashboard's advisory gate counts what the bundle holds, not npm's runtime tree | Accepted (card in the pull request); built |
 | [0112](0112-a-node-gives-a-lane-the-gpus-it-asked-for.md) | A node gives a lane the GPUs it asked for, and no other lane | Accepted (card in the pull request); built |
+| [0114](0114-a-start-in-the-pool-can-ask-for-gpus.md) | A start in the pool can ask for GPUs, and the dashboard shows where they are | Accepted (card in the pull request); built |

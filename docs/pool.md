@@ -178,6 +178,7 @@ In a worktree:
 ```sh
 devstack up --on build-server     # that node
 devstack up --on pool             # the coordinator picks: warm first, then free capacity (below)
+devstack up --on pool --gpus 1    # only a node with a free GPU (`1:12G`: with 12 GiB or more), ADR-0114
 ```
 
 A lane starts on this machine unless told otherwise. A machine may start

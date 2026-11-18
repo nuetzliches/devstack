@@ -590,6 +590,26 @@ pub fn floor_of(n: &devstack_config::model::Need) -> Option<devstack_node::share
     })
 }
 
+/// `floor` raised to the GPUs a start asked for (`--gpus`, ADR-0114): the
+/// more GPUs and the more memory each of the two; never lowered.
+pub fn with_gpus(
+    floor: Option<devstack_node::share::Need>,
+    gpus: Option<devstack_node::share::GpuNeed>,
+) -> Option<devstack_node::share::Need> {
+    let Some(g) = gpus.filter(|g| g.count > 0) else {
+        return floor;
+    };
+    let mut n = floor.unwrap_or_default();
+    n.gpus = Some(match n.gpus {
+        Some(d) => devstack_node::share::GpuNeed {
+            count: d.count.max(g.count),
+            memory: d.memory.max(g.memory),
+        },
+        None => g,
+    });
+    Some(n)
+}
+
 /// A lane leased on its node and admitted there, not yet synced or started
 /// ([`RemoteLane::lease`]). Dropped without [`RemoteLane::launch`], the lease
 /// expires on the node by itself.
@@ -2442,6 +2462,26 @@ pub fn readiness(view: &serde_json::Value, expected: &[String]) -> Option<Result
 #[cfg(test)]
 mod tests {
     use super::{NodeRef, Release, RemoteState, release_warning, tunnel_error, version};
+
+    #[test]
+    fn gpus_asked_for_at_a_start_raise_the_floor_and_never_lower_it() {
+        use devstack_node::share::{GpuNeed, Need};
+        let g = |count, memory| Some(GpuNeed { count, memory });
+        assert_eq!(super::with_gpus(None, None), None);
+        assert_eq!(super::with_gpus(None, g(0, 0)), None);
+        let raised = super::with_gpus(None, g(1, 12 << 30)).unwrap();
+        assert_eq!(raised.gpus, g(1, 12 << 30));
+        assert_eq!(raised.cpus, 0.0);
+        let declared = Need {
+            cpus: 2.0,
+            gpus: g(2, 8 << 30),
+            ..Need::default()
+        };
+        let n = super::with_gpus(Some(declared), g(1, 16 << 30)).unwrap();
+        assert_eq!(n.gpus, g(2, 16 << 30));
+        assert_eq!(n.cpus, 2.0);
+        assert_eq!(super::with_gpus(Some(declared), None), Some(declared));
+    }
 
     #[test]
     fn the_note_of_a_followed_lane_goes_only_with_its_own_lease() {

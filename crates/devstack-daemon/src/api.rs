@@ -759,6 +759,10 @@ struct LaneStart {
     /// Run it with this profile of the stack file (ADR-0041).
     #[serde(default)]
     profile: Option<String>,
+    /// With `on`: GPUs it needs beyond its stack file (`--gpus`, ADR-0114),
+    /// `{count, memory?}`.
+    #[serde(default)]
+    gpus: Option<devstack_node::share::GpuNeed>,
 }
 
 /// `POST /v1/lanes` with `{"path", "infra"?}`: start the lane of that
@@ -797,6 +801,7 @@ async fn lanes_start(State(s): State<AppState>, Json(body): Json<LaneStart>) -> 
                 need,
                 profile,
                 body.workers,
+                body.gpus,
             )? {
                 crate::lanes::RemoteStart::Running(name) => {
                     view(&name).map(|v| (StatusCode::CREATED, v))
