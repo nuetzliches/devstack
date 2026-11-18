@@ -9,6 +9,16 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.49.4] - 2026-11-18
+
+Lanes on a node of the pool no longer get stuck: a node lets go of a lane
+whose container is gone, and a lane whose start there was cut off by the
+daemon's end starts again. A service without `watch` runs the tree's code
+after a restart. Fixed: a lane started on a node waits for a job that is
+still running, and a request on a kept connection the service just closed
+goes out again instead of failing with 502. Takes a node agent of this
+release for the node's part.
+
 ### Fixed
 
 - **A service without `watch` runs the tree's code after a restart** (#562).
@@ -3627,7 +3637,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.49.3...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.49.4...HEAD
+[0.49.4]: https://github.com/nuetzliches/devstack/compare/v0.49.3...v0.49.4
 [0.49.3]: https://github.com/nuetzliches/devstack/compare/v0.49.2...v0.49.3
 [0.49.2]: https://github.com/nuetzliches/devstack/compare/v0.49.1...v0.49.2
 [0.49.1]: https://github.com/nuetzliches/devstack/compare/v0.48.0...v0.49.1
