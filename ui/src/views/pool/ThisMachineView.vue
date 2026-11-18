@@ -13,6 +13,7 @@ import { useHub } from '@/stores/hub';
 import Icon from '@/components/icons/Icon.vue';
 import PoolCapacityChart from '@/components/PoolCapacityChart.vue';
 import LocalLoad from '@/components/LocalLoad.vue';
+import ShareSwitch from '@/components/ShareSwitch.vue';
 import PoolNav from './PoolNav.vue';
 import './pool.css';
 
@@ -79,12 +80,10 @@ const chartId = computed(() => inPools.value.find((x) => x.pool === chartPool.va
                   <span v-if="share.error" class="warn-text">{{ share.error }}</span>
                   <template v-else-if="share.reported_at">to the coordinator, last {{ ago(share.reported_at, now) }}</template>
                   <span v-else class="faint">nothing: it is no approved member of a pool</span>
-                  <span v-if="share.agent" class="faint"> · a node agent here reports the machine</span>
+                  <span v-if="share.agent || share.host?.state === 'running' || share.host?.state === 'draining'" class="faint">
+                    · a node agent here reports the machine</span
+                  >
                 </dd>
-                <template v-if="share.unavailable">
-                  <dt>Offers</dt>
-                  <dd class="muted small">{{ share.unavailable }}</dd>
-                </template>
               </template>
               <template v-if="kept">
                 <dt>Keeps</dt>
@@ -96,6 +95,15 @@ const chartId = computed(() => inPools.value.find((x) => x.pool === chartPool.va
             </dl>
             <div class="local-load"><LocalLoad /></div>
           </div>
+        </section>
+
+        <section v-if="share?.member" class="card" data-testid="pool-share">
+          <header class="card-header">
+            <Icon name="power" :size="18" />
+            <h2>Shares</h2>
+            <span v-if="joined.length > 1" class="faint small">with the pool {{ pool.current }}</span>
+          </header>
+          <div class="card-body"><ShareSwitch /></div>
         </section>
 
       </div>

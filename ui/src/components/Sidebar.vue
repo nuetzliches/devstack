@@ -41,6 +41,7 @@ import { useStack } from '@/stores/stack';
 import { SHIFT_SKIP_HINT, useUi } from '@/stores/ui';
 import AddStackDialog from './AddStackDialog.vue';
 import GuestTile from './GuestTile.vue';
+import ShareSwitch from './ShareSwitch.vue';
 import Icon from './icons/Icon.vue';
 import ShiftHint from './ShiftHint.vue';
 import StackOrderMenu from './StackOrderMenu.vue';
@@ -673,6 +674,7 @@ function toggleFavourite(s: StackEntry) {
     </template>
     <div class="pool-block">
       <GuestTile />
+      <ShareSwitch compact />
       <button
         type="button"
         class="item pool-item"

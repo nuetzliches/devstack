@@ -929,8 +929,31 @@ export type ShareStatus = {
   coordinator?: PoolRelease;
   /** The machine's GPUs as measured; absent without one, or from an older hub. */
   gpus?: { name: string; memory: number; memory_used: number; load: number; offered: boolean }[];
-  /** Why this machine offers the pool nothing (a node agent runs lanes; #171, on Windows #168). */
-  unavailable: string;
+  /** The share switch (ADR-0113); absent from an older hub. */
+  switch?: ShareSwitch;
+  /** The node agent the switch runs; absent from an older hub. */
+  host?: ShareHost;
+};
+/** The share switch of one pool: `PUT /hub/pool/share`. `distro` is the WSL distribution on Windows. */
+export type ShareSwitch = { enabled: boolean; max_cpus?: number; max_memory?: number; distro?: string; port?: number };
+/** One thing the node agent needs, and whether this machine has it; `optional`: it starts without. */
+export type ShareCheck = { name: string; ok: boolean; detail: string; fix?: string; optional?: boolean };
+/** The node agent the share switch runs, as the hub last saw it. */
+export type ShareHost = {
+  state: 'off' | 'unsupported' | 'blocked' | 'starting' | 'running' | 'draining' | 'failed' | 'foreign';
+  detail?: string;
+  api?: string;
+  /** An admin granted this machine to run lanes; absent when not asked. */
+  granted?: boolean;
+  /** Other members' lanes running here. */
+  guests: number;
+  checks?: ShareCheck[];
+  /** Windows: the WSL distributions there are. */
+  distros?: string[];
+  /** For a coding agent: how to set up what the checks miss. */
+  prompt?: string;
+  /** The agent's last lines of output. */
+  output?: string[];
 };
 
 /** A pool this machine belongs to or asked to join (ADR-0034), `GET /hub/pools`. */

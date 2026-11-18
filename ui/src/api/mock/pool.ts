@@ -3,7 +3,7 @@
 // no pool, `?mock=poolmember` one without the admin role. A provisioner made
 // two nodes (ADR-0051): one runs a lane, one waits for an admin to confirm it;
 // a third machine's enrolment token was used twice (an alarm).
-import type { PoolAuditEntry, PoolLease, PoolMember, PoolNode, PoolOverview, PoolRole, Provisioning, ShareStatus } from '../types';
+import type { PoolAuditEntry, PoolLease, PoolMember, PoolNode, PoolOverview, PoolRole, Provisioning, ShareHost, ShareStatus, ShareSwitch } from '../types';
 
 type R = { status: number; body: unknown };
 
@@ -18,6 +18,9 @@ export class MockPool {
   /** This machine keeps its lanes off provisioned nodes. */
   noProvisioned = false;
   private me = 'a1b2c3d4e5f60718';
+  /** The share switch (ADR-0113), as on Windows: `Ubuntu-24.04` is set up, `Ubuntu` is Docker Desktop's. */
+  switch: ShareSwitch = { enabled: false };
+
   /** `GET /hub/pool/share`: a machine with 16 cores and 64 GiB, about a third busy. */
   share(): ShareStatus {
     const free = { cpus: 10.4 + Math.random(), memory: 38 * 2 ** 30 };
@@ -27,8 +30,59 @@ export class MockPool {
       member: this.joined,
       reported_at: this.joined ? Date.now() - 4000 : null,
       error: null,
-      unavailable: "A machine runs other members' lanes with a node agent (`devstack node agent`, granted by an admin); the dashboard does not start one yet (#171, on Windows #168).",
+      switch: this.switch,
+      host: this.host(),
     };
+  }
+
+  private host(): ShareHost {
+    const distros = ['Ubuntu', 'Ubuntu-24.04'];
+    const sw = this.switch;
+    if (!sw.enabled) return { state: 'off', guests: 0, distros };
+    if (!sw.distro)
+      return {
+        state: 'blocked',
+        detail: 'Choose the WSL distribution the node agent runs in (one with Docker Engine of its own, not Docker Desktop\'s).',
+        guests: 0,
+        distros,
+        prompt: 'Set up a WSL2 distribution on this Windows machine so that devstack can run its node agent there…',
+      };
+    if (sw.distro === 'Ubuntu')
+      return {
+        state: 'blocked',
+        detail: 'The WSL distribution `Ubuntu` lacks what the node agent needs: see the checks.',
+        guests: 0,
+        distros,
+        checks: [
+          { name: 'distribution', ok: true, detail: '`Ubuntu` is there' },
+          { name: 'networking', ok: true, detail: 'networking mode: mirrored' },
+          { name: 'docker', ok: false, detail: '`docker` talks to Docker Desktop', fix: "Turn Docker Desktop's WSL integration off for `Ubuntu`, then in it as root: curl -fsSL https://get.docker.com | sh" },
+          { name: 'devstack', ok: false, detail: 'devstack is not installed in the distribution', fix: 'In `Ubuntu` as root: curl -fsSL https://github.com/nuetzliches/devstack/releases/latest/download/install.sh | sh -s -- --version 0.50.0' },
+          { name: 'gpu', ok: true, detail: '1 NVIDIA GPU(s), the container toolkit is set up', optional: true },
+          { name: 'firewall', ok: true, detail: 'Hyper-V firewall rule `devstack-node` is there', optional: true },
+        ],
+        prompt: 'Set up a WSL2 distribution on this Windows machine so that devstack can run its node agent there…',
+      };
+    return {
+      state: 'running',
+      api: 'https://10.0.0.21:4261',
+      granted: true,
+      guests: 0,
+      distros,
+      checks: [
+        { name: 'distribution', ok: true, detail: `\`${sw.distro}\` is there` },
+        { name: 'networking', ok: true, detail: 'networking mode: mirrored' },
+        { name: 'docker', ok: true, detail: 'Docker Engine: Ubuntu 24.04.5 LTS' },
+        { name: 'devstack', ok: true, detail: 'devstack 0.50.0 (this machine: 0.50.0)' },
+        { name: 'gpu', ok: true, detail: '1 NVIDIA GPU(s), the container toolkit is set up', optional: true },
+        { name: 'firewall', ok: true, detail: 'Hyper-V firewall rule `devstack-node` is there', optional: true },
+      ],
+    };
+  }
+
+  setShare(next: ShareSwitch): ShareStatus {
+    this.switch = next;
+    return this.share();
   }
 
   constructor(q: string) {

@@ -13,7 +13,7 @@
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
 //   ?mock=nopool     this machine is in no pool; ?mock=poolmember: a member, not an admin
 //   ?mock=hubdown    the hub is unreachable (toggle at runtime: window.devstackMock.hubDown(false))
-import type { AttentionItem, StackGlance, DockerEngine, Guest, HubEvent, PoolFeed, PoolNode, PoolSkillsAdmin, PoolSkillsState, LaneView, McpUpstream, NotifySettings, UpstreamFilter, PoolUpstream, LogStreamEvent, RunLogEvent, StackEvent, StackEntry, StackView, PoolPublicLinksAdmin, PublicLinksState } from '../types';
+import type { AttentionItem, StackGlance, DockerEngine, Guest, HubEvent, PoolFeed, PoolNode, PoolSkillsAdmin, PoolSkillsState, LaneView, McpUpstream, NotifySettings, UpstreamFilter, PoolUpstream, LogStreamEvent, RunLogEvent, StackEvent, StackEntry, StackView, PoolPublicLinksAdmin, PublicLinksState, ShareSwitch } from '../types';
 import type { Response, StreamHandlers, Subscription, Transport } from '../transport';
 import { Unreachable } from '../transport';
 import { persist } from '@/lib/persist';
@@ -827,6 +827,7 @@ export class MockTransport implements Transport {
     }
     if (p === '/hub/pool' && method === 'GET') return json(200, hub.pool.overview());
     if (p === '/hub/pool/share' && method === 'GET') return json(200, hub.pool.share());
+    if (p === '/hub/pool/share' && method === 'PUT') return json(200, hub.pool.setShare(body as unknown as ShareSwitch));
     const pn = /^\/hub\/pool\/nodes\/([^/]+)\/(pause|resume)$/.exec(p);
     if (pn && method === 'POST') {
       const r = hub.pool.pause(decodeURIComponent(pn[1]), pn[2] === 'pause');

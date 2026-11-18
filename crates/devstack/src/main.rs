@@ -717,6 +717,15 @@ enum NodeAction {
         /// The pool it runs lanes for (ADR-0034); one agent per pool.
         #[arg(long, default_value = "default")]
         pool: String,
+        /// The membership's directory, instead of this machine's for
+        /// `--pool`: the hub on Windows runs the agent in a WSL distribution
+        /// with a copy of the machine's membership there (ADR-0113).
+        #[arg(long)]
+        membership: Option<PathBuf>,
+        /// Take no new lanes; those that run keep running (ADR-0113 point 5:
+        /// the share switch turned off while guest lanes run).
+        #[arg(long)]
+        no_new_lanes: bool,
         /// Print a systemd unit that runs this agent with these arguments
         /// and starts it again whenever it ends (an update an admin ordered
         /// included, ADR-0039), instead of running it.

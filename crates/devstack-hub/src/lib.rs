@@ -45,6 +45,7 @@ mod lastcommit;
 pub mod mcp;
 mod mcpclient;
 pub mod mcpscope;
+mod nodehost;
 mod notice;
 mod notify;
 mod open;
@@ -691,7 +692,7 @@ fn router(state: AppState) -> axum::Router {
             axum::routing::put(publiclinks::put).delete(publiclinks::delete),
         )
         .route("/hub/pool", get(pool::overview))
-        .route("/hub/pool/share", get(share::get))
+        .route("/hub/pool/share", get(share::get).put(share::put))
         .route("/hub/pool/shared", get(shared::list))
         .route("/hub/pool/shared/{lease}/open", post(shared::open))
         .route("/hub/pool/shared/{lease}/connect", post(shared::connect))

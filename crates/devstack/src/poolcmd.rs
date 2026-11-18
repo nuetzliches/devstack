@@ -895,13 +895,20 @@ fn pool_one(pool: &str, local: &Local) -> Result<()> {
     Ok(())
 }
 
+/// What a node agent offers: its caps, and whether it takes new lanes.
+pub struct AgentShare {
+    pub max_cpus: Option<f64>,
+    pub max_memory_gib: Option<f64>,
+    pub new_lanes: bool,
+}
+
 pub fn agent(
     pool: &str,
     listen: &str,
     api: Option<String>,
-    max_cpus: Option<f64>,
-    max_memory_gib: Option<f64>,
+    offer: AgentShare,
     dedicated: bool,
+    membership: Option<PathBuf>,
 ) -> Result<()> {
     let addr: std::net::SocketAddr = listen.parse().map_err(|e| {
         anyhow!("--listen {listen}: {e} (an address and a port, e.g. 10.0.0.5:4261)")
@@ -914,11 +921,16 @@ pub fn agent(
     }
     let api = api.unwrap_or_else(|| format!("https://{addr}"));
     let share = devstack_node::share::Settings {
-        enabled: true,
-        max_cpus,
-        max_memory: max_memory_gib.map(|g| (g * f64::from(1u32 << 30)) as u64),
+        enabled: offer.new_lanes,
+        max_cpus: offer.max_cpus,
+        max_memory: offer
+            .max_memory_gib
+            .map(|g| (g * f64::from(1u32 << 30)) as u64),
     };
-    let dir = member_dir(pool)?;
+    let dir = match membership {
+        Some(d) => d,
+        None => member_dir(pool)?,
+    };
     let m = Local::new(&dir)
         .membership()?
         .filter(|m| m.state == State::Approved)
