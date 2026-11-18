@@ -142,6 +142,97 @@ pub fn forget_followed(state: &Path, lease: &str) {
     }
 }
 
+/// In a lane's state from its lease's admission on a node until the lane is
+/// followed ([`FOLLOWED`]) or its start failed and released the lease
+/// (#563): a daemon that ends meanwhile leaves it, and the next one releases
+/// that lease ([`release_unlaunched`]). Without it the node kept the lease
+/// for its grace and refused the lane's next start as running there already.
+const LEASING: &str = "leasing.json";
+
+/// A lease admitted on a node for a start not yet over.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Unlaunched {
+    pub pool: String,
+    pub node: NodeRef,
+    pub lease: String,
+}
+
+fn unlaunched(state: &Path) -> Option<Unlaunched> {
+    std::fs::read(state.join(LEASING))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+}
+
+fn note_unlaunched(state: &Path, u: &Unlaunched) {
+    let _ = std::fs::create_dir_all(state);
+    let tmp = state.join(format!("{LEASING}.tmp"));
+    let _ = serde_json::to_vec_pretty(u)
+        .map_err(std::io::Error::other)
+        .and_then(|b| std::fs::write(&tmp, b))
+        .and_then(|()| std::fs::rename(&tmp, state.join(LEASING)));
+}
+
+/// Remove the note of lease `lease` in `state`; a note of another lease
+/// stays.
+fn forget_unlaunched(state: &Path, lease: &str) {
+    if unlaunched(state).is_some_and(|u| u.lease == lease) {
+        let _ = std::fs::remove_file(state.join(LEASING));
+    }
+}
+
+/// Release the lease a start of the lane `name`, whose state is `state`,
+/// left admitted on its node, when a daemon ended before the start was over
+/// (#563); said in the log. `None`: there is none (or the lane is followed
+/// on it); else the lease, or why it could not be released (the note stays
+/// for the next try). Blocking.
+pub fn release_unlaunched(
+    rt: &tokio::runtime::Handle,
+    name: &str,
+    state: &Path,
+) -> Option<Result<Unlaunched, String>> {
+    let r = release_unlaunched_quietly(rt, state)?;
+    match &r {
+        Ok(u) => crate::diag::info(
+            "remote_lane_start_released",
+            serde_json::json!({ "lane": name, "node": u.node.name, "lease": u.lease }),
+        ),
+        Err(e) => crate::diag::warn(
+            "remote_lane_start_not_released",
+            serde_json::json!({ "lane": name, "error": e }),
+        ),
+    }
+    Some(r)
+}
+
+fn release_unlaunched_quietly(
+    rt: &tokio::runtime::Handle,
+    state: &Path,
+) -> Option<Result<Unlaunched, String>> {
+    let u = unlaunched(state)?;
+    // Followed after all: it ended between the two notes.
+    if followed(state).is_some_and(|c| c.lease == u.lease) {
+        forget_unlaunched(state, &u.lease);
+        return None;
+    }
+    let released = NodeClient::new(&local_member(&u.pool), u.node.clone())
+        .map_err(|e| e.to_string())
+        .and_then(|client| match rt.block_on(client.release(&u.lease)) {
+            // Over already (it expired, or an admin ended it).
+            Ok(()) | Err(devstack_node::nodeclient::ClientError::Status(404, _)) => Ok(()),
+            Err(e) => Err(e.to_string()),
+        });
+    Some(match released {
+        Ok(()) => {
+            forget_unlaunched(state, &u.lease);
+            Ok(u)
+        }
+        Err(e) => Err(format!(
+            "releasing its lease {} on {}: {e}",
+            u.lease, u.node.name
+        )),
+    })
+}
+
 /// devstack's per-user state, where this machine's memberships live.
 pub fn state_dir() -> PathBuf {
     crate::token::token_path()
@@ -635,6 +726,13 @@ impl RemoteLane {
             spec.scratch,
             spec.files,
         )?;
+        // What a start a daemon before this one left half done holds on its
+        // node goes first (#563): there it would refuse this start as running
+        // already. A warm lease is no lane's.
+        let state = spec.scratch.parent().filter(|_| !spec.warm);
+        if let Some(state) = state {
+            release_unlaunched(rt, spec.name, state);
+        }
         let request = LeaseRequest {
             node,
             repo: spec.repo.into(),
@@ -741,6 +839,17 @@ impl RemoteLane {
                 return Err(format!("lane `{}` on {}: {e}", spec.name, offer.node.name));
             }
         };
+        // Noted until the lane is followed or released (#563).
+        if let Some(state) = state {
+            note_unlaunched(
+                state,
+                &Unlaunched {
+                    pool: pool.clone(),
+                    node: offer.node.clone(),
+                    lease: offer.id.clone(),
+                },
+            );
+        }
         // It starts from what it kept there (ADR-0038): said, with its age,
         // since its data may be from another branch.
         if let Some(used) = admitted.kept {
@@ -1004,10 +1113,14 @@ impl RemoteLane {
                 .await
         });
         renewing.abort();
+        let state = scratch.parent();
         let started = match started {
             Ok(st) => st,
             Err(e) => {
                 let _ = rt.block_on(client.release(&offer.id));
+                if let Some(state) = state {
+                    forget_unlaunched(state, &offer.id);
+                }
                 return Err(format!("lane `{name}` on {}: {e}", offer.node.name));
             }
         };
@@ -1046,6 +1159,9 @@ impl RemoteLane {
             lane.trouble("sync", Some(format!("sync: {e}")));
         }
         lane.take_on(rt, sharing, forward, scratch);
+        if let Some(state) = state {
+            forget_unlaunched(state, &lane.lease);
+        }
         Ok(lane)
     }
 
@@ -2284,6 +2400,58 @@ mod tests {
         assert_eq!(read.node.name, "build-box");
         super::forget_followed(state.path(), "new");
         assert!(super::followed(state.path()).is_none());
+    }
+
+    #[test]
+    fn a_start_cut_off_leaves_its_lease_noted_until_followed_or_released() {
+        let state = tempfile::tempdir().unwrap();
+        let node = NodeRef {
+            id: "n".into(),
+            name: "build-box".into(),
+            api: "https://x:1".into(),
+            devstack: None,
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        assert!(super::release_unlaunched(rt.handle(), "wt", state.path()).is_none());
+        super::note_unlaunched(
+            state.path(),
+            &super::Unlaunched {
+                pool: "default".into(),
+                node: node.clone(),
+                lease: "l1".into(),
+            },
+        );
+        // Another lease's end leaves the note.
+        super::forget_unlaunched(state.path(), "l0");
+        assert_eq!(super::unlaunched(state.path()).expect("noted").lease, "l1");
+        // The lane was followed on it before the daemon ended: nothing to
+        // release, and the note goes.
+        let carried = super::Carried {
+            pool: "default".into(),
+            node,
+            lease: "l1".into(),
+            ports: Vec::new(),
+            udp_ports: Vec::new(),
+            coordinator: None,
+        };
+        std::fs::write(
+            state.path().join(super::FOLLOWED),
+            serde_json::to_vec(&carried).unwrap(),
+        )
+        .unwrap();
+        assert!(super::release_unlaunched(rt.handle(), "wt", state.path()).is_none());
+        assert!(super::unlaunched(state.path()).is_none());
+        // Started and followed: the note went with the start.
+        super::note_unlaunched(
+            state.path(),
+            &super::Unlaunched {
+                pool: "default".into(),
+                node: carried.node.clone(),
+                lease: "l2".into(),
+            },
+        );
+        super::forget_unlaunched(state.path(), "l2");
+        assert!(!state.path().join(super::LEASING).exists());
     }
 
     #[test]

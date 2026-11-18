@@ -29,6 +29,15 @@ and listed with their assets on the
   (ADR-0065), whose daemon ended while its `prepare` ran, lives at most
   3 minutes without a renewal instead of the grace. Takes a node agent of
   this release.
+- **A lane whose start on a node was cut off starts again** (#563). When
+  this machine's daemon ended while a lane started on a node of the pool
+  (after the node admitted its lease, before the lane ran), nothing here
+  remembered that lease: `devstack lane stop` said the lane was not
+  started, and every `devstack up` met the node's "runs here already"
+  until the lease's grace ran out, up to an hour. The daemon now notes the
+  lease as soon as the node admits it; the next daemon releases it when it
+  starts, and so does the lane's next start, so `devstack up` runs it
+  again.
 
 ## [0.49.3] - 2026-11-17
 

@@ -128,7 +128,10 @@ why. A member that only shares from the dashboard is no node.
   machine restarts, sleeps or loses the network, and its daemon follows it
   again when it starts; for as long, a requester that never comes back
   holds the lane's CPU, memory and disk on the node. Ending the lease in
-  the pool area frees them at once. Two leases do not wait for their
+  the pool area frees them at once. A lane whose start there was cut off
+  (its daemon ended before the start was over) is not followed: the next
+  daemon releases its lease (#563), and `devstack up` starts it again.
+  Two leases do not wait for their
   grace (#565): one whose lane container no longer runs (stopped by hand,
   exited, removed) ends within half a minute, as an expired one does, so
   the lane can start again at once; a warm lease lives at most 3 minutes
