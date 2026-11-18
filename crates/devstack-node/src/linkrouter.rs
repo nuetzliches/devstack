@@ -57,7 +57,7 @@ pub struct Way {
 pub type Dial = Arc<dyn Fn(String) -> Result<Way, (u16, String)> + Send + Sync>;
 
 /// Idle connections to services, by [`Way::key`].
-type Kept = Arc<crate::connpool::Pool<String, Incoming>>;
+type Kept = Arc<crate::connpool::Pool<String, Body>>;
 
 // ------------------------------------------------------- the connector
 
@@ -324,7 +324,7 @@ pub fn local(port: u16, tls: bool) -> Way {
 async fn connect(
     open: Open,
     tls: bool,
-) -> Result<hyper::client::conn::http1::SendRequest<Incoming>, String> {
+) -> Result<hyper::client::conn::http1::SendRequest<Body>, String> {
     let io = open.await.map_err(|(_, why)| why)?;
     let io: Box<dyn Io> = if tls {
         let name =
@@ -374,27 +374,12 @@ async fn forward(
             header::HeaderValue::from_static("https"),
         );
     }
-    // A kept connection the service closed while it was idle hands the
-    // request back unsent: it goes out on a new one.
+    // A kept connection the service closed while it was idle: the request
+    // goes out once more on a new one where that is safe (`connpool`).
     let Way { key, tls, open, .. } = way;
-    let (sender, mut resp) = match kept.kept(&key) {
-        Some(mut s) => match s.try_send_request(req).await {
-            Ok(r) => (s, r),
-            Err(mut e) => match e.take_message() {
-                Some(back) => {
-                    let mut s = connect(open, tls).await?;
-                    let r = s.send_request(back).await.map_err(|e| e.to_string())?;
-                    (s, r)
-                }
-                None => return Err(e.into_error().to_string()),
-            },
-        },
-        None => {
-            let mut s = connect(open, tls).await?;
-            let r = s.send_request(req).await.map_err(|e| e.to_string())?;
-            (s, r)
-        }
-    };
+    let (sender, mut resp) = kept
+        .send(&key, req.map(BodyExt::boxed), || connect(open, tls))
+        .await?;
     let upgraded = resp.status() == StatusCode::SWITCHING_PROTOCOLS && client_upgrade.is_some();
     strip_hop_by_hop(resp.headers_mut(), upgraded);
     if upgraded && let Some(client) = client_upgrade {

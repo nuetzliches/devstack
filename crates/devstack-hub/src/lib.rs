@@ -3722,6 +3722,15 @@ async fn daemon_send(
                     req = r;
                     continue;
                 }
+                // Or it closed it as the request went out: one that is safe
+                // to repeat goes out on a new one, too (`connpool`).
+                if reused
+                    && devstack_node::connpool::closed_unanswered(e.error())
+                    && let Some(r) = copy
+                {
+                    req = r;
+                    continue;
+                }
                 let then = resolve();
                 let sent = unsent.is_none();
                 let error = e.into_error().to_string();
