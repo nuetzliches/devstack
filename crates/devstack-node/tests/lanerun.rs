@@ -83,6 +83,7 @@ volumes:
         workers: false,
         memory_limit: Some(256 << 20),
         cpu_limit: None,
+        gpus: Vec::new(),
         network: Network::Lan,
         secret: "s".into(),
         store: None,

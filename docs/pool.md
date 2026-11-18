@@ -338,7 +338,7 @@ devstack promote --lane main            # back to the main working tree
 What a lane's Compose files may ask of a node is less than on your machine:
 the node runs them on its own Docker engine. It refuses, naming each, a
 service that is privileged, adds capabilities or devices (GPUs with the
-`nvidia` driver excepted), shares a namespace of the host (`pid`, `ipc`,
+`nvidia` driver excepted, limited to the lane's: see GPUs below), shares a namespace of the host (`pid`, `ipc`,
 `network_mode: host`, ...), sets `userns_mode`, `cgroup_parent`,
 `security_opt`, `sysctls`, `oom_kill_disable` or a negative `oom_score_adj`,
 uses `use_api_socket` or a `provider`, logs through a driver other than
@@ -535,7 +535,23 @@ Compose `build`) are built without a network: `RUN` steps that download
 need a `lan` node, or a prebuilt `[lanes] image`.
 
 A lane is taken to need at least 0.25 CPU and 256 MiB, whatever it asks
-for, and its GPUs are GPUs the node has. The coordinator places by the policy and the node admits by it, and by
+for, and its GPUs are GPUs the node has free.
+
+**GPUs** ([ADR-0112](adr/0112-a-node-gives-a-lane-the-gpus-it-asked-for.md)):
+a lane that asks for GPUs (`[lanes.need] gpus`) holds that many of the
+node's, the first free ones with the memory it asks for, for as long as its
+lease lives (in the node's `leases.json`: a restart of the agent keeps it);
+no other lane gets them. Its container gets exactly those (`docker run
+--gpus device=…`), so its native services see them, and a Compose service
+that asks for a GPU (`gpus`, or a `deploy.resources.reservations.devices`
+entry with the `nvidia` driver) gets those too: `count: n` the first n,
+`all` every one, `device_ids` only ids among them. A lane that holds no GPU
+may ask for none: the start says to set `[lanes.need] gpus`. A warm lease
+holds none. The node reports each GPU as free, held by a lane, or not
+offered; the pool area shows which. The node needs `nvidia-smi` and the
+NVIDIA Container Toolkit.
+
+The coordinator places by the policy and the node admits by it, and by
 its own `policy.json`. An admin can
 also pause a node (no new lanes) and end a lease; every change is in the
 admin log.

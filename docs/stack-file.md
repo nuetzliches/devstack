@@ -894,7 +894,10 @@ stop the lane first: see `prepare`). Ignored files are not in the snapshot:
   this machine estimates from the main tree; `need` raises either to what it
   says, it never lowers them. Every key is optional; `cpus` is above 0, a
   `gpus` table asks for `count` GPUs (1 if not given) with at least
-  `memory` each. A lane on this machine checks its disk against what the
+  `memory` each. On a node the lane holds them alone, its container gets
+  them, and its Compose services may ask for no other GPU: a service that
+  asks for one in a lane without `gpus` is refused there
+  ([ADR-0112](adr/0112-a-node-gives-a-lane-the-gpus-it-asked-for.md)). A lane on this machine checks its disk against what the
   main tree's snapshot, artifacts, logs and volumes take, not against
   `need`: it shares the images, and its worktree is there already. A file
   with `need` should say `requires = "0.17.0"` in `[stack]`.

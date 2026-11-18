@@ -77,6 +77,9 @@ pub struct LaneRun {
     pub memory_limit: Option<u64>,
     /// Their CPU limit, cores.
     pub cpu_limit: Option<f64>,
+    /// The GPUs its lease holds (vendor ids, ADR-0112): its container gets
+    /// them, and so do its Compose services that ask for a GPU.
+    pub gpus: Vec<String>,
     /// What its networks reach beyond the lane (ADR-0033 point 5).
     pub network: Network,
     /// A secret of this node, so names of images built here cannot be
@@ -96,6 +99,13 @@ pub const STORE_MOUNT: &str = "/store";
 /// Where a lane writes what it adds to the store, in its slot: its agent
 /// takes it in ([`LaneRun::outbox`]).
 const STORE_OUTBOX: &str = ".devstack/store-out";
+
+/// `docker run --gpus` for exactly these GPUs (ADR-0112 point 1); `None`
+/// for none. Docker reads the value as CSV: the quotes keep the ids' commas
+/// inside the one `device` field.
+fn gpus_arg(ids: &[String]) -> Option<String> {
+    (!ids.is_empty()).then(|| format!("\"device={}\"", ids.join(",")))
+}
 
 /// Where the lane's daemon is reached, and its token.
 #[derive(Debug, Clone, Serialize)]
@@ -808,6 +818,9 @@ impl LaneRun {
                 &mirror.services,
             )
             .map_err(RunError::Config)?;
+            let mut raw = raw;
+            crate::confine::pin_gpus(&mut raw, &model, &mirror.services, &self.gpus)
+                .map_err(|e| RunError::Config(format!("compose group `{name}`: {e}")))?;
             // What Compose runs from here on: the model just checked.
             let rendered = crate::confine::render(
                 raw,
@@ -949,6 +962,7 @@ impl LaneRun {
         let user = own_user();
         let memory = self.memory_limit.map(|m| format!("{m}b"));
         let cpus = self.cpu_limit.map(|c| format!("{c:.2}"));
+        let gpus = gpus_arg(&self.gpus);
         let pids = PIDS_LIMIT.to_string();
         let mut args: Vec<&str> = vec![
             "run",
@@ -1036,6 +1050,9 @@ impl LaneRun {
         }
         if let Some(c) = &cpus {
             args.extend(["--cpus", c.as_str()]);
+        }
+        if let Some(g) = &gpus {
+            args.extend(["--gpus", g.as_str()]);
         }
         args.extend([
             image.as_str(),
@@ -1330,6 +1347,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_lane_container_gets_exactly_its_gpus() {
+        assert_eq!(gpus_arg(&[]), None);
+        assert_eq!(
+            gpus_arg(&["GPU-a".into()]).as_deref(),
+            Some("\"device=GPU-a\"")
+        );
+        assert_eq!(
+            gpus_arg(&["GPU-a".into(), "GPU-b".into()]).as_deref(),
+            Some("\"device=GPU-a,GPU-b\"")
+        );
+    }
+
+    #[test]
     fn a_network_is_known_by_its_bridge() {
         let id = "0123456789abcdef0123";
         assert_eq!(
@@ -1471,6 +1501,7 @@ mod tests {
             workers: false,
             memory_limit: None,
             cpu_limit: None,
+            gpus: Vec::new(),
             network: Network::Lan,
             secret: "s".into(),
             store: None,

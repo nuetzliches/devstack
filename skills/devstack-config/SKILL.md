@@ -87,7 +87,9 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   places a lane by what its runs took there (ADR-0049); `[lanes.need]`
   (`cpus`, `memory = "6G"`, `disk = "25G"`, `gpus = { count, memory }`) is a
   floor only: set it where the first runs would be placed too small, or for
-  a GPU. A profile's `need` raises it for that profile.
+  a GPU. A lane on a node gets only the GPUs `gpus` asks for: a Compose
+  service that reserves a GPU in a lane without it is refused there. A
+  profile's `need` raises it for that profile.
 - **Agent skills go where the repository's agents look.** `[agents] skills`
   names the folders `devstack skills install` writes to: `.claude/skills`
   (Claude Code, the default), `.agents/skills` (Codex, Gemini CLI and most
