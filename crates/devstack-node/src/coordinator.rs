@@ -553,7 +553,12 @@ impl Point {
             used_cpus: used.cpus,
             used_memory: used.memory,
             gpus: r.gpus.len() as u32,
-            gpus_offered: r.gpus.iter().filter(|g| g.offered).count() as u32,
+            // One a lane holds is offered too, only not free (ADR-0112).
+            gpus_offered: r
+                .gpus
+                .iter()
+                .filter(|g| g.offered || g.lane.is_some())
+                .count() as u32,
             gpu_load: r.gpus.iter().map(|g| g.load).sum(),
             gpu_memory: r.gpus.iter().map(|g| g.memory).sum(),
             gpu_memory_used: r.gpus.iter().map(|g| g.memory_used).sum(),
@@ -2099,7 +2104,14 @@ async fn placement(
             ..Default::default()
         },
         need_from: None,
-        floor: None,
+        // GPUs it needs, as the lease will say (ADR-0114).
+        floor: q.gpus.filter(|n| *n > 0).map(|count| crate::share::Need {
+            gpus: Some(crate::share::GpuNeed {
+                count,
+                memory: q.gpu_memory.unwrap_or(0),
+            }),
+            ..Default::default()
+        }),
         profile: q.profile.filter(|p| !p.is_empty()),
         devstack: Some(Release::this()),
         warm: false,
@@ -2119,6 +2131,11 @@ struct PlacementQuery {
     disk: Option<u64>,
     #[serde(default)]
     profile: Option<String>,
+    /// GPUs it needs, each with `gpu_memory` bytes (ADR-0114).
+    #[serde(default)]
+    gpus: Option<u32>,
+    #[serde(default)]
+    gpu_memory: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]

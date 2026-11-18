@@ -215,9 +215,12 @@ pub struct StartBody {
     /// A profile of the stack file (ADR-0041).
     #[serde(default)]
     pub profile: Option<String>,
+    /// With `on`: GPUs it needs beyond its stack file (ADR-0114).
+    #[serde(default)]
+    pub gpus: Option<devstack_node::share::GpuNeed>,
 }
 
-/// `POST /hub/stacks/{id}/lanes/start {path, on?, profile?}`: `devstack up` in the
+/// `POST /hub/stacks/{id}/lanes/start {path, on?, profile?, gpus?}`: `devstack up` in the
 /// worktree `path` (one git lists for the stack), `--on local` without
 /// `on`. `202` once started; a start that fails before the daemon runs is
 /// the stack's `start_error`, as a stack's start.
@@ -279,10 +282,16 @@ pub async fn start_lane(
             "cannot write the start's log",
         );
     };
+    // `--gpus N:BYTES` for a start in the pool; `parse_size` takes bytes.
+    let gpus = b
+        .gpus
+        .filter(|g| g.count > 0 && on.as_deref().is_some_and(|o| o != "local"))
+        .map(|g| format!("{}:{}", g.count, g.memory));
     let mut cmd = std::process::Command::new(exe);
     cmd.arg("up")
         .arg("--on")
         .arg(on.as_deref().unwrap_or("local"))
+        .args(gpus.iter().flat_map(|g| ["--gpus", g.as_str()]))
         .args(profile.iter().flat_map(|p| ["--profile", p.as_str()]))
         .current_dir(&tree)
         .env("NO_COLOR", "1")

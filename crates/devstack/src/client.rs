@@ -2,6 +2,7 @@
 //! lifecycle logic of its own.
 
 use anyhow::{Context, Result, anyhow, bail};
+use devstack_node::share::GpuNeed;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -193,6 +194,7 @@ impl Client {
         force: bool,
         on: Option<&str>,
         profile: Option<&str>,
+        gpus: Option<GpuNeed>,
         within: Option<Duration>,
         mut progress: impl FnMut(&Value),
     ) -> Result<String> {
@@ -201,7 +203,7 @@ impl Client {
             "/v1/lanes",
             Some(serde_json::json!({
                 "path": wt.path, "infra": on.is_none(), "workers": workers, "force": force, "on": on,
-                "profile": profile
+                "profile": profile, "gpus": gpus
             })),
         )?;
         if status >= 400 {
@@ -1060,6 +1062,7 @@ pub fn up(
     workers: bool,
     force: bool,
     on: Option<&str>,
+    gpus: Option<GpuNeed>,
     profile: Option<&str>,
     run: bool,
     yes: bool,
@@ -1142,7 +1145,7 @@ pub fn up(
         }
         // A start on a node answers once leased; its steps follow.
         let name = c
-            .join_lane(wt, workers, force, on, profile, None, |m| {
+            .join_lane(wt, workers, force, on, profile, gpus, None, |m| {
                 if m["step"] != 0 {
                     println!("{}", step_line(m));
                 }
@@ -2166,6 +2169,7 @@ pub fn start_lane(
     stack_file: &Path,
     name: &str,
     on: Option<&str>,
+    gpus: Option<GpuNeed>,
     profile: Option<&str>,
     run: bool,
     within: Option<Duration>,
@@ -2210,7 +2214,7 @@ pub fn start_lane(
         path,
         main_file: main_file.clone(),
     };
-    let name = c.join_lane(&wt, false, false, on, profile, within, step)?;
+    let name = c.join_lane(&wt, false, false, on, profile, gpus, within, step)?;
     let warning = on.and_then(|_| {
         c.call_raw("GET", "/v1/lanes", None)
             .ok()
@@ -2233,13 +2237,14 @@ pub fn lane_start(
     stack_file: &Path,
     name: &str,
     on: Option<&str>,
+    gpus: Option<GpuNeed>,
     profile: Option<&str>,
     run: bool,
 ) -> Result<()> {
     if let Some(node) = on {
         println!("leasing, syncing and starting the lane on {node}...");
     }
-    let started = start_lane(stack_file, name, on, profile, run, None, |m| {
+    let started = start_lane(stack_file, name, on, gpus, profile, run, None, |m| {
         if m["step"] != 0 {
             println!("{}", step_line(m));
         }

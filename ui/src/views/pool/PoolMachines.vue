@@ -4,6 +4,7 @@
 // done with a machine is on its page.
 import { computed, ref } from 'vue';
 import { ago, bytes, useNow } from '@/lib/format';
+import { summarise } from '@/lib/gpus';
 import { kindText, kindTitle, releaseClass, releaseTitle, updateText } from '@/lib/poolText';
 import { usePool } from '@/stores/pool';
 import { useHub } from '@/stores/hub';
@@ -34,7 +35,7 @@ const showRemoved = ref(false);
                 <span v-if="isMe(m.id)" class="pill sm outline">this machine</span>
                 <span class="pill sm" :class="m.node?.kind === 'server' ? 'accent' : 'outline'" :title="kindTitle[m.node?.kind ?? 'unknown']" data-testid="pool-kind">{{ kindText[m.node?.kind ?? 'unknown'] }}</span>
                 <span v-if="m.node?.provisioned" class="pill sm info" data-testid="pool-provisioned">provisioned</span>
-                <span v-if="m.node?.report?.gpus?.length" class="pill sm info" :title="m.node.report.gpus.map((g) => `${g.name}, ${bytes(g.memory)}`).join('; ')">GPU</span>
+                <span v-if="m.node?.report?.gpus?.length" class="pill sm info" :title="summarise(m.node.report.gpus)?.title">GPU</span>
               </div>
             </td>
             <td>

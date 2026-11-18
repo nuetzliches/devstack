@@ -49,6 +49,10 @@ pub struct Status {
     /// report; `None` before one, or from an older coordinator.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub coordinator: Option<devstack_node::version::Release>,
+    /// The machine's GPUs, as measured (ADR-0036): the dashboard shows them
+    /// beside CPU and memory.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub gpus: Vec<devstack_node::share::Gpu>,
     /// The share switch (ADR-0113), as saved.
     pub switch: crate::nodehost::Switch,
     /// The node agent the switch runs.
@@ -143,6 +147,7 @@ fn run() {
             let st = entry(&mut map, &pool);
             st.total = total;
             st.free = free;
+            st.gpus = gpus.clone();
             st.agent = matches!(result, Ok(Round::Agent));
             match result {
                 Ok(Round::NoMember) => {
@@ -263,6 +268,7 @@ pub async fn get(Query(q): Query<PoolQuery>) -> Response {
             if let Some(a) = any.filter(|_| st.reported_at.is_none() && st.total.cpus == 0.0) {
                 st.total = a.total;
                 st.free = a.free;
+                st.gpus = a.gpus;
             }
             let mut out = st.clone();
             drop(map);

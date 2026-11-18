@@ -48,7 +48,9 @@ const capacity = computed(() => {
     usedCpus: sum((n) => n.report!.used?.cpus ?? 0),
     usedMemory: sum((n) => n.report!.used?.memory ?? 0),
     gpus: sum((n) => n.report!.gpus?.length ?? 0),
-    gpusOffered: sum((n) => n.report!.gpus?.filter((g) => g.offered).length ?? 0),
+    // A GPU a lane holds is offered, not free (ADR-0112).
+    gpusOffered: sum((n) => n.report!.gpus?.filter((g) => g.offered || g.lane).length ?? 0),
+    gpusHeld: sum((n) => n.report!.gpus?.filter((g) => g.lane).length ?? 0),
   };
 });
 
@@ -200,6 +202,7 @@ const onProvisioned = computed(() => !(me.value?.no_provisioned ?? myMember.valu
         <div class="tile">
           <span class="faint small">Lanes use</span>
           <strong>{{ capacity.usedCpus.toFixed(1) }} CPU · {{ bytes(capacity.usedMemory) }}</strong>
+          <span v-if="capacity.gpus" class="faint small">{{ capacity.gpusHeld }} GPU</span>
         </div>
       </div>
       <div v-if="loads.length" class="loads" data-testid="pool-capacity-nodes">

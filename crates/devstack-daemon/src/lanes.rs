@@ -440,6 +440,10 @@ pub struct Lanes {
     shares: Mutex<BTreeMap<String, Vec<String>>>,
     /// The profile each started lane runs with (ADR-0041), while it runs.
     profiles: Mutex<BTreeMap<String, String>>,
+    /// The GPUs a start on a node asked for beyond the stack file
+    /// (`--gpus`, ADR-0114): kept for its restart and move, gone with a
+    /// start without them.
+    gpus: Mutex<BTreeMap<String, devstack_node::share::GpuNeed>>,
     /// [`not_in_pool`] of each stack file a lane runs with, by its time of
     /// change: the lists ask often, the file changes rarely.
     pool_checks: Mutex<BTreeMap<PathBuf, PoolCheck>>,
@@ -579,13 +583,32 @@ pub fn not_in_pool(file: &Path) -> Option<&'static str> {
 /// file, else (and for a lane it does not know) `main_file` (ADR-0055).
 /// What the hub's and the CLI's placement say before a node is picked.
 pub fn lane_not_in_pool(main_file: &Path, lane: &str) -> Option<&'static str> {
-    let own = main_file.parent().and_then(|repo| {
-        let text = std::fs::read(repo.join(".devstack").join("lanes.json")).ok()?;
-        let entries: Vec<LaneEntry> = serde_json::from_slice(&text).ok()?;
-        let entry = entries.into_iter().find(|e| e.name == lane)?;
-        Some(entry.path.join(main_file.file_name()?)).filter(|f| f.is_file())
-    });
-    not_in_pool(own.as_deref().unwrap_or(main_file))
+    not_in_pool(&lane_file(main_file, lane))
+}
+
+/// The stack file `lane` runs with: its worktree's, else the main tree's.
+fn lane_file(main_file: &Path, lane: &str) -> PathBuf {
+    main_file
+        .parent()
+        .and_then(|repo| {
+            let text = std::fs::read(repo.join(".devstack").join("lanes.json")).ok()?;
+            let entries: Vec<LaneEntry> = serde_json::from_slice(&text).ok()?;
+            let entry = entries.into_iter().find(|e| e.name == lane)?;
+            Some(entry.path.join(main_file.file_name()?)).filter(|f| f.is_file())
+        })
+        .unwrap_or_else(|| main_file.to_path_buf())
+}
+
+/// The GPUs `lane`'s stack file declares it needs, with `profile`
+/// (`[lanes.need] gpus`, ADR-0049): for the placement the dashboard shows
+/// (ADR-0114).
+pub fn lane_declared_gpus(
+    main_file: &Path,
+    lane: &str,
+    profile: Option<&str>,
+) -> Option<devstack_node::share::GpuNeed> {
+    let stack = devstack_config::load(&lane_file(main_file, lane)).ok()?;
+    crate::remote::floor_of(&stack.lane_need(profile))?.gpus
 }
 
 /// The stack as a lane runs it: every service port moved by `offset`.
@@ -986,6 +1009,7 @@ impl Lanes {
             forgetting: Mutex::new(BTreeSet::new()),
             shares: Mutex::new(shares),
             profiles: Mutex::new(BTreeMap::new()),
+            gpus: Mutex::new(BTreeMap::new()),
             pool_checks: Mutex::new(BTreeMap::new()),
             workers: Mutex::new(BTreeSet::new()),
             handover: Mutex::new(Handover::default()),
@@ -2539,6 +2563,7 @@ impl Lanes {
             }
         };
         let profile = self.profiles.lock().unwrap().get(name).cloned();
+        let gpus = self.gpus.lock().unwrap().get(name).copied();
         self.stop(name)?;
         let failed: Vec<String> = self
             .reset(name)?
@@ -2565,7 +2590,7 @@ impl Lanes {
         );
         match on {
             Some(node) => {
-                self.activate_remote(&path, &node, need, profile.as_deref(), workers)?;
+                self.activate_remote(&path, &node, need, profile.as_deref(), workers, gpus)?;
                 // Its services start once it runs there; `moving` shows the
                 // start meanwhile, and its error if it fails.
                 let lanes = self.clone();
@@ -3545,6 +3570,7 @@ impl Lanes {
         need: crate::remote::Expected,
         profile: Option<&str>,
         workers: bool,
+        gpus: Option<devstack_node::share::GpuNeed>,
     ) -> Result<RemoteStart, String> {
         let path = std::path::absolute(path).map_err(|e| e.to_string())?;
         if same_tree(&path, &self.main.repo) {
@@ -3611,6 +3637,10 @@ impl Lanes {
         } else {
             self.workers.lock().unwrap().remove(&name);
         }
+        match gpus.filter(|g| g.count > 0) {
+            Some(g) => self.gpus.lock().unwrap().insert(name.clone(), g),
+            None => self.gpus.lock().unwrap().remove(&name),
+        };
         self.begin_move(&name, "start", on, 3);
         // Its ports here are forwarded by its number: not onto a range
         // another stack claims or another process holds (#539).
@@ -3837,7 +3867,10 @@ impl Lanes {
             stack_file: &stack_file,
             on,
             need,
-            floor: crate::remote::floor_of(&declared),
+            floor: crate::remote::with_gpus(
+                crate::remote::floor_of(&declared),
+                self.gpus.lock().unwrap().get(&entry.name).copied(),
+            ),
             scratch: &scratch,
             // The lane runs on its lane ports there as well: the same
             // port on both ends.

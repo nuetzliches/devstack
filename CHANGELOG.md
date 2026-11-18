@@ -11,6 +11,14 @@ and listed with their assets on the
 
 ### Added
 
+- **A start in the pool can ask for GPUs** (ADR-0114). `devstack up --on
+  pool --gpus 1` (`1:12G`: each with 12 GiB or more), `devstack lane start
+  --gpus`, the MCP tools' `gpus` and a choice beside the lane's start in
+  the dashboard raise the lane's need for that start, without a change to
+  the stack file; the coordinator places it only where so many GPUs are
+  free. The dashboard's order of the nodes now counts a lane's GPU need,
+  the stack file's included, and marks a machine without a fitting free
+  GPU.
 - **The share switch is back, and makes this machine a node** (ADR-0113,
   #171). On, the hub runs a node agent for the pool (sidebar, **Pool → This
   machine**): on Linux inside the hub, on Windows in a WSL2 distribution you
@@ -42,6 +50,16 @@ and listed with their assets on the
   could take every GPU of the node. On this machine nothing changes.
 
 ### Fixed
+
+- **A machine's GPUs show beside its CPU and memory.** Where a lane
+  starts, the pool's capacity and **This machine** gave a GPU at most as
+  "1 GPU (0 %)" in a footnote, and only one offered to the pool: a GPU of
+  this machine, of a machine that does not share, or one a lane holds did
+  not show at all. Each machine card now has a GPU line (how many are free,
+  offered and in all, its memory over the last hour; per GPU free, held by
+  a lane, or not offered), the hub reports this machine's GPUs, and the
+  pool counts a GPU a lane holds as offered (the capacity tile "Lanes use"
+  shows how many lanes hold).
 
 - **The state folder `.devstack/` no longer shows up in `git status`.**
   After the first `devstack up` in a repository whose `.gitignore` did not

@@ -571,6 +571,12 @@ export class MockTransport implements Transport {
         return json(200, [
           { node: 'feedbeef00112233', name: 'gpu-box', eligible: true, why: 'the most free capacity', cpus: 24, memory: 96 * 2 ** 30, disk: 6 * 2 ** 30, disk_room: 400 * 2 ** 30 },
         ]);
+      // build-server has one free GPU: asked for more, it cannot take the lane.
+      const gpus = Number(url.searchParams.get('gpus') ?? 0);
+      if (gpus > 1)
+        return json(200, [
+          { node: '9f8e7d6c5b4a3921', name: 'build-server', eligible: false, why: `offers 1 GPU with 0 B or more, the lane asks for ${gpus}`, cpus: 12, memory: 48 * 2 ** 30 },
+        ]);
       return json(200, [
         {
           node: '9f8e7d6c5b4a3921',

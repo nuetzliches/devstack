@@ -196,3 +196,4 @@ stay.
 | [0111](0111-the-dashboards-advisory-gate-counts-what-the-bundle-holds.md) | The dashboard's advisory gate counts what the bundle holds, not npm's runtime tree | Accepted (card in the pull request); built |
 | [0112](0112-a-node-gives-a-lane-the-gpus-it-asked-for.md) | A node gives a lane the GPUs it asked for, and no other lane | Accepted (card in the pull request); built |
 | [0113](0113-the-share-switch-runs-the-node-agent.md) | The share switch runs the node agent: in the hub on Linux, in WSL2 on Windows | Accepted (card in the pull request); built |
+| [0114](0114-a-start-in-the-pool-can-ask-for-gpus.md) | A start in the pool can ask for GPUs, and the dashboard shows where they are | Accepted (card in the pull request); built |

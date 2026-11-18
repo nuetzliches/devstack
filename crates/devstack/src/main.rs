@@ -62,6 +62,11 @@ enum Cmd {
         /// lane runs there; the worktree stays.
         #[arg(long, value_name = "NODE")]
         on: Option<String>,
+        /// With `--on`: GPUs the lane needs beyond its stack file, `N` or
+        /// `N:MEMORY` each (`1`, `1:12G`); the pool places it only where so
+        /// many are free (ADR-0114).
+        #[arg(long, value_name = "N[:MEMORY]", requires = "on", value_parser = parse_gpus)]
+        gpus: Option<devstack_node::share::GpuNeed>,
         /// Run it with this profile of the stack file (ADR-0041): how it runs
         /// for a purpose (an acceptance run). Shown by `status`.
         #[arg(long, value_name = "NAME")]
@@ -565,6 +570,10 @@ enum LaneAction {
         /// `pool` to let the coordinator choose (ADR-0025).
         #[arg(long, value_name = "NODE")]
         on: Option<String>,
+        /// With `--on`: GPUs the lane needs beyond its stack file, `N` or
+        /// `N:MEMORY` (ADR-0114).
+        #[arg(long, value_name = "N[:MEMORY]", requires = "on", value_parser = parse_gpus)]
+        gpus: Option<devstack_node::share::GpuNeed>,
         /// Run it with this profile of the stack file (ADR-0041).
         #[arg(long, value_name = "NAME")]
         profile: Option<String>,
@@ -963,6 +972,22 @@ fn repo_of(file: &Path) -> Result<PathBuf> {
 
 const STACK_FILE: &str = "devstack.toml";
 
+/// `--gpus N[:MEMORY]` (ADR-0114): how many GPUs, each with at least that
+/// much memory (`12G`, as in the stack file).
+pub(crate) fn parse_gpus(s: &str) -> Result<devstack_node::share::GpuNeed, String> {
+    let (n, mem) = s.split_once(':').map_or((s, None), |(n, m)| (n, Some(m)));
+    let count: u32 = n.trim().parse().ok().filter(|c| *c > 0).ok_or_else(|| {
+        format!("`{s}`: a number of GPUs above 0, optionally `:MEMORY` (`1:12G`)")
+    })?;
+    let memory = match mem {
+        Some(m) => {
+            devstack_config::model::parse_size(m.trim()).map_err(|e| format!("`{s}`: {e}"))?
+        }
+        None => 0,
+    };
+    Ok(devstack_node::share::GpuNeed { count, memory })
+}
+
 /// The stack file without `-f`: in `dir`, else in the nearest directory
 /// above it, like git finds `.git`, so that a command run from an app's
 /// folder means the stack around it (#467). The search ends at the
@@ -1118,6 +1143,42 @@ mod tests {
             Ok(_) => panic!("{args:?} parsed"),
             Err(e) => e.kind(),
         }
+    }
+
+    #[test]
+    fn gpus_are_a_count_and_a_memory_each() {
+        use devstack_node::share::GpuNeed;
+        assert_eq!(
+            super::parse_gpus("1"),
+            Ok(GpuNeed {
+                count: 1,
+                memory: 0
+            })
+        );
+        assert_eq!(
+            super::parse_gpus("2:12G"),
+            Ok(GpuNeed {
+                count: 2,
+                memory: 12 << 30
+            })
+        );
+        for bad in ["0", "x", "-1", "1:lots", ""] {
+            assert!(super::parse_gpus(bad).is_err(), "{bad}");
+        }
+        assert_eq!(
+            refused(&["up", "--gpus", "1"]),
+            ErrorKind::MissingRequiredArgument,
+            "--gpus without --on"
+        );
+        assert!(matches!(
+            parse(&["lane", "start", "x", "--on", "pool", "--gpus", "1:8G"]).cmd,
+            Cmd::Lane {
+                action: LaneAction::Start {
+                    gpus: Some(GpuNeed { count: 1, .. }),
+                    ..
+                }
+            }
+        ));
     }
 
     #[test]

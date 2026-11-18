@@ -97,6 +97,10 @@ watch(
   { immediate: true },
 );
 const chosen = computed(() => profiles.value.find((p) => p.name === profile.value) ?? null);
+/** GPUs asked for a start in the pool (`--gpus`, ADR-0114); 0: as the stack file says. */
+const gpus = ref(0);
+/** The most GPUs one machine of the pool has: what may be asked for; 0 hides the choice. */
+const poolGpus = computed(() => Math.max(0, ...nodes.value.map((n) => n.node.report?.gpus?.length ?? 0)));
 /** Where each pool's coordinator would start this lane, best first, with why
  * (ADR-0026 point 3): its own order, not one guessed here; by what the
  * lane's runs with the chosen profile took (ADR-0049). */
@@ -107,7 +111,7 @@ async function loadPlacement() {
   const out: Record<string, Placement[]> = {};
   for (const p of pool.placeable) {
     try {
-      const r = await api().request<Placement[]>('GET', paths.poolPlacement(p.pool, repo, props.lane.name, profile.value || undefined));
+      const r = await api().request<Placement[]>('GET', paths.poolPlacement(p.pool, repo, props.lane.name, profile.value || undefined, gpus.value || undefined));
       if (r.ok && Array.isArray(r.body)) out[p.pool] = r.body;
     } catch {
       // An older coordinator has no order to give: the cards show the numbers.
@@ -115,7 +119,7 @@ async function loadPlacement() {
   }
   placement.value = out;
 }
-watch(() => [props.lane?.name, stack.view?.name, pool.placeable.map((p) => p.pool).join(), profile.value], () => void loadPlacement(), { immediate: true });
+watch(() => [props.lane?.name, stack.view?.name, pool.placeable.map((p) => p.pool).join(), profile.value, gpus.value], () => void loadPlacement(), { immediate: true });
 // Read again when a pool's nodes or leases changed (ADR-0073), at most every 10 s.
 const placementAgain = throttle(() => void loadPlacement(), 10_000);
 watch(() => pool.placeable.map((p) => `${pool.feeds[p.pool]?.versions.nodes}|${pool.feeds[p.pool]?.versions.leases}`).join(), placementAgain);
@@ -194,8 +198,12 @@ function start(on?: string) {
   // One start at a time: the buttons are disabled, a click that came through anyway does nothing.
   if (starting.value) return;
   if (!props.lane || isMain.value) void stack.startStack(undefined, profile.value);
-  else if (!stack.running) void stack.startOfflineLane(props.lane, on ?? null, profile.value || undefined);
-  else void stack.startLane(props.lane.name, on, profile.value || undefined);
+  else {
+    // GPUs go with a start in the pool only (ADR-0114).
+    const g = on && gpus.value ? gpus.value : undefined;
+    if (!stack.running) void stack.startOfflineLane(props.lane, on ?? null, profile.value || undefined, g);
+    else void stack.startLane(props.lane.name, on, profile.value || undefined, g);
+  }
 }
 </script>
 
@@ -279,6 +287,15 @@ function start(on?: string) {
           <option v-for="p in profiles" :key="p.name" :value="p.name">{{ p.name }}{{ p.description ? ` · ${p.description}` : '' }}</option>
         </select>
         <span v-if="chosen?.fresh" class="faint small">starts with fresh data: its databases are seeded again<template v-if="isMain">; asked before it starts</template></span>
+      </label>
+      <!-- GPUs for a start in the pool beyond the stack file (ADR-0114): the coordinator places it only where so many are free. -->
+      <label v-if="!isMain && poolGpus" class="profile" data-testid="lane-start-gpus">
+        <span>GPUs</span>
+        <select v-model.number="gpus" class="input" :disabled="starting">
+          <option :value="0">as the stack file says</option>
+          <option v-for="n in poolGpus" :key="n" :value="n">{{ n }} GPU{{ n === 1 ? '' : 's' }}</option>
+        </select>
+        <span v-if="gpus" class="faint small">in the pool only: a machine without {{ gpus === 1 ? 'a free GPU' : `${gpus} free GPUs` }} cannot take it</span>
       </label>
       <div class="choices">
         <button

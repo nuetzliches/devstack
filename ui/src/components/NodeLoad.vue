@@ -9,6 +9,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { api, paths } from '@/api';
 import type { CapacityPoint, PoolNode } from '@/api/types';
 import { bytes } from '@/lib/format';
+import { summarise } from '@/lib/gpus';
 import { throttle } from '@/lib/throttle';
 import { usePool } from '@/stores/pool';
 import LoadChart from './LoadChart.vue';
@@ -45,7 +46,8 @@ const mem = computed(() => {
   const free = r.value?.memory ?? 0;
   return { free, used, total, offered: used + free };
 });
-const gpus = computed(() => (r.value?.gpus ?? []).filter((g) => g.offered));
+/** Every GPU of the machine: free, held by a lane, or not offered (ADR-0112). */
+const gpu = computed(() => summarise(r.value?.gpus));
 </script>
 
 <template>
@@ -80,10 +82,22 @@ const gpus = computed(() => (r.value?.gpus ?? []).filter((g) => g.offered));
         <strong>{{ bytes(mem.free) }}</strong> free · {{ bytes(mem.offered) }} offered<template v-if="mem.total"> of {{ bytes(mem.total) }}</template>
       </span>
     </div>
+    <div v-if="gpu" class="row" data-testid="node-load-gpu">
+      <span class="k">GPU</span>
+      <LoadChart
+        :total="gpu.memory"
+        :used="gpu.used"
+        :limit="gpu.offeredMemory"
+        :history="points.map((p) => p.gpu_memory_used)"
+        label="GPU memory: what was used in the last hour, and now"
+      />
+      <span class="v tabular" :title="gpu.title">
+        <strong>{{ gpu.free }}</strong> free · {{ gpu.offered }} offered of {{ gpu.count }} ({{ bytes(gpu.memory) }})
+      </span>
+    </div>
     <div class="row meta">
       <span>{{ lanes }} lane{{ lanes === 1 ? '' : 's' }} running</span>
       <span v-if="r?.kept?.lanes">· {{ r.kept.lanes }} kept ({{ bytes(r.kept.bytes) }})</span>
-      <span v-if="gpus.length">· {{ gpus.length }} GPU{{ gpus.length === 1 ? '' : 's' }} ({{ gpus.map((g) => `${g.load.toFixed(0)} %`).join(', ') }})</span>
       <span v-if="r?.devstack?.version">· devstack {{ r.devstack.version }}</span>
     </div>
   </div>

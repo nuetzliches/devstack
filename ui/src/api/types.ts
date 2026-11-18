@@ -927,6 +927,8 @@ export type ShareStatus = {
   agent?: boolean;
   /** The devstack the coordinator runs, from its answer to the last report; absent from an older one. */
   coordinator?: PoolRelease;
+  /** The machine's GPUs as measured; absent without one, or from an older hub. */
+  gpus?: { name: string; memory: number; memory_used: number; load: number; offered: boolean }[];
   /** The share switch (ADR-0113); absent from an older hub. */
   switch?: ShareSwitch;
   /** The node agent the switch runs; absent from an older hub. */

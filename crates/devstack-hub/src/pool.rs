@@ -437,17 +437,41 @@ pub async fn history(Query(h): Query<HistoryQuery>) -> Response {
 /// stack file names no lane image goes to no node (ADR-0028).
 pub async fn placement(Query(q): Query<PlacementQuery>) -> Response {
     let p = PoolQuery { pool: q.pool };
+    let profile = q.profile.filter(|p| !p.is_empty());
+    let stacks: Vec<_> = devstack_daemon::registry::list()
+        .into_iter()
+        .filter(|e| e.name == q.repo)
+        .collect();
+    // GPUs it needs (ADR-0114): what its stack file declares, raised by
+    // those a start would ask for (`gpus`, `gpu_memory`).
+    let declared = stacks.iter().find_map(|e| {
+        devstack_daemon::lanes::lane_declared_gpus(&e.file, &q.lane, profile.as_deref())
+    });
+    let asked = q
+        .gpus
+        .filter(|n| *n > 0)
+        .map(|count| devstack_node::share::GpuNeed {
+            count,
+            memory: q.gpu_memory.unwrap_or(0),
+        });
+    let gpus = devstack_daemon::remote::with_gpus(
+        declared.map(|g| devstack_node::share::Need {
+            gpus: Some(g),
+            ..Default::default()
+        }),
+        asked,
+    )
+    .and_then(|n| n.gpus);
     let need = devstack_node::share::Need {
         cpus: q.cpus.unwrap_or(0.0),
         memory: q.memory.unwrap_or(0),
+        gpus,
         ..Default::default()
     };
-    let profile = q.profile.filter(|p| !p.is_empty());
     match blocking(&p, move |l| {
         let mut order = l.placement(&q.repo, &q.lane, need, profile.as_deref())?;
-        let blocked = devstack_daemon::registry::list()
-            .into_iter()
-            .filter(|e| e.name == q.repo)
+        let blocked = stacks
+            .iter()
             .find_map(|e| devstack_daemon::lanes::lane_not_in_pool(&e.file, &q.lane));
         if let Some(why) = blocked {
             devstack_node::coordinator::not_in_pool(&mut order, why);
@@ -473,6 +497,11 @@ pub struct PlacementQuery {
     memory: Option<u64>,
     #[serde(default)]
     profile: Option<String>,
+    /// GPUs a start would ask for, each with `gpu_memory` bytes (ADR-0114).
+    #[serde(default)]
+    gpus: Option<u32>,
+    #[serde(default)]
+    gpu_memory: Option<u64>,
 }
 
 /// `POST /hub/pool/nodes/{id}/update` `{version?, drain?, downgrade?}`
