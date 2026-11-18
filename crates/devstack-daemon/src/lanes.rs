@@ -3139,7 +3139,9 @@ impl Lanes {
     /// lanes on nodes it followed when it ended without stopping them
     /// ([`Self::unfollowed`]); then the lanes here and the main slot.
     /// Blocking: on a thread of its own.
-    pub fn take_up(self: &Arc<Self>) {
+    /// `left`: the starts on nodes cut off by a daemon before this one
+    /// ([`Self::unlaunched_left`]).
+    pub fn take_up(self: &Arc<Self>, left: Vec<(String, Vec<String>)>) {
         let (lanes, main) = self
             .carried()
             .map(|c| (c.lanes, c.main))
@@ -3150,7 +3152,7 @@ impl Lanes {
             self.take_up_remote(l);
         }
         self.unfollowed();
-        self.unlaunched();
+        self.unlaunched(left);
         for l in local {
             self.take_up_local(l);
         }
@@ -3194,12 +3196,15 @@ impl Lanes {
     /// (#563): their leases were admitted there, the lanes never followed.
     /// Released, as a start that fails releases its lease, and said with the
     /// lane; the node would otherwise keep the lease for its grace and
-    /// refuse the lane's next start as running there already.
-    fn unlaunched(&self) {
-        let names: Vec<String> = self.known.lock().unwrap().keys().cloned().collect();
-        for name in names {
-            if let Some(Ok(u)) =
-                crate::remote::release_unlaunched(&self.rt, &name, &self.state_dir(&name))
+    /// refuse the lane's next start as running there already. Only the
+    /// leases noted when this daemon started: by the time the lanes it
+    /// carried are taken up, a start begun here may have noted its own.
+    fn unlaunched(&self, left: Vec<(String, Vec<String>)>) {
+        for (name, leases) in left {
+            let state = self.state_dir(&name);
+            for u in crate::remote::release_unlaunched(&self.rt, &name, &state, Some(&leases))
+                .into_iter()
+                .flatten()
             {
                 self.not_carried(
                     &name,
@@ -3209,6 +3214,23 @@ impl Lanes {
                 );
             }
         }
+    }
+
+    /// The leases of starts on nodes a daemon before this one left noted
+    /// (#563), by lane: read when this daemon starts, before any start of
+    /// its own.
+    pub fn unlaunched_left(&self) -> Vec<(String, Vec<String>)> {
+        let names: Vec<String> = self.known.lock().unwrap().keys().cloned().collect();
+        names
+            .into_iter()
+            .filter_map(|name| {
+                let leases: Vec<String> = crate::remote::unlaunched(&self.state_dir(&name))
+                    .into_iter()
+                    .map(|u| u.lease)
+                    .collect();
+                (!leases.is_empty()).then_some((name, leases))
+            })
+            .collect()
     }
 
     /// What a daemon before this one left running for a restart (ADR-0052
