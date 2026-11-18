@@ -179,18 +179,27 @@ impl Settings {
     }
 }
 
-/// A GPU of a machine (ADR-0036): reported, not placed yet.
+/// A GPU of a machine (ADR-0036), and the lane it is assigned to on a node
+/// (ADR-0112).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Gpu {
+    /// The vendor's id (`GPU-…`), what a container is given; it stays on the
+    /// machine (a report does not carry it).
+    #[serde(skip)]
+    pub id: String,
     pub name: String,
     /// Its memory, and what of it is used now, bytes.
     pub memory: u64,
     pub memory_used: u64,
     /// Its load now, percent.
     pub load: f64,
-    /// Whether the machine offers it to the pool.
+    /// Whether the machine offers it to the pool: free for a lane. A GPU a
+    /// lane holds is not offered.
     #[serde(default)]
     pub offered: bool,
+    /// The lane that holds it (`<repo>/<lane>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<String>,
 }
 
 /// The machine's GPUs, as the vendor's tool reports them (`nvidia-smi`, on
@@ -198,7 +207,7 @@ pub struct Gpu {
 pub fn gpus() -> Vec<Gpu> {
     let Ok(out) = std::process::Command::new("nvidia-smi")
         .args([
-            "--query-gpu=name,memory.total,memory.used,utilization.gpu",
+            "--query-gpu=name,memory.total,memory.used,utilization.gpu,uuid",
             "--format=csv,noheader,nounits",
         ])
         .output()
@@ -211,25 +220,46 @@ pub fn gpus() -> Vec<Gpu> {
     parse_nvidia_smi(&String::from_utf8_lossy(&out.stdout))
 }
 
-/// `name, memory.total, memory.used, utilization.gpu` per line, MiB and
-/// percent.
+/// `name, memory.total, memory.used, utilization.gpu, uuid` per line, MiB
+/// and percent.
 pub fn parse_nvidia_smi(text: &str) -> Vec<Gpu> {
     text.lines()
         .filter_map(|l| {
             let f: Vec<&str> = l.split(',').map(str::trim).collect();
-            let [name, total, used, load] = f.as_slice() else {
+            let [name, total, used, load, id] = f.as_slice() else {
                 return None;
             };
             let mib = |x: &str| x.parse::<u64>().ok().map(|m| m << 20);
             Some(Gpu {
+                id: (*id).to_string(),
                 name: (*name).to_string(),
                 memory: mib(total)?,
                 memory_used: mib(used).unwrap_or(0),
                 load: load.parse().unwrap_or(0.0),
                 offered: false,
+                lane: None,
             })
         })
         .collect()
+}
+
+/// The GPUs a lane that needs `need` is given (ADR-0112 point 2): the first
+/// ones not `taken` by another lease with the memory it asks for, in the
+/// vendor tool's order. `Err`: how many there are, fewer than it asks for.
+pub fn assign_gpus(
+    gpus: &[Gpu],
+    taken: &std::collections::HashSet<&str>,
+    need: GpuNeed,
+) -> Result<Vec<String>, usize> {
+    let fit: Vec<String> = gpus
+        .iter()
+        .filter(|g| !g.id.is_empty() && !taken.contains(g.id.as_str()) && g.memory >= need.memory)
+        .map(|g| g.id.clone())
+        .collect();
+    if (fit.len() as u32) < need.count {
+        return Err(fit.len());
+    }
+    Ok(fit.into_iter().take(need.count as usize).collect())
 }
 
 /// The CPU cores idle between two readings of `devstack_proc::cpu_times`.
@@ -261,12 +291,39 @@ mod tests {
 
     #[test]
     fn gpus_are_read_from_nvidia_smi() {
-        let g = parse_nvidia_smi("NVIDIA GeForce RTX 4090, 24564, 1234, 7\nbroken line\n");
+        let g =
+            parse_nvidia_smi("NVIDIA GeForce RTX 4090, 24564, 1234, 7, GPU-5b7c\nbroken line\n");
         assert_eq!(g.len(), 1);
+        assert_eq!(g[0].id, "GPU-5b7c");
         assert_eq!(g[0].name, "NVIDIA GeForce RTX 4090");
         assert_eq!(g[0].memory, 24564 << 20);
         assert_eq!(g[0].memory_used, 1234 << 20);
         assert_eq!(g[0].load, 7.0);
+    }
+
+    #[test]
+    fn a_lane_is_given_free_gpus_with_the_memory_it_asks_for() {
+        let gpu = |id: &str, gib: u64| Gpu {
+            id: id.into(),
+            memory: gib * GIB,
+            ..Gpu::default()
+        };
+        let gpus = [gpu("a", 8), gpu("b", 24), gpu("c", 24)];
+        let need = |count, gib: u64| GpuNeed {
+            count,
+            memory: gib * GIB,
+        };
+        let none = std::collections::HashSet::new();
+        assert_eq!(assign_gpus(&gpus, &none, need(1, 0)), Ok(vec!["a".into()]));
+        assert_eq!(assign_gpus(&gpus, &none, need(1, 16)), Ok(vec!["b".into()]));
+        let taken: std::collections::HashSet<&str> = ["b"].into();
+        assert_eq!(
+            assign_gpus(&gpus, &taken, need(1, 16)),
+            Ok(vec!["c".into()])
+        );
+        assert_eq!(assign_gpus(&gpus, &taken, need(2, 16)), Err(1));
+        // A GPU whose id the tool did not say cannot be given to a container.
+        assert_eq!(assign_gpus(&[gpu("", 24)], &none, need(1, 0)), Err(0));
     }
 
     const GIB: u64 = 1 << 30;

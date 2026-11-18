@@ -188,7 +188,7 @@ type PoolOverview = {
       leases?: { id: string; member: string; repo: string; lane: string; expires_in: number }[];
       total?: { cpus: number; memory: number };        // what the machine has (ADR-0036)
       used?: { cpus: number; memory: number };         // what its lanes use
-      gpus?: { name: string; memory: number; memory_used: number; load: number; offered: boolean }[];
+      gpus?: { name: string; memory: number; memory_used: number; load: number; offered: boolean; lane?: string }[]; // `lane` (`<repo>/<lane>`): the lane holding it, not offered then (ADR-0112)
       kept?: { lanes: number; bytes: number; store_bytes?: number }; // stopped lanes it keeps (ADR-0038) and the members' stores of what `prepare` makes (ADR-0062), together in `bytes`; `store_bytes` the stores' part (older nodes omit it)
       devstack?: PoolRelease;                           // what it runs; absent from a release before version reporting
     };

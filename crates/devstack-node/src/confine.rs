@@ -675,11 +675,7 @@ fn key_problems(raw: &Value, run: &BTreeSet<&str>) -> Vec<String> {
             .and_then(Value::as_array);
         for d in devices.into_iter().flatten() {
             let driver = d.get("driver").and_then(Value::as_str).unwrap_or("");
-            let gpu = d
-                .get("capabilities")
-                .and_then(Value::as_array)
-                .is_some_and(|c| c.iter().any(|c| c.as_str() == Some("gpu")));
-            if !(driver == "nvidia" || driver.is_empty() && gpu) {
+            if !is_gpu(d) {
                 no(format!(
                     "`deploy.resources.reservations.devices` with the driver `{driver}` (only GPUs, `nvidia`)"
                 ));
@@ -714,6 +710,106 @@ pub fn strip_unset(raw: &mut Value) {
             args.retain(|_, v| !v.is_null());
         }
     }
+}
+
+/// GPUs the services a lane starts ask for (`gpus`, and GPU device
+/// reservations under `deploy`) become GPUs its lease holds, `gpus`
+/// (ADR-0112 point 3): `count: n` the first n of them, all (`-1`, or no
+/// count) every one, `device_ids` only ids among them. A lane that holds
+/// none may ask for none.
+pub fn pin_gpus(
+    raw: &mut Value,
+    model: &Model,
+    services: &[String],
+    gpus: &[String],
+) -> Result<(), String> {
+    let run = started(model, services);
+    let mut bad = Vec::new();
+    let Some(svcs) = raw.get_mut("services").and_then(Value::as_object_mut) else {
+        return Ok(());
+    };
+    for (name, s) in svcs.iter_mut().filter(|(n, _)| run.contains(n.as_str())) {
+        let mut pin = |d: &mut Value| {
+            if let Err(e) = pin_one(d, gpus) {
+                bad.push(format!("service `{name}`: {e}"));
+            }
+        };
+        if let Some(list) = s.get_mut("gpus") {
+            // `gpus: all` in a model `config` did not write.
+            if list.as_str() == Some("all") {
+                *list = serde_json::json!([{ "count": -1 }]);
+            }
+            list.as_array_mut().into_iter().flatten().for_each(&mut pin);
+        }
+        if let Some(devices) = s
+            .pointer_mut("/deploy/resources/reservations/devices")
+            .and_then(Value::as_array_mut)
+        {
+            devices.iter_mut().filter(|d| is_gpu(d)).for_each(&mut pin);
+        }
+    }
+    finish_gpus(bad)
+}
+
+/// A device reservation that asks for GPUs: the only kind a node allows.
+fn is_gpu(d: &Value) -> bool {
+    let driver = d.get("driver").and_then(Value::as_str).unwrap_or("");
+    let gpu = d
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .is_some_and(|c| c.iter().any(|c| c.as_str() == Some("gpu")));
+    driver == "nvidia" || driver.is_empty() && gpu
+}
+
+fn pin_one(d: &mut Value, gpus: &[String]) -> Result<(), String> {
+    if gpus.is_empty() {
+        return Err(
+            "asks for a GPU, and the lane holds none (`[lanes.need] gpus` in the stack file)"
+                .into(),
+        );
+    }
+    let Some(o) = d.as_object_mut() else {
+        return Err("a GPU request that is no table".into());
+    };
+    let ids: Vec<String> = match (o.get("device_ids"), o.get("count")) {
+        (Some(ids), _) => {
+            let ids: Vec<String> = ids
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect();
+            if let Some(other) = ids.iter().find(|i| !gpus.contains(i)) {
+                return Err(format!(
+                    "asks for the GPU `{other}`, not one the lane holds"
+                ));
+            }
+            ids
+        }
+        (None, Some(c)) if c.as_i64().is_some_and(|c| c >= 0) => {
+            let n = c.as_i64().unwrap_or(0) as usize;
+            if n > gpus.len() {
+                return Err(format!(
+                    "asks for {n} GPU(s), the lane holds {} (`[lanes.need] gpus`)",
+                    gpus.len()
+                ));
+            }
+            gpus[..n].to_vec()
+        }
+        // `-1` (all), `"all"`, or no count: every GPU the lane holds.
+        _ => gpus.to_vec(),
+    };
+    o.remove("count");
+    o.insert("device_ids".into(), ids.into());
+    Ok(())
+}
+
+fn finish_gpus(bad: Vec<String>) -> Result<(), String> {
+    if bad.is_empty() {
+        return Ok(());
+    }
+    Err(format!("GPUs on this node:\n  {}", bad.join("\n  ")))
 }
 
 /// The most bytes of a secret's or config's file the agent copies.
@@ -1039,6 +1135,60 @@ mod tests {
         ] {
             assert!(!e.contains(not), "{not} in:\n{e}");
         }
+    }
+
+    #[test]
+    fn gpus_a_service_asks_for_become_the_lanes() {
+        let mut raw = serde_json::json!({"services": {
+            "all": {"image": "a", "gpus": [{"count": -1}]},
+            "one": {"image": "a", "deploy": {"resources": {"reservations": {"devices": [
+                {"driver": "nvidia", "count": 1, "capabilities": ["gpu"]}
+            ]}}}},
+            "named": {"image": "a", "gpus": [{"device_ids": ["GPU-b"]}]},
+            "none": {"image": "a"},
+            "left": {"image": "a", "gpus": [{"device_ids": ["GPU-x"]}]}
+        }});
+        let model: Model = serde_json::from_value(raw.clone()).unwrap();
+        let run: Vec<String> = ["all", "one", "named", "none"].map(String::from).into();
+        let gpus = ["GPU-a".to_string(), "GPU-b".to_string()];
+        pin_gpus(&mut raw, &model, &run, &gpus).unwrap();
+        let s = &raw["services"];
+        assert_eq!(
+            s["all"]["gpus"],
+            serde_json::json!([{"device_ids": ["GPU-a", "GPU-b"]}])
+        );
+        let one = &s["one"]["deploy"]["resources"]["reservations"]["devices"][0];
+        assert_eq!(one["device_ids"], serde_json::json!(["GPU-a"]));
+        assert!(one.get("count").is_none());
+        assert_eq!(
+            s["named"]["gpus"][0]["device_ids"],
+            serde_json::json!(["GPU-b"])
+        );
+        // A service the lane does not start is left alone.
+        assert_eq!(
+            s["left"]["gpus"][0]["device_ids"],
+            serde_json::json!(["GPU-x"])
+        );
+    }
+
+    #[test]
+    fn a_lane_asks_for_no_gpu_beyond_what_it_holds() {
+        let raw = serde_json::json!({"services": {
+            "two": {"image": "a", "gpus": [{"count": 2}]},
+            "other": {"image": "a", "gpus": [{"device_ids": ["GPU-x"]}]}
+        }});
+        let model: Model = serde_json::from_value(raw.clone()).unwrap();
+        let e = pin_gpus(&mut raw.clone(), &model, &[], &["GPU-a".into()]).unwrap_err();
+        assert!(
+            e.contains("service `two`: asks for 2 GPU(s), the lane holds 1"),
+            "{e}"
+        );
+        assert!(
+            e.contains("service `other`: asks for the GPU `GPU-x`"),
+            "{e}"
+        );
+        let e = pin_gpus(&mut raw.clone(), &model, &[], &[]).unwrap_err();
+        assert!(e.contains("`[lanes.need] gpus`"), "{e}");
     }
 
     #[test]

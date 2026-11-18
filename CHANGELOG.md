@@ -9,6 +9,24 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **A lane on a node gets the GPUs it asked for, and no other lane does**
+  (ADR-0112). A lane with `[lanes.need] gpus` holds that many of the node's
+  free GPUs for as long as its lease lives; its container gets exactly
+  those (`--gpus device=…`), so native services see them too, and a
+  Compose service that asks for a GPU is given those. The pool area shows
+  each GPU as free, held by a lane, or not offered. Takes a node agent of
+  this release.
+
+### Changed
+
+- **A lane's Compose services on a node ask for no GPU beyond the lane's.**
+  A service that reserves a GPU (`gpus`, or an `nvidia` device under
+  `deploy`) in a lane without `[lanes.need] gpus`, or more GPUs than the
+  lane holds, is refused on a node, naming the service; before, any lane
+  could take every GPU of the node. On this machine nothing changes.
+
 ## [0.49.4] - 2026-11-18
 
 Lanes on a node of the pool no longer get stuck: a node lets go of a lane

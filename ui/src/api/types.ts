@@ -804,7 +804,8 @@ export type PoolNode = {
     /** What the machine has, what its lanes use (ADR-0036). */
     total?: PoolAmount;
     used?: PoolAmount;
-    gpus?: { name: string; memory: number; memory_used: number; load: number; offered: boolean }[];
+    /** `lane` (`<repo>/<lane>`): the lane that holds it, then not offered (ADR-0112); older nodes omit it. */
+    gpus?: { name: string; memory: number; memory_used: number; load: number; offered: boolean; lane?: string }[];
     /** Stopped lanes it keeps for their next start (ADR-0038); older nodes omit it. */
     kept?: { lanes: number; bytes: number; /** Of `bytes`, the members' stores of what `prepare` makes (ADR-0062); older nodes omit it. */ store_bytes?: number };
     /** How the last update an admin ordered goes (ADR-0039). */

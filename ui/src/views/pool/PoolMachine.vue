@@ -145,7 +145,8 @@ async function savePolicy(clear = false) {
                 <template v-if="report.gpus?.length">
                   <dt>GPUs</dt>
                   <dd>
-                    <span v-for="g in report.gpus" :key="g.name" class="gpu">{{ g.name }}, {{ bytes(g.memory) }}<span class="faint">{{ g.offered ? ' · offered' : ' · not offered' }}</span></span>
+                    <!-- Free, held by a lane, or not offered (ADR-0112 point 5). -->
+                    <span v-for="(g, i) in report.gpus" :key="i" class="gpu">{{ g.name }}, {{ bytes(g.memory) }}<span class="faint">{{ g.lane ? ` · held by ${g.lane}` : g.offered ? ' · free' : ' · not offered' }}</span></span>
                   </dd>
                 </template>
                 <template v-if="report.kept?.lanes || report.kept?.store_bytes">

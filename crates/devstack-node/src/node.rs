@@ -150,6 +150,32 @@ pub struct NodeLease {
     /// `prepare` its member's store lacks, no infrastructure, then ends.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub warm: bool,
+    /// The GPUs it holds here (their vendor ids), as many as its need asks
+    /// for, no other lease's (ADR-0112 points 2 and 4): kept in
+    /// `leases.json`, so a restart of the agent gives them to no one else.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gpus: Vec<String>,
+}
+
+/// The machine's GPUs as a node reports them: one a lease holds names its
+/// lane and is not offered, every other one is (ADR-0112 point 5).
+fn held_gpus(
+    gpus: Vec<crate::share::Gpu>,
+    leases: &HashMap<String, NodeLease>,
+) -> Vec<crate::share::Gpu> {
+    gpus.into_iter()
+        .map(|g| {
+            let lane = leases
+                .values()
+                .find(|l| l.gpus.contains(&g.id))
+                .map(|l| format!("{}/{}", l.repo, l.lane));
+            crate::share::Gpu {
+                offered: lane.is_none(),
+                lane,
+                ..g
+            }
+        })
+        .collect()
 }
 
 /// What a slot keeps about itself (`slots/<slot>/slot.json`).
@@ -458,6 +484,7 @@ impl Inner {
             slot: Some(slot.to_string()),
             kept: None,
             warm: false,
+            gpus: Vec::new(),
         });
         // Its stack file, wherever it was: the default unless one is there.
         if let Some(f) = ["devstack.toml"]
@@ -1212,6 +1239,7 @@ impl Inner {
             workers: false,
             memory_limit: None,
             cpu_limit: None,
+            gpus: l.gpus.clone(),
             network: crate::policy::Network::Lan,
             store: self.prepare_store(&l.member, &l.repo),
             warm: l.warm,
@@ -1727,27 +1755,16 @@ async fn admit(
     } else {
         0
     };
-    // GPUs it asks for are GPUs this machine has.
-    if let Some(g) = lease.need.gpus.filter(|g| g.count > 0) {
-        let fit = tokio::task::spawn_blocking(crate::share::gpus)
+    // GPUs it asks for, given below from those no other lease holds
+    // (ADR-0112 point 2). A warm lease runs `prepare` only: it holds none.
+    let gpu_need = lease.need.gpus.filter(|g| g.count > 0 && !lease.warm);
+    let machine_gpus = match gpu_need {
+        Some(_) => tokio::task::spawn_blocking(crate::share::gpus)
             .await
-            .unwrap_or_default()
-            .iter()
-            .filter(|x| x.memory >= g.memory)
-            .count();
-        if (fit as u32) < g.count {
-            return Err(err(
-                StatusCode::CONFLICT,
-                format!(
-                    "{} has {fit} GPU(s) with {} or more, the lane asks for {}",
-                    s.name,
-                    crate::coordinator::gib(g.memory),
-                    g.count
-                ),
-            ));
-        }
-    }
-    let l = NodeLease {
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let mut l = NodeLease {
         id: lease.id,
         member: who,
         repo: lease.repo,
@@ -1762,8 +1779,26 @@ async fn admit(
         slot: Some(slot.clone()),
         kept,
         warm: lease.warm,
+        gpus: Vec::new(),
     };
     let mut leases = s.leases.lock().unwrap();
+    if let Some(g) = gpu_need {
+        let taken: HashSet<&str> = leases
+            .values()
+            .flat_map(|x| x.gpus.iter().map(String::as_str))
+            .collect();
+        l.gpus = crate::share::assign_gpus(&machine_gpus, &taken, g).map_err(|fit| {
+            err(
+                StatusCode::CONFLICT,
+                format!(
+                    "{} has {fit} free GPU(s) with {} or more, the lane asks for {}",
+                    s.name,
+                    crate::coordinator::gib(g.memory),
+                    g.count
+                ),
+            )
+        })?;
+    }
     let free = s.available_in(&leases);
     if l.need.cpus > free.cpus || l.need.memory > free.memory {
         return Err(err(
@@ -3901,12 +3936,11 @@ async fn background(s: Shared) {
             cpus: cores as f64,
             memory: devstack_proc::memory_total().unwrap_or(0),
         };
+        // Each free, or held by a lane (ADR-0112 point 5).
         let gpus: Vec<crate::share::Gpu> = tokio::task::spawn_blocking(crate::share::gpus)
             .await
-            .unwrap_or_default()
-            .into_iter()
-            .map(|g| crate::share::Gpu { offered: true, ..g })
-            .collect();
+            .unwrap_or_default();
+        let gpus = held_gpus(gpus, &s.leases.lock().unwrap());
         // A node sends what concerns the pool's lanes with the coordinator's
         // setting alone (ADR-0037 point 3): its capacity, every minute.
         if sent.elapsed() >= Duration::from_secs(60) {
@@ -4384,7 +4418,23 @@ mod tests {
             slot: Some(id.to_string()),
             kept: None,
             warm: false,
+            gpus: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_gpu_a_lease_holds_is_reported_with_its_lane_and_not_offered() {
+        let gpu = |id: &str| crate::share::Gpu {
+            id: id.into(),
+            ..crate::share::Gpu::default()
+        };
+        let mut held = lease("train", true);
+        held.gpus = vec!["b".into()];
+        let leases: HashMap<String, NodeLease> = [("train".to_string(), held)].into();
+        let r = held_gpus(vec![gpu("a"), gpu("b")], &leases);
+        assert!(r[0].offered && r[0].lane.is_none());
+        assert!(!r[1].offered);
+        assert_eq!(r[1].lane.as_deref(), Some("r/train"));
     }
 
     #[test]
