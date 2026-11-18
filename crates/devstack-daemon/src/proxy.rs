@@ -18,6 +18,7 @@
 //! request), and hop-by-hop headers stay on their hop (RFC 9110 §7.6.1).
 
 use bytes::Bytes;
+use devstack_node::connpool::Pool;
 use http_body_util::{BodyExt, Full, StreamBody, combinators::BoxBody};
 use hyper::body::{Frame, Incoming};
 use hyper::{Request, Response, StatusCode};
@@ -36,7 +37,7 @@ type Body = BoxBody<Bytes, hyper::Error>;
 /// Idle connections kept per upstream.
 const POOL_MAX: usize = 16;
 
-type Sender = hyper::client::conn::http1::SendRequest<Incoming>;
+type Sender = hyper::client::conn::http1::SendRequest<Body>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Upstream {
@@ -82,7 +83,7 @@ struct Shared {
     /// `true` ends the listeners (a removed lane's proxies, `Proxy::close`).
     closed: watch::Sender<bool>,
     /// Idle connections to each upstream port, for the next request.
-    pool: Mutex<HashMap<u16, Vec<Sender>>>,
+    pool: Arc<Pool<u16, Body>>,
 }
 
 impl Shared {
@@ -133,7 +134,7 @@ impl Proxy {
             served: AtomicU64::new(0),
             last_error: Mutex::new(None),
             closed: watch::channel(false).0,
-            pool: Mutex::new(HashMap::new()),
+            pool: Pool::new(POOL_MAX),
         });
         for l in std::iter::once(v4).chain(v6) {
             l.set_nonblocking(true)?;
@@ -220,7 +221,7 @@ impl Proxy {
         }
         self.shared.tracks.lock().unwrap().remove(&port);
         // Its kept connections close: the instance stops next.
-        self.shared.pool.lock().unwrap().remove(&port);
+        self.shared.pool.forget(&port);
         left
     }
 
@@ -326,17 +327,6 @@ pub fn strip_hop_by_hop(h: &mut hyper::HeaderMap, upgrade: bool) {
     }
 }
 
-/// A kept connection to `port` that can take a request, if there is one.
-fn kept(sh: &Shared, port: u16) -> Option<Sender> {
-    loop {
-        let kept = sh.pool.lock().unwrap().get_mut(&port).and_then(Vec::pop)?;
-        if kept.is_ready() {
-            return Some(kept);
-        }
-        // closed meanwhile: next
-    }
-}
-
 /// A new connection to `port`.
 async fn sender(port: u16) -> Result<Sender, String> {
     let stream = connect(port).await.map_err(|e| e.to_string())?;
@@ -349,18 +339,11 @@ async fn sender(port: u16) -> Result<Sender, String> {
 
 /// Keep `sender` for the next request to `port`, once its connection is
 /// idle again (the response is read to its end), unless it closes.
-async fn give_back(sh: &Shared, port: u16, mut sender: Sender) {
-    if sender.ready().await.is_err() {
-        return;
-    }
+async fn give_back(sh: &Shared, port: u16, sender: Sender) {
+    sh.pool.give_back(port, sender).await;
     // The upstream may have changed meanwhile; a drained port keeps nothing.
     if sh.upstream.borrow().as_ref().is_none_or(|u| u.port != port) {
-        return;
-    }
-    let mut pool = sh.pool.lock().unwrap();
-    let kept = pool.entry(port).or_default();
-    if kept.len() < POOL_MAX {
-        kept.push(sender);
+        sh.pool.forget(&port);
     }
 }
 
@@ -400,29 +383,15 @@ async fn handle(sh: Arc<Shared>, mut req: Request<Incoming>) -> Result<Response<
         .contains_key(hyper::header::UPGRADE)
         .then(|| hyper::upgrade::on(&mut req));
     strip_hop_by_hop(req.headers_mut(), client_upgrade.is_some());
-    // A kept connection the upstream closed while it was idle gives the
-    // request back unsent: it goes out on a new one.
-    let mut req = Some(req);
-    let mut pooled = kept(&sh, up.port);
-    let (sender, mut resp) = loop {
-        let fresh = pooled.is_none();
-        let mut s = match pooled.take() {
-            Some(s) => s,
-            None => match sender(up.port).await {
-                Ok(s) => s,
-                Err(e) => return fail(e),
-            },
-        };
-        match s
-            .try_send_request(req.take().expect("a request to send"))
-            .await
-        {
-            Ok(r) => break (s, r),
-            Err(mut e) => match e.take_message() {
-                Some(back) if !fresh => req = Some(back),
-                _ => return fail(e.into_error().to_string()),
-            },
-        }
+    // A kept connection the upstream closed while it was idle: the request
+    // goes out once more on a new one where that is safe (`connpool`).
+    let (sender, mut resp) = match sh
+        .pool
+        .send(&up.port, req.map(BodyExt::boxed), || sender(up.port))
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return fail(e),
     };
     sh.served.fetch_add(1, Ordering::Relaxed);
     if sh.last_error.lock().unwrap().is_some() {
