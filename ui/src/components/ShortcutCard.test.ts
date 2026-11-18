@@ -51,6 +51,15 @@ describe('ShortcutCard', () => {
     app.unmount();
   });
 
+  it('names the service on the button without "Open" or a port tag, the full name in the tooltip', async () => {
+    const { el, app } = await mountCard(service({}));
+    const open = el.querySelector('[data-testid="shortcut-open"]') as HTMLAnchorElement;
+    expect(open.textContent?.trim()).toBe('spa');
+    expect(open.getAttribute('title')).toBe('Open spa (localhost:4500)');
+    expect(el.querySelector('.shortcut-port')).toBeNull();
+    app.unmount();
+  });
+
   it('shows no button for a service with no port and no link', async () => {
     const { el, app } = await mountCard(service({ port: null, url: null, link: undefined }));
     expect(el.querySelector('[data-testid="shortcut-open"]')).toBeNull();

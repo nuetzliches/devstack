@@ -23,12 +23,11 @@ const tone: Record<ReturnType<typeof statusBucket>, string> = { healthy: 'ok', s
     <header class="shortcut-head">
       <span class="shortcut-icon" aria-hidden="true"><Icon name="globe" :size="18" /></span>
       <div class="shortcut-title">
-        <span class="shortcut-name">{{ service.name }}</span>
+        <span class="shortcut-name" :title="service.name">{{ service.name }}</span>
         <span class="shortcut-state">
           <span class="shortcut-dot" aria-hidden="true" />{{ service.status.state }}
         </span>
       </div>
-      <span v-if="service.port" class="shortcut-port tabular">:{{ service.port }}</span>
     </header>
     <a
       v-if="url"
@@ -36,13 +35,13 @@ const tone: Record<ReturnType<typeof statusBucket>, string> = { healthy: 'ok', s
       :href="url"
       target="_blank"
       rel="noopener"
-      :title="`open ${linkLabel(url)}`"
+      :title="`Open ${service.name} (${linkLabel(url)})`"
       data-testid="shortcut-open"
       @click="stack.followLink($event, url)"
       @auxclick="stack.followLink($event, url)"
     >
-      <span>Open {{ service.name }}</span>
-      <Icon name="external" :size="18" />
+      <span class="shortcut-label">{{ service.name }}</span>
+      <Icon name="external" :size="14" />
     </a>
     <span v-else class="muted">No port or link to open</span>
     <span v-if="url" class="shortcut-url muted">{{ linkLabel(url) }}</span>
@@ -58,7 +57,10 @@ const tone: Record<ReturnType<typeof statusBucket>, string> = { healthy: 'ok', s
   flex-direction: column;
   gap: 12px;
   padding: 16px 18px 14px;
-  min-width: 240px;
+  /* As wide as its name needs, up to a cap; past it the name is cut off and the tooltip holds it whole. */
+  flex: 0 1 auto;
+  min-width: 180px;
+  max-width: min(340px, 100%);
   overflow: hidden;
   border-color: color-mix(in srgb, var(--tone) 45%, var(--border));
   background: linear-gradient(160deg, var(--tone-soft), var(--surface) 65%);
@@ -137,27 +139,19 @@ const tone: Record<ReturnType<typeof statusBucket>, string> = { healthy: 'ok', s
   background: var(--tone);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone) 25%, transparent);
 }
-.shortcut-port {
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 0.85rem;
-  color: var(--tone);
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--tone) 14%, transparent);
-}
 .shortcut-open {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 13px 18px;
+  gap: 8px;
+  padding: 7px 12px;
   border-radius: var(--radius);
   background: var(--accent);
   color: var(--on-accent);
-  font-size: 1.02rem;
-  font-weight: 600;
+  font-size: 0.9rem;
+  font-weight: 500;
   text-decoration: none;
-  box-shadow: 0 6px 18px -6px color-mix(in srgb, var(--accent) 70%, transparent);
+  box-shadow: 0 3px 10px -6px color-mix(in srgb, var(--accent) 70%, transparent);
   transition:
     background 0.15s ease,
     transform 0.15s ease;
@@ -165,6 +159,15 @@ const tone: Record<ReturnType<typeof statusBucket>, string> = { healthy: 'ok', s
 .shortcut-open:hover {
   background: var(--accent-hover);
   transform: scale(1.015);
+}
+.shortcut-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shortcut-open :deep(svg) {
+  flex: none;
 }
 .shortcut-open:focus-visible {
   outline: 2px solid var(--accent);
