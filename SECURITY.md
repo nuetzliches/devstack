@@ -104,6 +104,12 @@ browsers as well.
   - Your machine reports to the coordinator what it has (CPU, memory, GPUs,
     load) and which devstack it runs; a node reports what it offers and its
     lanes.
+  - **The share switch** (off by default) makes your machine a node: the hub
+    runs a node agent, and once an admin granted the machine, other members'
+    lanes run on it, with the limits of a node (ADR-0033). On Windows the
+    agent runs as root in the WSL distribution you name, with a copy of the
+    machine's pool membership (its private key included) in
+    `/var/lib/devstack-node/<pool>` there, readable by root only.
   - **Telemetry** to the pool's collector only with your consent, per pool,
     off by default (`devstack join --telemetry`, `devstack pool telemetry
     on|off`, the pool area): devstack's diagnostic log, cut to first lines as

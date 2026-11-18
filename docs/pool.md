@@ -65,17 +65,55 @@ form. `devstack pool` then lists the machines, what each offers, and which
 lanes run where.
 
 A member that only asks for lanes needs nothing else. A machine runs other
-members' lanes only with a node agent, below. The dashboard has no switch for
-that: the share switch it had only reported capacity, never started an agent,
-and is gone until it does
-([#171](https://github.com/nuetzliches/devstack/issues/171); on Windows,
-which cannot run the Linux lanes yet,
-[#168](https://github.com/nuetzliches/devstack/issues/168)). The hub reports
-the machine (online, what it has, its devstack) and offers nothing. While a
-node agent of the same membership runs on the machine, the hub does not
-report for that pool and the agent reports the machine: the agent holds
-`node/lock` in the membership's folder while it runs
-([#170](https://github.com/nuetzliches/devstack/issues/170)).
+members' lanes only with a node agent, which an admin grants. The **share
+switch** (the sidebar, **Pool → This machine**) runs one
+([ADR-0113](adr/0113-the-share-switch-runs-the-node-agent.md)); a server
+runs it by hand ([below](#run-a-node)). The hub reports the machine (online,
+what it has, its devstack) and offers nothing itself. While a node agent of
+the same membership runs, the hub does not report for that pool and the
+agent reports the machine: the agent holds `node/lock` in the membership's
+folder while it runs
+([#170](https://github.com/nuetzliches/devstack/issues/170)), and the hub
+knows the agent it runs itself.
+
+### The share switch
+
+On, the hub runs the node agent for the current pool and starts it again
+when it ends (after a failed start, a minute later); the switch, its caps,
+the WSL distribution and the port are kept in `node-host.json` beside the
+membership. The agent offers half of what is free, never more than the caps;
+it listens on port 4261 (`port` in the switch) on every address, and
+requesters reach it at the address this machine reaches the coordinator
+from. Until an admin grants the machine as a node, the switch says it waits
+for one. Turned off while other members' lanes run here, the agent takes no
+new lanes (`devstack node agent --no-new-lanes`) and ends once the last one
+did; their owners stop them, or an admin ends the lease.
+
+- **Linux:** the agent runs inside the hub, with Docker of the user who runs
+  it. An agent started by hand for the same membership wins: the switch
+  says so and starts none.
+- **Windows:** lanes are Linux containers, so the agent runs in a WSL2
+  distribution you name: one with Docker Engine of its own, not Docker
+  Desktop's (turn Desktop's WSL integration off for it), with
+  `networkingMode=mirrored` in `.wslconfig`, and devstack of the same
+  version installed as root. The hub copies the machine's membership into
+  it (`/var/lib/devstack-node/<pool>`, root only: one member per machine)
+  and runs `wsl.exe -d <distro> -u root -- devstack node agent --membership
+  …`. It never sets the distribution up: it checks it (the networking mode,
+  the engine, devstack's version, an NVIDIA GPU and the container toolkit,
+  the Hyper-V firewall rule `devstack-node` for the port) and shows what is
+  missing with the command for it, and a prompt a coding agent can work
+  through. What needs an elevated shell stays with you:
+
+  ```powershell
+  New-NetFirewallHyperVRule -Name devstack-node -DisplayName "devstack node agent" `
+    -Direction Inbound -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' `
+    -Protocol TCP -LocalPorts 4261
+  ```
+
+  `.wslconfig`'s `memory=` caps the whole distribution, so what the agent
+  offers stays below it.
+- **macOS:** not yet.
 
 Lanes of other members on your machine always show: a banner below the
 dashboard's top bar (it can be hidden until a lane comes or goes), a tile in
@@ -88,8 +126,9 @@ the pool's leases after each share report.
 ## Run a node
 
 A machine that runs lanes for others, typically a server, runs the node
-agent. It needs Linux with Docker (lanes run in containers; a Windows machine
-asks for lanes but does not run them yet) and must have joined the pool:
+agent. It needs Linux with Docker (lanes run in containers; a Windows
+machine runs it in WSL2 through the [share switch](#the-share-switch)) and
+must have joined the pool:
 
 ```sh
 devstack join https://10.0.0.5:4260 --fingerprint <fp> --name build-server
@@ -100,7 +139,13 @@ devstack node agent --listen 10.0.0.7:4261 --dedicated --max-cpus 12 --max-memor
 A machine runs the pool's lanes only once an admin granted it (`devstack node
 members node <id> on`, or `off` to take it back): until then the coordinator
 ignores the API its agent reports, places nothing there, and the agent says
-why. A member that only shares from the dashboard is no node.
+why; so does the share switch.
+
+- `--no-new-lanes`: take no new lanes; those running go on. The share
+  switch turned off while others' lanes run uses it.
+- `--membership <dir>`: the membership's folder instead of this machine's
+  for `--pool`; the share switch on Windows runs the agent in WSL with a copy
+  of the machine's.
 
 - `--dedicated`: a server its owner never reclaims. The pool shows it as a
   server, and only a lane on such a node may take the main ports.

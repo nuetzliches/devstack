@@ -90,7 +90,8 @@ pub struct NodeConfig {
     pub dir: PathBuf,
     /// Where requesters reach the node API: `https://host:port`.
     pub api: String,
-    /// What the node shares; `enabled` is implied.
+    /// What the node shares; `enabled: false` takes no new lanes and keeps
+    /// the running ones (ADR-0113 point 5).
     pub share: Settings,
     /// A server its owner never reclaims (ADR-0026).
     pub dedicated: bool,
@@ -3875,11 +3876,9 @@ async fn background(s: Shared) {
             })
             .await;
         }
-        let offer = Settings {
-            enabled: true,
-            ..s.share.clone()
-        }
-        .offer(free, percent);
+        // An agent that takes no new lanes (`--no-new-lanes`, ADR-0113
+        // point 5) offers nothing; its running lanes go on.
+        let offer = s.share.offer(free, percent);
         // The caps hold for the lanes together: what they use already is
         // not on offer again.
         let offer = Amount {
@@ -3978,7 +3977,7 @@ async fn background(s: Shared) {
             total: Some(total),
             used: Some(used),
             gpus,
-            sharing: true,
+            sharing: s.share.enabled,
             cpus: available.cpus,
             memory: available.memory,
             api: Some(s.api.clone()),
