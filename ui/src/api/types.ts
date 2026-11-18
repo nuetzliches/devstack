@@ -927,6 +927,8 @@ export type ShareStatus = {
   agent?: boolean;
   /** The devstack the coordinator runs, from its answer to the last report; absent from an older one. */
   coordinator?: PoolRelease;
+  /** The machine's GPUs as measured; absent without one, or from an older hub. */
+  gpus?: { name: string; memory: number; memory_used: number; load: number; offered: boolean }[];
   /** Why this machine offers the pool nothing (a node agent runs lanes; #171, on Windows #168). */
   unavailable: string;
 };

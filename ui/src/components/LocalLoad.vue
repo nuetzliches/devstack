@@ -7,6 +7,7 @@ import { computed, onBeforeUnmount, ref } from 'vue';
 import { api, paths } from '@/api';
 import type { ShareStatus } from '@/api/types';
 import { bytes } from '@/lib/format';
+import { summarise } from '@/lib/gpus';
 import LoadChart from './LoadChart.vue';
 
 defineProps<{ need?: { cpus: number; memory: number } }>();
@@ -15,14 +16,18 @@ defineProps<{ need?: { cpus: number; memory: number } }>();
 const EVERY = 15_000;
 const KEEP = 240;
 const now = ref<ShareStatus | null>(null);
-const samples = ref<{ cpus: number; memory: number }[]>([]);
+const samples = ref<{ cpus: number; memory: number; gpu: number }[]>([]);
 
 async function load() {
   try {
     const r = await api().request<ShareStatus>('GET', paths.poolShare);
     if (!r.ok || !r.body || typeof r.body !== 'object' || !r.body.total?.cpus) return;
     now.value = r.body;
-    const s = { cpus: r.body.total.cpus - r.body.free.cpus, memory: r.body.total.memory - r.body.free.memory };
+    const s = {
+      cpus: r.body.total.cpus - r.body.free.cpus,
+      memory: r.body.total.memory - r.body.free.memory,
+      gpu: (r.body.gpus ?? []).reduce((a, g) => a + g.memory_used, 0),
+    };
     samples.value = [...samples.value, s].slice(-KEEP);
   } catch {
     // The last sample stays.
@@ -43,6 +48,8 @@ const mem = computed(() => {
   const free = now.value?.free.memory ?? 0;
   return { total, free, used: Math.max(0, total - free) };
 });
+/** Its GPUs, as the hub measures them (absent from an older hub). */
+const gpu = computed(() => summarise(now.value?.gpus));
 </script>
 
 <template>
@@ -71,6 +78,13 @@ const mem = computed(() => {
       />
       <span class="v tabular" :title="`${bytes(mem.used)} in use, ${bytes(mem.total)} in all`">
         <strong>{{ bytes(mem.free) }}</strong> free of {{ bytes(mem.total) }}
+      </span>
+    </div>
+    <div v-if="gpu" class="row" data-testid="local-load-gpu">
+      <span class="k">GPU</span>
+      <LoadChart :total="gpu.memory" :used="gpu.used" :history="samples.map((s) => s.gpu)" label="GPU memory: what was used since the page opened, and now" />
+      <span class="v tabular" :title="gpu.title">
+        <strong>{{ bytes(gpu.memory - gpu.used) }}</strong> free of {{ bytes(gpu.memory) }} · {{ gpu.count }} GPU{{ gpu.count === 1 ? '' : 's' }}
       </span>
     </div>
     <div class="row meta">everything this machine runs, not only lanes</div>

@@ -29,6 +29,16 @@ and listed with their assets on the
 
 ### Fixed
 
+- **A machine's GPUs show beside its CPU and memory.** Where a lane
+  starts, the pool's capacity and **This machine** gave a GPU at most as
+  "1 GPU (0 %)" in a footnote, and only one offered to the pool: a GPU of
+  this machine, of a machine that does not share, or one a lane holds did
+  not show at all. Each machine card now has a GPU line (how many are free,
+  offered and in all, its memory over the last hour; per GPU free, held by
+  a lane, or not offered), the hub reports this machine's GPUs, and the
+  pool counts a GPU a lane holds as offered (the capacity tile "Lanes use"
+  shows how many lanes hold).
+
 - **The state folder `.devstack/` no longer shows up in `git status`.**
   After the first `devstack up` in a repository whose `.gitignore` did not
   list it, the folder with the daemon's state, logs, snapshots and

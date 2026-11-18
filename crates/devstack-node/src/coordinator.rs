@@ -553,7 +553,12 @@ impl Point {
             used_cpus: used.cpus,
             used_memory: used.memory,
             gpus: r.gpus.len() as u32,
-            gpus_offered: r.gpus.iter().filter(|g| g.offered).count() as u32,
+            // One a lane holds is offered too, only not free (ADR-0112).
+            gpus_offered: r
+                .gpus
+                .iter()
+                .filter(|g| g.offered || g.lane.is_some())
+                .count() as u32,
             gpu_load: r.gpus.iter().map(|g| g.load).sum(),
             gpu_memory: r.gpus.iter().map(|g| g.memory).sum(),
             gpu_memory_used: r.gpus.iter().map(|g| g.memory_used).sum(),
