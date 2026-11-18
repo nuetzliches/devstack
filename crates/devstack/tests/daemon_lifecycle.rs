@@ -2335,6 +2335,60 @@ fn a_failed_first_start_restores_again() {
     s.ok(&["down"]);
 }
 
+/// Without `watch` no change comes as a candidate, so the first start after a
+/// daemon start builds from the tree instead of restoring (#562): an edit made
+/// while down is in the build `up` starts, and an unchanged tree reuses the
+/// artifact it had.
+#[test]
+fn without_watch_the_first_start_builds_from_the_tree() {
+    if !enabled("DEVSTACK_INTEGRATION") {
+        eprintln!("skipped: set DEVSTACK_INTEGRATION=1");
+        return;
+    }
+    let s = Stack::new(false);
+    std::fs::write(
+        s.file(),
+        format!(
+            "version = 1\n[stack]\nname = \"nowatch\"\n[services.app]\nbuild = \"git --version\"\noutput = \"src/Site\"\nrun = \"{}\"\nproxy = false\n",
+            runs_for(600)
+        ),
+    )
+    .unwrap();
+    let running = |what: &str| {
+        assert!(
+            wait_for(
+                || s.state("app") == "running" && !s.build_of("app").is_empty(),
+                Duration::from_secs(60)
+            ),
+            "{what}\n{}",
+            s.diag()
+        );
+        s.build_of("app")
+    };
+    s.ok(&["up"]);
+    let first = running("the first build runs");
+    s.ok(&["down"]);
+
+    s.ok(&["up"]);
+    assert_eq!(
+        running("the unchanged tree runs"),
+        first,
+        "same inputs, same artifact\n{}",
+        s.diag()
+    );
+    s.ok(&["down"]);
+
+    s.edit_site("<p>edited while down</p>");
+    s.ok(&["up"]);
+    assert_ne!(
+        running("the edited tree runs"),
+        first,
+        "the edit made while down is in the build `up` starts\n{}",
+        s.diag()
+    );
+    s.ok(&["down"]);
+}
+
 /// An edit while a service that exited by itself waits for its restart is
 /// not lost: it starts again from its build, and the edit follows as a
 /// candidate (ADR-0003).

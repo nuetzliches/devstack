@@ -9,6 +9,17 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **A service without `watch` runs the tree's code after a restart** (#562).
+  The first start after a daemon start (`devstack down`/`up`, `lane stop`
+  and `up` again) ran the build last promoted, and without `watch` no
+  change ever replaced it: a static bundle of an acceptance profile served
+  the code of its first run until `devstack restart`. Such a service (or a
+  job with `build`) now goes through its build at that start; an unchanged
+  tree reuses its artifact, a changed one builds (ADR-0016, addendum
+  2026-11-18).
+
 ## [0.49.3] - 2026-11-17
 
 Fixed: a public link keeps its connections to the service instead of

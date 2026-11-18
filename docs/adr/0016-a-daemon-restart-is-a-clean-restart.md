@@ -94,3 +94,26 @@ in the tree meanwhile becomes a candidate. Tests:
 `crates/devstack-proc/tests/ownership.rs` (`supervisor_death_ends_every_tree`)
 and `lifecycle` in `crates/devstack/tests/daemon_lifecycle.rs` (a daemon
 killed hard, then restored from the promoted build, not built).
+
+## Addendum 2026-11-18: without `watch`, the first start builds
+
+Point 4 holds for a service whose changes arrive as candidates, one with
+`watch`. Without `watch` no change makes a candidate (ADR-0003), so a
+restored build would run until a `restart`, whatever the tree held: a
+static bundle in a lane that was stopped and started again served the code
+of its first run, and an acceptance suite ran against it (#562). A service
+or job with `build` and without `watch` therefore goes through its build at
+the first start after a daemon start. The build id covers every file of the
+tree then (ADR-0002), so an unchanged tree reuses its artifact at once
+(`build_reused` in the daemon log) and only a changed one builds; `up`
+reports the service healthy once the tree's code runs.
+
+Not chosen: restoring and then making a candidate when the tree's build id
+differs. The start stays fast, but `up --run` and a command after `up`
+would run against the old build while the candidate builds. Nor a `watch`
+key on a profile's service: the fix needs no change to the stack file.
+
+Owner's approval 2026-11-18 (review card on the pull request). Built in
+`restorable` (`crates/devstack-daemon/src/supervisor/artifacts.rs`); test
+`without_watch_the_first_start_builds_from_the_tree` in
+`crates/devstack/tests/daemon_lifecycle.rs`.
