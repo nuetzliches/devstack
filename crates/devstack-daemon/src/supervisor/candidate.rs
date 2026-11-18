@@ -148,10 +148,12 @@ impl Supervisor {
         let (serving, coming, failed) = {
             let slots = self.slots.lock().unwrap();
             let s = &slots[name];
-            let coming = matches!(
-                s.view.status,
-                Status::Exited { .. } | Status::Building { .. } | Status::Starting
-            );
+            // A job is `running` while its start waits for it to end (#544).
+            let coming = match s.view.status {
+                Status::Exited { .. } | Status::Building { .. } | Status::Starting => true,
+                Status::Running => s.view.kind == "job",
+                _ => false,
+            };
             let failed = matches!(&s.view.status, Status::Failed { reason } if reason != STOPPED);
             (s.main.is_some(), coming, failed)
         };
@@ -659,6 +661,25 @@ mod tests {
             "{:?}",
             done.elapsed()
         );
+    }
+
+    /// A job is `running` while it runs (#544), with no main instance: a
+    /// change to its files then waits for that start as it did while it was
+    /// `starting`, its paths kept for `resume_changes`, not dropped.
+    #[test]
+    fn a_change_while_a_job_runs_is_kept() {
+        let (_d, _rt, sup) = two_after_a_job();
+        sup.set_status("seed", Status::Running);
+        sup.changed("seed", PATH);
+        let t0 = Instant::now();
+        while sup.changes.lock().unwrap()["seed"].worker && t0.elapsed() < DEBOUNCE * 3 {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !sup.changes.lock().unwrap()["seed"].worker,
+            "seed's pipeline ended"
+        );
+        assert!(!taken(&sup, "seed"), "the change waits for the job's start");
     }
 
     /// A service that failed and does not run builds no candidate on a

@@ -38,6 +38,14 @@ and listed with their assets on the
   lease as soon as the node admits it; the next daemon releases it when it
   starts, and so does the lane's next start, so `devstack up` runs it
   again.
+- **A lane started on a pool node waits for a job that is still running.**
+  Since #544 a job shows `running` while it runs; the start on a node
+  counted that as done, so it could finish before a migration ended, and
+  a job that failed afterwards was not reported. It now waits until the
+  job completed, and its progress counts a completed job. A warm restart
+  of a lane on a node no longer stops a running job and runs it again (the
+  local restart already left it alone), and a change to a job's files
+  while it runs is kept for after its start again, as before #544.
 
 ## [0.49.3] - 2026-11-17
 
