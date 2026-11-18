@@ -1045,6 +1045,11 @@ fn the_launcher_starts_one_daemon_from_anywhere() {
     // before that would hand it the lock.
     std::thread::sleep(Duration::from_secs(6));
     let state = repo.path().join(".devstack");
+    // The state folder git must not list ignores itself.
+    assert_eq!(
+        std::fs::read_to_string(state.join(".gitignore")).unwrap(),
+        devstack_daemon::STATE_GITIGNORE
+    );
     #[cfg(target_os = "linux")]
     let info: Value =
         serde_json::from_str(&std::fs::read_to_string(state.join("daemon.json")).unwrap()).unwrap();

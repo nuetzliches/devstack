@@ -134,6 +134,37 @@ pub fn read_info(state_dir: &Path) -> Option<DaemonInfo> {
     serde_json::from_slice(&std::fs::read(info_path(state_dir)).ok()?).ok()
 }
 
+/// The `.gitignore` devstack writes into a repository's state folder: it
+/// ignores the folder, itself included, so `git status` never lists it and
+/// the repository's own `.gitignore` needs no line for it (as for the skill
+/// folders, ADR-0079).
+pub const STATE_GITIGNORE: &str =
+    "# Written by devstack: its state for this working tree, not the repository's.\n*\n";
+
+/// Create the state folder `.devstack/` of a working tree, with a
+/// `.gitignore` that ignores it. Every place that may be the first to
+/// create the folder goes through here: the daemon's start, the CLI before
+/// it starts one, `devstack build`. A lane keeps its state under the main
+/// tree's folder (ADR-0024), so a worktree gets none of its own. A
+/// `.gitignore` already there is left as it is: written only when missing,
+/// and with `create_new`, so a daemon and a CLI starting at the same moment
+/// do not write over each other.
+pub fn ensure_state_dir(state_dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(state_dir)?;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(state_dir.join(".gitignore"))
+    {
+        Ok(mut f) => {
+            use std::io::Write as _;
+            f.write_all(STATE_GITIGNORE.as_bytes())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 /// Linux: a per-stack cgroup under the daemon's own one, when it is writable
 /// (cgroup delegation); otherwise process groups only (ADR-0009).
 fn cgroup_root(stack: &str) -> Option<PathBuf> {
@@ -217,6 +248,8 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
     // One spelling of the repository everywhere (compiler messages use the long one).
     let repo = devstack_proc::long_path(&repo);
     let state_dir = repo.join(".devstack");
+    // Not fatal: the lock below reports a folder it cannot create.
+    let _ = ensure_state_dir(&state_dir);
     let _lock = acquire_state_lock(
         &state_dir,
         STATE_LOCK_WAIT,
@@ -551,6 +584,49 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    /// The state folder is ignored by git on its own: after the first start
+    /// `git status` of a fresh repository does not list it, and the
+    /// repository's `.gitignore` is not touched. A `.gitignore` already in
+    /// the folder (the user's own) is left as it is.
+    #[test]
+    fn the_state_folder_ignores_itself() {
+        let repo = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let o = std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo.path())
+                .output()
+                .expect("git runs");
+            assert!(o.status.success(), "git {args:?}: {o:?}");
+            String::from_utf8_lossy(&o.stdout).into_owned()
+        };
+        git(&["init", "-q"]);
+        let state = repo.path().join(".devstack");
+        super::ensure_state_dir(&state).unwrap();
+        std::fs::write(state.join("daemon.log"), "{}\n").unwrap();
+        std::fs::create_dir_all(state.join("logs").join("api")).unwrap();
+        std::fs::write(state.join("logs").join("api").join("run.log"), "x").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(state.join(".gitignore")).unwrap(),
+            super::STATE_GITIGNORE
+        );
+        assert_eq!(git(&["status", "--porcelain", "--untracked-files=all"]), "");
+        assert!(!repo.path().join(".gitignore").exists());
+
+        // Called again (the next start), and with a file of the user's own.
+        super::ensure_state_dir(&state).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(state.join(".gitignore")).unwrap(),
+            super::STATE_GITIGNORE
+        );
+        std::fs::write(state.join(".gitignore"), "daemon.log\n").unwrap();
+        super::ensure_state_dir(&state).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(state.join(".gitignore")).unwrap(),
+            "daemon.log\n"
+        );
+    }
+
     #[test]
     fn devstack_listen_is_for_a_lane_container_only() {
         assert_eq!(super::listen_addr_from(None, false), Ok(None));
