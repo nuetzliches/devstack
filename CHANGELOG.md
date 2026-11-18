@@ -9,6 +9,16 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **The MCP server no longer promises to follow an agent into a worktree.**
+  It acts on the tree it was started in; its instructions and the `up` and
+  `lanes` tools said that in a worktree every tool acts on its lane, so an
+  agent that entered a worktree during the session (Claude Code's
+  `EnterWorktree`) called `up` and got the main stack's `ready`. The texts
+  now say so and point to `lane_start <lane>`, and `up` in the main working
+  tree names the main stack and the lanes while there are any.
+
 ## [0.50.0] - 2026-11-18
 
 A machine of the pool can offer its GPU, and a lane can ask for one. The
