@@ -1,6 +1,6 @@
 # ADR-0031: A coordinator places lanes and admits members; nodes admit leases; data goes directly
 
-- **Status:** Accepted (2026-10-16), amended 2026-10-16 (one binary: `devstack node`), amended 2026-10-19 (point 8: which devstack each party runs), amended 2026-10-21 (point 3: no share switch)
+- **Status:** Accepted (2026-10-16), amended 2026-10-16 (one binary: `devstack node`), amended 2026-10-19 (point 8: which devstack each party runs), amended 2026-10-21 (point 3: no share switch), point 3 amended by ADR-0113 (the switch runs the node agent)
 - **Date:** 2026-10-16
 - **Deciders:** project owner
 - **Related:** [ADR-0025](0025-a-lane-can-run-on-another-node.md), [ADR-0026](0026-placement-by-the-requester-admission-by-the-node.md) (points 1 and 3 replaced here), [ADR-0027](0027-trust-between-nodes.md) (points 1 and 2 replaced here), [ADR-0029](0029-source-sync-and-port-forwarding-for-remote-lanes.md), [ADR-0015](0015-devstack-is-optional.md), [ADR-0032](0032-the-pool-is-administered-in-the-dashboard.md) (point 2 extended there: admins in the dashboard, nodes granted)

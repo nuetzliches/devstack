@@ -6,14 +6,14 @@
 //! reports the machine then, with its API and its leases, which a report of
 //! the hub's would drop (#170).
 //!
-//! The hub offers nothing to the pool. A machine runs other members' lanes
-//! with a node agent (`devstack node agent`, granted by an admin), and the
-//! dashboard's share switch never started one: it only reported capacity
-//! nobody could use, and is gone until it does (#171; on Windows, which
-//! cannot run the Linux lanes, #168).
+//! The hub's own report offers nothing to the pool. A machine runs other
+//! members' lanes with a node agent, granted by an admin: started by hand
+//! (`devstack node agent`), or by the share switch, which the hub runs
+//! (`nodehost.rs`, ADR-0113). While its agent runs, the hub does not report.
 //!
 //! - `GET /hub/pool/share?pool=`: what is measured, the last report, the
-//!   coordinator's devstack, and why nothing is offered (`unavailable`)
+//!   coordinator's devstack, the switch and its agent (`switch`, `host`)
+//! - `PUT /hub/pool/share?pool=`: change the switch (`nodehost::Switch`)
 
 use axum::Json;
 use axum::extract::Query;
@@ -28,11 +28,6 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 const EVERY: Duration = Duration::from_secs(15);
-
-/// Why the hub offers nothing to the pool.
-const NOT_SHARED: &str = "A machine runs other members' lanes with a node agent \
-     (`devstack node agent`, granted by an admin); the dashboard does not start one yet \
-     (#171, on Windows #168).";
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Status {
@@ -54,8 +49,10 @@ pub struct Status {
     /// report; `None` before one, or from an older coordinator.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub coordinator: Option<devstack_node::version::Release>,
-    /// Why this machine offers the pool nothing.
-    pub unavailable: &'static str,
+    /// The share switch (ADR-0113), as saved.
+    pub switch: crate::nodehost::Switch,
+    /// The node agent the switch runs.
+    pub host: crate::nodehost::Host,
 }
 
 #[derive(Deserialize, Default)]
@@ -91,10 +88,7 @@ fn dir(pool: &str) -> std::path::PathBuf {
 }
 
 fn entry<'a>(map: &'a mut BTreeMap<String, Status>, pool: &str) -> &'a mut Status {
-    map.entry(pool.to_string()).or_insert_with(|| Status {
-        unavailable: NOT_SHARED,
-        ..Status::default()
-    })
+    map.entry(pool.to_string()).or_default()
 }
 
 fn now_ms() -> u128 {
@@ -109,6 +103,7 @@ pub fn start() {
         return;
     }
     std::thread::spawn(run);
+    crate::nodehost::start(state());
 }
 
 fn run() {
@@ -137,7 +132,13 @@ fn run() {
         let Some(status) = STATUS.get() else { return };
         let gpus = devstack_node::share::gpus();
         for (pool, _) in devstack_node::member::pools(&state()) {
-            let result = round(&dir(&pool), total, &gpus);
+            // The switch's agent reports the machine (in WSL on Windows,
+            // where the membership's lock is not seen).
+            let result = if crate::nodehost::runs(&pool) {
+                Ok(Round::Agent)
+            } else {
+                round(&dir(&pool), total, &gpus)
+            };
             let mut map = status.lock().unwrap();
             let st = entry(&mut map, &pool);
             st.total = total;
@@ -263,7 +264,11 @@ pub async fn get(Query(q): Query<PoolQuery>) -> Response {
                 st.total = a.total;
                 st.free = a.free;
             }
-            Json(st.clone()).into_response()
+            let mut out = st.clone();
+            drop(map);
+            out.switch = crate::nodehost::Switch::load(&dir(&pool));
+            out.host = crate::nodehost::host(&pool);
+            Json(out).into_response()
         }
         None => (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -271,6 +276,41 @@ pub async fn get(Query(q): Query<PoolQuery>) -> Response {
         )
             .into_response(),
     }
+}
+
+/// Change the share switch (ADR-0113): saved, and acted on at once.
+pub async fn put(Query(q): Query<PoolQuery>, Json(new): Json<crate::nodehost::Switch>) -> Response {
+    let bad = |m: String| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": m })),
+        )
+            .into_response()
+    };
+    let Some(pool) = q.name() else {
+        return bad("pool: a-z, 0-9, `-` and `_`, at most 32".into());
+    };
+    if let Some(why) = new.problem() {
+        return bad(why);
+    }
+    let d = dir(&pool);
+    match devstack_node::member::Local::new(&d).membership() {
+        Ok(Some(m)) if m.state == State::Approved => {}
+        _ => {
+            return bad(format!(
+                "this machine is no approved member of the pool `{pool}`"
+            ));
+        }
+    }
+    if let Err(e) = new.save(&d) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    crate::nodehost::poke(&pool, &d);
+    get(Query(PoolQuery { pool: Some(pool) })).await
 }
 
 #[cfg(test)]

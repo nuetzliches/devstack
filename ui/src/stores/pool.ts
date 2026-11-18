@@ -9,7 +9,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { api, paths, Unreachable } from '@/api';
-import type { NodePolicy, PoolEntry, PoolFeed, PoolMember, PoolNode, PoolOverview, PoolRole, SharedLane, ShareStatus } from '@/api/types';
+import type { NodePolicy, PoolEntry, PoolFeed, PoolMember, PoolNode, PoolOverview, PoolRole, SharedLane, ShareStatus, ShareSwitch } from '@/api/types';
 import { act } from '@/lib/actions';
 import { persist } from '@/lib/persist';
 import { webUrl } from '@/lib/format';
@@ -349,6 +349,20 @@ export const usePool = defineStore('pool', () => {
     if (r.ok) await load();
   }
 
+  /** Change the share switch of the current pool (ADR-0113); the hub acts on it within seconds. */
+  async function setShare(next: ShareSwitch) {
+    const r = await act<ShareStatus>({
+      label: next.enabled ? 'Share this machine' : 'Stop sharing this machine',
+      method: 'PUT',
+      path: at(paths.poolShare),
+      body: next as unknown as Record<string, unknown>,
+      success: false,
+    });
+    if (r.ok && r.body) share.value = r.body;
+    setTimeout(() => void loadShare(), 3000);
+    return r.ok;
+  }
+
   async function setPaused(id: string, name: string, paused: boolean) {
     const r = await act({
       label: paused ? `Pause ${name}` : `Resume ${name}`,
@@ -594,6 +608,7 @@ export const usePool = defineStore('pool', () => {
     select,
     load,
     loadShare,
+    setShare,
     watch,
     watchJoin,
     busy,

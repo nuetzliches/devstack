@@ -11,6 +11,20 @@ and listed with their assets on the
 
 ### Added
 
+- **The share switch is back, and makes this machine a node** (ADR-0113,
+  #171). On, the hub runs a node agent for the pool (sidebar, **Pool → This
+  machine**): on Linux inside the hub, on Windows in a WSL2 distribution you
+  name, with Docker Engine of its own and mirrored networking, so a Windows
+  machine (and its NVIDIA GPU) can run other members' lanes. The machine
+  stays one member of the pool. The hub checks the distribution and shows
+  what is missing with the command for it, and a setup prompt for a coding
+  agent; it changes nothing there itself. Off while others' lanes run, the
+  agent takes no new lanes and ends with the last. An admin still grants the
+  machine as a node. Not on macOS yet.
+- **`devstack node agent --no-new-lanes` and `--membership <dir>`**: an
+  agent that takes no new lanes (its report says it shares nothing), and
+  one that serves a membership from another folder.
+
 - **A lane on a node gets the GPUs it asked for, and no other lane does**
   (ADR-0112). A lane with `[lanes.need] gpus` holds that many of the node's
   free GPUs for as long as its lease lives; its container gets exactly
