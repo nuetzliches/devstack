@@ -1373,19 +1373,7 @@ impl RemoteLane {
             ));
         }
         let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-        let running: Vec<(String, bool)> = v["services"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
-            .iter()
-            .filter(|s| matches!(s["status"]["state"].as_str(), Some("healthy" | "running")))
-            .filter_map(|s| {
-                let name = s["name"].as_str()?.to_string();
-                // A service that runs a build has its id; one without a
-                // `build` cannot be rebuilt, only restarted.
-                Some((name, s["build_id"].as_str().is_some()))
-            })
-            .collect();
+        let running = restartable(&v);
         let failed: Vec<String> = std::thread::scope(|scope| {
             let handles: Vec<_> = running
                 .iter()
@@ -2330,6 +2318,32 @@ pub fn tunnel_error(what: &str, body: &str, node: &NodeRef) -> String {
     out
 }
 
+/// The services a warm restart of a lane on a node restarts, from its stack
+/// view (`GET /v1/stack`): those that run now, each with whether it runs a
+/// build (one without a `build` cannot be rebuilt, only restarted).
+fn restartable(view: &serde_json::Value) -> Vec<(String, bool)> {
+    view["services"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|s| matches!(s["status"]["state"].as_str(), Some("healthy" | "running")))
+        // A job's run is its start, not an instance: the local restart
+        // leaves it alone too (it has no main).
+        .filter(|s| !job_running(s))
+        .filter_map(|s| {
+            let name = s["name"].as_str()?.to_string();
+            Some((name, s["build_id"].as_str().is_some()))
+        })
+        .collect()
+}
+
+/// A job that runs on the node (`running` until it ends, #544): not ready
+/// for what comes after it until it `completed`, as the local
+/// `start_and_wait` and `ensure_after` count it.
+fn job_running(s: &serde_json::Value) -> bool {
+    s["kind"] == "job" && s["status"]["state"] == "running"
+}
+
 /// How many of `expected` are ready in a stack view.
 pub fn ready_count(view: &serde_json::Value, expected: &[String]) -> usize {
     view["services"]
@@ -2340,7 +2354,12 @@ pub fn ready_count(view: &serde_json::Value, expected: &[String]) -> usize {
             expected
                 .iter()
                 .any(|e| Some(e.as_str()) == s["name"].as_str())
-                && matches!(s["status"]["state"].as_str(), Some("healthy" | "running"))
+                && match s["status"]["state"].as_str() {
+                    Some("healthy" | "running") => !job_running(s),
+                    // A job that ran is ready, as `readiness` counts it.
+                    Some("completed") => s["status"]["exit_code"] == 0,
+                    _ => false,
+                }
         })
         .count()
 }
@@ -2355,6 +2374,7 @@ pub fn readiness(view: &serde_json::Value, expected: &[String]) -> Option<Result
             continue;
         }
         match s["status"]["state"].as_str().unwrap_or("") {
+            "running" if job_running(s) => pending = true,
             "healthy" | "running" => {}
             "completed" if s["status"]["exit_code"] == 0 => {}
             "failed" | "exited" | "completed" => {
@@ -2642,6 +2662,42 @@ mod tests {
         );
         assert!(
             matches!(super::readiness(&v("healthy", "failed"), &exp), Some(Err(e)) if e.contains("port taken"))
+        );
+    }
+
+    /// A job on the node is `running` while it runs (#544): not ready yet,
+    /// so its dependants and the start wait for it, and a failure it ends
+    /// in is reported. Ready once it completed. A warm restart leaves it
+    /// alone, as the local one does (it has no main instance).
+    #[test]
+    fn a_running_job_on_a_node_is_not_ready_yet() {
+        let v = |job: serde_json::Value| {
+            serde_json::json!({ "services": [
+                { "name": "api", "kind": "service", "status": { "state": "running" }, "build_id": "b1" },
+                { "name": "migrate", "kind": "job", "status": job, "build_id": "b2" },
+            ]})
+        };
+        let exp = ["api".to_string(), "migrate".to_string()];
+        let running = v(serde_json::json!({ "state": "running" }));
+        assert_eq!(
+            super::readiness(&running, &exp),
+            None,
+            "a running job is pending"
+        );
+        assert_eq!(super::ready_count(&running, &exp), 1, "only api is ready");
+        assert_eq!(
+            super::restartable(&running),
+            [("api".to_string(), true)],
+            "a running job is not restarted"
+        );
+        let done = v(serde_json::json!({ "state": "completed", "exit_code": 0 }));
+        assert_eq!(super::readiness(&done, &exp), Some(Ok(())));
+        assert_eq!(super::ready_count(&done, &exp), 2);
+        let failed =
+            v(serde_json::json!({ "state": "failed", "reason": "job exited with code 1" }));
+        assert!(
+            matches!(super::readiness(&failed, &exp), Some(Err(e)) if e.contains("code 1")),
+            "a job that failed after it ran is reported"
         );
     }
 
