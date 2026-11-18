@@ -77,9 +77,11 @@ impl Supervisor {
 
     /// The artifact of the first start of `name` after a daemon start: the
     /// last one promoted to main, if it is still there (ADR-0016). What the
-    /// tree holds now comes as a candidate, like any change.
-    pub(super) fn restorable(&self, name: &str) -> Option<(String, PathBuf)> {
-        if self.force_build.lock().unwrap().contains(name) {
+    /// tree holds now comes as a candidate, like any change. Without `watch`
+    /// no change comes as one, so nothing is restored: the start builds, and
+    /// an unchanged tree reuses its artifact by the build id (#562).
+    pub(super) fn restorable(&self, name: &str, svc: &Service) -> Option<(String, PathBuf)> {
+        if svc.watch.is_empty() || self.force_build.lock().unwrap().contains(name) {
             return None;
         }
         let id = self.persisted.lock().unwrap().main.get(name).cloned()?;

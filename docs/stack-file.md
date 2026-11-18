@@ -349,6 +349,12 @@ anything outside the repository. When one of those changed, `devstack restart
   change cancels an older build). The candidate starts on an internal port and
   takes over the fixed port once `health` answers, without dropped requests.
   A failed build or health check leaves the running instance alone.
+- No `watch` (a service or job with `build`): an edit makes no candidate;
+  the running build stays until `devstack restart`. The first start after a
+  daemon start (`up` after `down`, a lane stopped and started again) builds
+  from the tree; an unchanged tree reuses its artifact. With `watch` that
+  start runs the build last promoted and the edits come as a candidate
+  ([ADR-0016](adr/0016-a-daemon-restart-is-a-clean-restart.md)).
 - `restart_on` (dev servers): restart in place, for files hot reload does not
   pick up (`tsconfig.json`, `angular.json`), debounced 2 s like `watch`. A
   pattern that names a folder (`src/api`) covers what it holds, as

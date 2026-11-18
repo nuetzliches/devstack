@@ -271,7 +271,7 @@ impl Supervisor {
             let svc = self.effective(&name, &declared);
             if svc.build.is_none()
                 || !super::on_this_platform(&svc)
-                || self.restorable(&name).is_some()
+                || self.restorable(&name, &svc).is_some()
             {
                 continue;
             }
@@ -753,7 +753,7 @@ impl Supervisor {
         let artifact = match (svc.build.is_some(), prebuilt) {
             (false, _) => None,
             (true, Some(a)) => Some(a),
-            (true, None) => match first.then(|| self.restorable(name)).flatten() {
+            (true, None) => match first.then(|| self.restorable(name, svc)).flatten() {
                 Some(a) => {
                     restored = true;
                     crate::diag::info(
