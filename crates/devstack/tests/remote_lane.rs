@@ -761,6 +761,64 @@ fn a_lane_runs_on_a_node_of_the_pool() {
     cli(&main, &["lane", "stop", "wt"]);
     node_is_clear();
 
+    // A daemon that ends while the lane starts there, its lease admitted on
+    // the node but the lane not yet followed (#563): the next daemon
+    // releases that lease, and the lane starts there again rather than
+    // meeting its own lease ("runs here already").
+    let log_path = main.join(".devstack").join("daemon.log");
+    let seen = std::fs::read_to_string(&log_path).unwrap_or_default().len();
+    let mut starting = Command::new(BIN)
+        .args(["up", "--on", "ci-node"])
+        .current_dir(&wt)
+        .env("DEVSTACK_POOL_DIR", me.path())
+        .env("XDG_STATE_HOME", state.path())
+        .env("DEVSTACK_NO_HUB", "1")
+        .env("DEVSTACK_NO_UPDATE_CHECK", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let until = Instant::now() + Duration::from_secs(120);
+    loop {
+        let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+        if log.get(seen..).is_some_and(|new| {
+            new.lines()
+                .any(|l| l.contains("\"remote_lane_phase\"") && l.contains("\"phase\":\"lease\""))
+        }) {
+            break;
+        }
+        assert!(Instant::now() < until, "the lane was never leased");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let info: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(main.join(".devstack").join("daemon.json")).expect("daemon.json"),
+    )
+    .expect("daemon.json is JSON");
+    let pid = info["pid"].as_u64().expect("the daemon's pid");
+    let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+    let until = Instant::now() + Duration::from_secs(30);
+    while Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .is_ok_and(|s| s.success())
+    {
+        assert!(Instant::now() < until, "the daemon did not die");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let _ = starting.wait();
+    let _ = std::fs::remove_file(main.join(".devstack").join("daemon.json"));
+    cli(&main, &["up"]);
+    let up = cli(&wt, &["up", "--on", "ci-node"]);
+    assert!(up.contains("on ci-node"), "{up}");
+    let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+    assert!(
+        log.get(seen..)
+            .is_some_and(|new| new.contains("\"remote_lane_start_released\"")),
+        "{log}"
+    );
+    cli(&main, &["lane", "stop", "wt"]);
+    node_is_clear();
+
     // Its data thrown away, the lane starts afresh on the node: its build's
     // `prepare` comes from the member's store there (ADR-0062).
     // With `--workers` its workers run there too (#314).
