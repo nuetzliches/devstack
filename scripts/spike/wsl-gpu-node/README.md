@@ -75,6 +75,14 @@ reads the GPUs through it.
 curl -fsSL https://github.com/nuetzliches/devstack/releases/latest/download/install.sh | sh
 ```
 
+It installs to `~/.local/bin`, which a shell `wsl -d` opens (as root in
+particular) may not have on `PATH`; then:
+
+```sh
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && . ~/.bashrc
+devstack --version
+```
+
 Use the same version as the pool's coordinator (`--version` of `install.sh`
 if they differ).
 
