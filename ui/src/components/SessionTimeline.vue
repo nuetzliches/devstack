@@ -237,10 +237,10 @@ const crossInfo = computed(() => {
             </g>
           </g>
           <!-- Pauses pushed together -->
-          <g v-for="g in ax.gaps" :key="`gap-${g.x}`" class="gap" data-testid="session-timeline-gap">
+          <!-- A `title` attribute, not an SVG <title>: the app's tooltip (lib/tooltip.ts) takes it over, the browser's never shows. -->
+          <g v-for="g in ax.gaps" :key="`gap-${g.x}`" class="gap" :title="`Nothing happened for ${duration(g.ms)}`" data-testid="session-timeline-gap">
             <rect :x="g.x + 2" :y="AXIS_H - 6" :width="24" :height="layout.height - AXIS_H + 6" fill="url(#tl-gap)" />
             <text :x="g.x + 14" :y="12" text-anchor="middle">⋯ {{ duration(g.ms) }}</text>
-            <title>Nothing happened for {{ duration(g.ms) }}</title>
           </g>
           <!-- Compacted, cleared, interrupted, failed: a line through all rows -->
           <g v-for="(m, i) in others" :key="`m-${i}`" class="mark" :class="`m-${m.kind}`" @mouseenter="show($event, markWords[m.kind], [new Date(m.at).toLocaleTimeString()])" @mouseleave="tip = null">
