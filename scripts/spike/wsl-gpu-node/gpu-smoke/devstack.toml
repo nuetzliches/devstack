@@ -1,0 +1,19 @@
+# Spike for #168: a lane that needs one GPU, started on a node from another
+# member (`devstack up --on <pool>:<node>` in a worktree of this branch, from
+# this folder). Not a stack to run on a developer machine.
+version = 1
+
+[stack]
+name     = "gpu-smoke"
+requires = "0.49.0"
+
+[lanes]
+image = "node:24"
+
+[lanes.need]
+gpus = { count = 1 }
+
+[compose.gpu]
+project  = "gpu-smoke"
+files    = ["compose.yml"]
+services = ["smi"]

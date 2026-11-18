@@ -1,0 +1,13 @@
+# One container that sees a GPU: it prints nvidia-smi once and stays up, so
+# the lane is ready and its log shows what the node handed it.
+services:
+  smi:
+    image: nvidia/cuda:12.6.3-base-ubuntu24.04
+    command: ["sh", "-c", "nvidia-smi && sleep infinity"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
