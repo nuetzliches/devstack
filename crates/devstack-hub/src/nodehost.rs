@@ -218,7 +218,9 @@ pub fn decide(enabled: bool, running: Option<Running>, guests: usize) -> Act {
     }
 }
 
-/// The agent's arguments after `devstack`.
+/// The agent's arguments after `devstack` (Windows runs it as a process; on
+/// Linux it runs inside the hub).
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn agent_args(
     pool: &str,
     sw: &Switch,
@@ -657,7 +659,7 @@ fn launch(
     api: &str,
     new_lanes: bool,
 ) -> Result<Agent, String> {
-    let output = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let output = std::sync::Arc::new(Mutex::new(Vec::<String>::new()));
     #[cfg(target_os = "linux")]
     {
         let _ = &output;
