@@ -128,7 +128,11 @@ why. A member that only shares from the dashboard is no node.
   machine restarts, sleeps or loses the network, and its daemon follows it
   again when it starts; for as long, a requester that never comes back
   holds the lane's CPU, memory and disk on the node. Ending the lease in
-  the pool area frees them at once. `"public_links": true` (here only; an
+  the pool area frees them at once. Two leases do not wait for their
+  grace (#565): one whose lane container no longer runs (stopped by hand,
+  exited, removed) ends within half a minute, as an expired one does, so
+  the lane can start again at once; a warm lease lives at most 3 minutes
+  without a renewal. `"public_links": true` (here only; an
   admin cannot set it for the node) lets the node carry its lanes' public
   links itself, through a tunnel of the pool: see [Public links through the
   pool](#public-links-through-the-pool). Read when the agent starts.
@@ -1123,7 +1127,7 @@ until it is approved.
 | Node agent state (leases, mirrors, uploaded files per member, `policy.json`, `secret`) | `node/` beside its membership |
 | Ports | coordinator and node agent: as you choose (`--listen`); mutual TLS with the pool's CA |
 | Certificates | the pool's CA 20 years, the coordinator's server certificate 10, a member's 5; not renewed: when one expires, that member (for the CA, the pool) is set up again |
-| Leases | live an hour without a renewal on a dedicated node, 15 minutes on another (`lease_grace_minutes`); the requester renews every 30 s |
+| Leases | live an hour without a renewal on a dedicated node, 15 minutes on another (`lease_grace_minutes`), a warm lease at most 3 minutes; the requester renews every 30 s; a started lease whose lane container no longer runs ends within 30 s |
 | Event stream | `GET /v1/events` (members): an event per change of a part (within 2 s), a comment every 15 s; silent for 45 s is lost |
 | Uploads to a node | at most 512 MiB per file, 8 GiB per member |
 | Kept lanes on a node | `GET /v1/slots` (the caller's own), `DELETE /v1/slots?repo=&lane=` (`lane reset`, `lane prune`, a removed worktree) |

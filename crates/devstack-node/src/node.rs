@@ -35,6 +35,9 @@ use std::time::{Duration, Instant};
 /// (`lease_grace_minutes`): long enough for its requester to restart or wake.
 const GRACE_DEDICATED: Duration = Duration::from_secs(3600);
 const GRACE_OTHER: Duration = Duration::from_secs(15 * 60);
+/// A warm lease's (ADR-0065 point 5), at most (#565): it has no restart of
+/// its requester to outlive, and its requester renews it every 30 s.
+const GRACE_WARM: Duration = Duration::from_secs(3 * 60);
 /// How often the node measures, reaps and reports.
 const EVERY: Duration = Duration::from_secs(15);
 /// A lease admitted this recently is not in the measured usage yet, so its
@@ -1326,8 +1329,9 @@ impl Inner {
     /// of an older agent takes its directory along. Off the caller's
     /// thread, Docker takes its time; the slot is busy until it is done.
     /// `why`: `released` (its requester), `expired` (no renewal for
-    /// its grace: the requester's daemon or machine went away) or `ended` (an
-    /// admin of the pool).
+    /// its grace: the requester's daemon or machine went away), `gone` (its
+    /// lane container no longer runs, #565) or `ended` (an admin of the
+    /// pool).
     fn drop_lease(self: &Arc<Self>, l: NodeLease, why: &str) {
         crate::telemetry::node_log(
             "info",
@@ -1752,7 +1756,7 @@ async fn admit(
         disk,
         images,
         warning: None,
-        expires: now + s.grace().as_secs(),
+        expires: now + lease_grace(s.grace(), lease.warm).as_secs(),
         admitted: now,
         stack_file: None,
         slot: Some(slot.clone()),
@@ -1851,6 +1855,7 @@ async fn renew(
 ) -> ApiResult<Json<NodeLease>> {
     let who = caller(&s, &peer).await?;
     lease_of(&s, &id, &who)?;
+    // Read before the leases are locked: it locks the policies.
     let grace = s.grace();
     let mut leases = s.leases.lock().unwrap();
     // It may have ended since it was looked up.
@@ -1860,7 +1865,7 @@ async fn renew(
             format!("no lease `{id}` of yours here"),
         ));
     };
-    l.expires = crate::store::now() + grace.as_secs();
+    l.expires = crate::store::now() + lease_grace(grace, l.warm).as_secs();
     let mut out = l.clone();
     s.save(&leases);
     drop(leases);
@@ -3576,6 +3581,59 @@ fn lane_containers() -> Vec<LaneContainer> {
     parse_lane_containers(&String::from_utf8_lossy(&out.stdout))
 }
 
+/// The grace of a lease: the node's, a warm lease's at most [`GRACE_WARM`].
+fn lease_grace(grace: Duration, warm: bool) -> Duration {
+    if warm { grace.min(GRACE_WARM) } else { grace }
+}
+
+/// The leases whose lane container runs, by its label; `None` when Docker
+/// does not answer.
+fn running_lanes() -> Option<HashSet<String>> {
+    let out = std::process::Command::new("docker")
+        .args([
+            "ps",
+            "--filter",
+            "label=devstack.lease",
+            "--filter",
+            "status=running",
+            "--format",
+            "{{.Label \"devstack.lease\"}}",
+        ])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    Some(
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect(),
+    )
+}
+
+/// The started leases whose lane container is gone (#565): stopped by
+/// hand, exited, removed. Not one that starts now or whose start failed
+/// (`starting` has it), nor one not started yet. Seen so in this round
+/// and the one before (`missed`, carried from round to round): a lane that
+/// starts between the look at its container and the look at `starting`
+/// is not taken for gone.
+fn gone_leases(
+    leases: &HashMap<String, NodeLease>,
+    running: &HashSet<String>,
+    starting: &HashSet<String>,
+    missed: &mut HashSet<String>,
+) -> Vec<String> {
+    let now: HashSet<String> = leases
+        .values()
+        .filter(|l| l.stack_file.is_some() && !starting.contains(&l.id) && !running.contains(&l.id))
+        .map(|l| l.id.clone())
+        .collect();
+    let mut gone: Vec<String> = now.intersection(missed).cloned().collect();
+    gone.sort();
+    *missed = now;
+    gone
+}
+
 fn parse_lane_containers(text: &str) -> Vec<LaneContainer> {
     text.lines()
         .filter_map(|l| {
@@ -3695,6 +3753,8 @@ async fn background(s: Shared) {
     let mut sent = Instant::now() - Duration::from_secs(60);
     let mut purged: Option<Instant> = None;
     let mut disk_at: Option<Instant> = None;
+    // Started leases whose lane container did not run last round (#565).
+    let mut missed: HashSet<String> = HashSet::new();
     loop {
         next_round(wait, &s.changed).await;
         wait = EVERY;
@@ -3806,6 +3866,24 @@ async fn background(s: Shared) {
         };
         for l in expired {
             s.drop_lease(l, "expired");
+        }
+        // Leases whose lane container is gone end like expired ones (#565):
+        // they would hold the lane's slot and its share of the node for
+        // their grace. Nothing ends while Docker does not answer.
+        if let Ok(Some(running)) = tokio::task::spawn_blocking(running_lanes).await {
+            let starting: HashSet<String> = s.starting.lock().unwrap().keys().cloned().collect();
+            let gone: Vec<NodeLease> = {
+                let mut leases = s.leases.lock().unwrap();
+                let ids = gone_leases(&leases, &running, &starting, &mut missed);
+                let out: Vec<NodeLease> = ids.iter().filter_map(|id| leases.remove(id)).collect();
+                if !out.is_empty() {
+                    s.save(&leases);
+                }
+                out
+            };
+            for l in gone {
+                s.drop_lease(l, "gone");
+            }
         }
 
         let available = s.available();
@@ -4279,6 +4357,64 @@ mod tests {
         assert_eq!(a.len(), 8);
         assert_eq!(a, crate::lanerun::owner_tag("secret-of-one-pool"));
         assert_ne!(a, crate::lanerun::owner_tag("secret-of-another"));
+    }
+
+    fn lease(id: &str, started: bool) -> NodeLease {
+        NodeLease {
+            id: id.to_string(),
+            member: "m".into(),
+            repo: "r".into(),
+            lane: id.to_string(),
+            need: Need::default(),
+            disk: 0,
+            images: false,
+            warning: None,
+            expires: 0,
+            admitted: 0,
+            stack_file: started.then(|| "devstack.toml".to_string()),
+            slot: Some(id.to_string()),
+            kept: None,
+            warm: false,
+        }
+    }
+
+    #[test]
+    fn a_started_lease_whose_lane_container_is_gone_ends_in_the_second_round() {
+        let leases: HashMap<String, NodeLease> = [
+            ("runs", true),
+            ("gone", true),
+            ("starting", true),
+            ("failed", true),
+            ("syncing", false),
+        ]
+        .into_iter()
+        .map(|(id, started)| (id.to_string(), lease(id, started)))
+        .collect();
+        let running: HashSet<String> = ["runs".to_string()].into();
+        // A start under way, and one that failed: both in `starting`.
+        let starting: HashSet<String> = ["starting".to_string(), "failed".to_string()].into();
+        let mut missed = HashSet::new();
+        // The first round only notes it.
+        assert!(gone_leases(&leases, &running, &starting, &mut missed).is_empty());
+        assert_eq!(
+            gone_leases(&leases, &running, &starting, &mut missed),
+            ["gone".to_string()]
+        );
+        // Its container came back between two rounds: it stays.
+        let mut missed = HashSet::new();
+        gone_leases(&leases, &running, &starting, &mut missed);
+        let back: HashSet<String> = ["runs".to_string(), "gone".to_string()].into();
+        assert!(gone_leases(&leases, &back, &starting, &mut missed).is_empty());
+        assert!(gone_leases(&leases, &running, &starting, &mut missed).is_empty());
+    }
+
+    #[test]
+    fn a_warm_lease_lives_a_few_minutes_without_a_renewal() {
+        assert_eq!(lease_grace(GRACE_DEDICATED, true), GRACE_WARM);
+        assert_eq!(lease_grace(GRACE_DEDICATED, false), GRACE_DEDICATED);
+        // A policy's shorter grace holds for a warm lease too.
+        let short = Duration::from_secs(60);
+        assert_eq!(lease_grace(short, true), short);
     }
 
     #[test]
