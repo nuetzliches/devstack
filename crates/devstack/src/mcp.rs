@@ -25,10 +25,13 @@ shows `not yet active: building | starting | failed | held` until the change run
 old build answers meanwhile; do not test the change before that line is gone. A `held` \
 candidate (a schema change) needs the user's go-ahead before `promote_service`. Commands \
 (`run_command`) are scripts the stack file declares, such as a database reset; \
-some ask for confirmation, which must come from the user. In a git worktree, every tool acts \
-on its lane (`lanes` lists them): `up` starts it here, or with `on` on a node of the pool \
-(everything of it runs there, its ports are forwarded here); `lane_move`, `lane_share` and \
-`promote_lane` move it, share it with the pool, or give it the main ports.";
+some ask for confirmation, which must come from the user. Every tool acts on the tree this \
+server was started in. Started in a git worktree, that is its lane (`lanes` lists them): `up` \
+starts it here, or with `on` on a node of the pool (everything of it runs there, its ports are \
+forwarded here). The server does not follow the client into a worktree entered later: from the \
+main working tree, `up` starts the main stack; start the worktree's lane with `lane_start \
+<lane>` (or `devstack up` in the worktree). `lane_move`, `lane_share` and `promote_lane` move \
+a lane, share it with the pool, or give it the main ports.";
 
 /// The length of the whole `instructions` text, devstack's own and every
 /// upstream's together. Claude Code keeps 4096 characters of a server's
@@ -484,7 +487,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "up",
-            "Start the stack: the daemon if needed, the infrastructure, then every autostart service, building what is not built yet. Waits until all are ready or one fails. In a worktree, its lane; with `on`, the lane on a node of the pool (ADR-0025). POST /v1/up.",
+            "Start the stack: the daemon if needed, the infrastructure, then every autostart service, building what is not built yet. Waits until all are ready or one fails. Acts on the tree this MCP server was started in, not on one the client moved to later: started in a worktree, its lane (with `on`, on a node of the pool, ADR-0025); started in the main working tree, the main stack, even after the client entered a worktree: start that worktree's lane with `lane_start <lane>`. POST /v1/up.",
             json!({
                 "timeout_s": { "type": "integer", "minimum": 1, "description": "Give up waiting after this many seconds in all (default 600): starting Docker (up to 180 s) and the daemon (up to 120 s) count too, and are waited for to the end; the stack keeps starting" },
                 "on": { "type": "string", "description": "In a worktree only. Where it runs (ADR-0025): a node of the pool (its name or member id), `pool` for the coordinator to choose (warm first), `<pool>:<node>` in another pool, `local` for this machine. Without it: where this machine starts lanes by default (`devstack pool default-on`; `local` unless the user set it). The worktree's files go to that machine: unless the default says so, ask the user before starting elsewhere; `placement` shows where it could go" },
@@ -573,7 +576,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "lanes",
-            "The lanes of this repository (plan §3.5): its other git worktrees, each a lane that runs the stack beside the main one once started, with its ports moved by an offset and its own containers, without background workers, on this machine or a node of the pool (`node`). Shows branch, whether it is started and which lane serves the main ports. When this MCP server runs in a worktree, every other tool acts on its lane, and `up` starts it. GET /v1/lanes.",
+            "The lanes of this repository (plan §3.5): its other git worktrees, each a lane that runs the stack beside the main one once started, with its ports moved by an offset and its own containers, without background workers, on this machine or a node of the pool (`node`). Shows branch, whether it is started and which lane serves the main ports. When this MCP server was started in a worktree, every other tool acts on its lane, and `up` starts it; started in the main working tree, they act on the main stack, also after the client entered a worktree: `lane_start <lane>` starts that worktree's lane. GET /v1/lanes.",
             json!({}),
             &[],
             true,
@@ -836,6 +839,19 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                 notes.push('\n');
             }
             let mut c = client::ensure_daemon(&client::daemon_file(file), &sd)?;
+            // In the main working tree while lanes exist: say which stack this
+            // is, so an agent that entered a worktree after the server started
+            // does not take the main stack's `ready` for its lane's.
+            if client::worktree().is_none()
+                && let Some(n) = c
+                    .get("/v1/lanes")
+                    .ok()
+                    .and_then(|body| serde_json::from_str::<Vec<Value>>(&body).ok())
+                    .and_then(|lanes| main_tree_note(file, &lanes))
+            {
+                notes.push_str(&n);
+                notes.push('\n');
+            }
             // Started already elsewhere than `on` names: it moves there, as
             // `devstack up --on` and `lane move` do.
             let mut moved = false;
@@ -1080,7 +1096,7 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             let mut out = match c.lane() {
                 Some(l) if l != "-" => format!("this worktree is lane `{l}`\n"),
                 Some(_) => "this worktree's lane is not started; `up` starts it\n".to_string(),
-                None => "this is the main working tree\n".to_string(),
+                None => "this MCP server runs in the main working tree; `lane_start <lane>` starts a worktree's lane\n".to_string(),
             };
             if lanes.is_empty() {
                 out.push_str("no lanes: the repository has no other worktree");
@@ -1168,6 +1184,42 @@ pairing link for the user (single use, 60 s): {url}",
         }
         other => anyhow::bail!("unknown tool `{other}`"),
     }
+}
+
+/// For `up` in the main working tree: that it started the main stack, and
+/// how to start a lane instead. An MCP server stays in the tree it was
+/// started in; a client that entered a worktree since (Claude Code's
+/// `EnterWorktree`) would otherwise read the main stack's `ready` as its
+/// lane's. `None` without lanes: then there is nothing to mistake.
+fn main_tree_note(file: &Path, lanes: &[Value]) -> Option<String> {
+    if lanes.is_empty() {
+        return None;
+    }
+    const SHOWN: usize = 5;
+    let mut names: Vec<String> = lanes
+        .iter()
+        .take(SHOWN)
+        .map(|l| {
+            let name = l["name"].as_str().unwrap_or("?");
+            if l["active"] == false {
+                format!("{name} (not started)")
+            } else {
+                format!("{name} (started)")
+            }
+        })
+        .collect();
+    if lanes.len() > SHOWN {
+        names.push(format!("{} more, see `lanes`", lanes.len() - SHOWN));
+    }
+    let tree = file
+        .parent()
+        .map(|d| format!(" ({})", d.display()))
+        .unwrap_or_default();
+    Some(format!(
+        "note: this MCP server runs in the main working tree{tree}, so this is the main stack. \
+         For a worktree, start its lane with `lane_start <lane>`; lanes: {}",
+        names.join(", ")
+    ))
 }
 
 /// The instructions of the upstream whose tools carry `prefix` (with or
@@ -1405,6 +1457,66 @@ mod tests {
             .to_string();
         assert!(e.contains("`linear`"), "{e}");
         assert!(tools().iter().any(|t| t["name"] == "instructions"));
+    }
+
+    /// The server stays in the tree it was started in (nuts-timetrack,
+    /// 2026-11-18: after `EnterWorktree`, `up` reported the main stack
+    /// `ready`). The texts say so, and point to `lane_start`.
+    #[test]
+    fn the_texts_say_the_server_stays_in_its_tree() {
+        assert!(
+            INSTRUCTIONS.contains("does not follow the client into a worktree entered later"),
+            "{INSTRUCTIONS}"
+        );
+        assert!(
+            INSTRUCTIONS.contains("`lane_start <lane>`"),
+            "{INSTRUCTIONS}"
+        );
+        assert!(
+            !INSTRUCTIONS.contains("In a git worktree, every tool acts"),
+            "the old promise is gone"
+        );
+        let tools = tools();
+        let desc = |n: &str| {
+            tools.iter().find(|t| t["name"] == n).unwrap()["description"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        for n in ["up", "lanes"] {
+            let d = desc(n);
+            assert!(d.contains("started in"), "{n}: {d}");
+            assert!(d.contains("`lane_start <lane>`"), "{n}: {d}");
+        }
+    }
+
+    #[test]
+    fn up_in_the_main_tree_names_the_main_stack_while_lanes_exist() {
+        let file = Path::new("repo").join("devstack.toml");
+        assert_eq!(main_tree_note(&file, &[]), None);
+        let note = main_tree_note(
+            &file,
+            &[
+                json!({ "name": "calendar-today-button", "active": false }),
+                json!({ "name": "fix", "active": true }),
+            ],
+        )
+        .unwrap();
+        assert!(note.contains("main working tree (repo)"), "{note}");
+        assert!(note.contains("`lane_start <lane>`"), "{note}");
+        assert!(
+            note.contains("calendar-today-button (not started), fix (started)"),
+            "{note}"
+        );
+        let many: Vec<Value> = (0..7)
+            .map(|i| json!({ "name": format!("l{i}"), "active": false }))
+            .collect();
+        let note = main_tree_note(&file, &many).unwrap();
+        assert!(
+            note.contains("l4 (not started), 2 more, see `lanes`"),
+            "{note}"
+        );
+        assert!(!note.contains("l5"), "{note}");
     }
 
     #[test]

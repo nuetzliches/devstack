@@ -150,7 +150,11 @@ node), `down`, `start_service`, `stop_service`, `restart_service`,
 `lane_stop`, `lane_move`, `lane_share`, `promote_lane`, `placement`,
 `hub_status`, `hub_start`, `instructions`. `status`, `up` and `lane_start` end with the
 `dashboard:` page, `lanes` names each lane's. `lane_start` and `lane_stop` work from the main tree too: an
-agent there runs another worktree's lane without moving to it. `up` also
+agent there runs another worktree's lane without moving to it. The MCP server
+acts on the tree it was started in and does not follow the agent: after
+moving into a worktree during the session (Claude Code's `EnterWorktree`),
+`up` still starts the main stack (it says so while lanes exist); start the
+worktree's lane with `lane_start <lane>`, or `devstack up` in the worktree. `up` also
 takes `profile`, `run`, `yes` and `shift` (as `--profile`, `--run`, `--yes`, `--shift`) and
 `timeout_s` (how long it waits for the services and containers; the stack keeps starting);
 `lane_start` takes `profile`, `run` and `timeout_s` too; `logs` takes `file` (one kept log, from its

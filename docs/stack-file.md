@@ -846,8 +846,11 @@ daemon, the moment git creates it; the dashboard shows it under the stack,
 named by its branch. `devstack up` in it starts it: its own build, its own
 ports (moved by `port_step` times the lane's number), **its own containers**
 ([ADR-0030](adr/0030-each-lane-has-its-own-infrastructure.md)), no background
-workers (`devstack up --workers` turns them on). Every devstack command and the
-MCP server in the worktree act on its lane.
+workers (`devstack up --workers` turns them on). Every devstack command in the
+worktree acts on its lane, and so does an MCP server started there. An MCP
+server stays in the tree it was started in: one started in the main working
+tree acts on the main stack even after its client moved into a worktree (its
+`up` then says so while lanes exist); `lane_start <lane>` starts that lane.
 
 A lane runs with its worktree's own stack file, at the main one's path
 (`devstack.toml`, or where `-f` names it below the repository). A branch
