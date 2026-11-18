@@ -28,7 +28,8 @@ with `wsl --update`). In `%UserProfile%\.wslconfig` (create it if missing):
 networkingMode=mirrored
 ```
 
-Then `wsl --shutdown` and open the distribution again. Inside it,
+Then `wsl --shutdown` and open the distribution again. That ends every
+distribution, Docker Desktop's too: start Docker Desktop again afterwards. Inside it,
 `wslinfo --networking-mode` prints `mirrored`, and `ip -4 addr` shows the
 Windows machine's own LAN address.
 
@@ -52,7 +53,7 @@ in this distribution, whose iptables and file system it shares.
 
 ```sh
 curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker "$USER"     # then close and reopen the shell
+sudo usermod -aG docker "$USER"     # then close and reopen the shell (not needed as root)
 
 # The NVIDIA driver comes from Windows; do not install one in WSL.
 curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
@@ -106,8 +107,10 @@ devstack node agent --listen 0.0.0.0:4261 --api https://<windows-lan-address>:42
   --max-cpus 8 --max-memory-gib 16
 ```
 
-Choose the caps for what the machine can spare. No `--dedicated`: the machine
-is someone's workplace. Run `check.sh` again: the last line now says the agent
+Choose the caps for what the machine can spare, and below what WSL itself
+may take: `memory=` in `.wslconfig` caps the whole distribution (with
+`memory=12GB`, `--max-memory-gib 8` leaves room for the engine and the
+agent). No `--dedicated`: the machine is someone's workplace. Run `check.sh` again: the last line now says the agent
 listens.
 
 ## 6. Pool admin
