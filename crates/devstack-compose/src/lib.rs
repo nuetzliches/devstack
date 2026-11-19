@@ -178,6 +178,8 @@ pub struct ServiceModel {
     pub security_opt: Vec<String>,
     /// A map or a list, as the file has it.
     pub sysctls: Option<serde_json::Value>,
+    /// A map or a list (`key=value`), as the file has it.
+    pub annotations: Option<serde_json::Value>,
     #[serde(default, deserialize_with = "nullable")]
     pub volumes: Vec<MountModel>,
     #[serde(default, deserialize_with = "nullable")]

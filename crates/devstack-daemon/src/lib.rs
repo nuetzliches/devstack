@@ -194,6 +194,10 @@ const TELEMETRY_FLUSH: std::time::Duration = std::time::Duration::from_secs(2);
 /// runs then dies with the daemon (ADR-0009); a second Ctrl-C ends the wait.
 const SHUTDOWN_STOP: std::time::Duration = std::time::Duration::from_secs(90);
 
+/// How long a stopping daemon waits, after that, for a lane's forget (its
+/// containers and data going) to end.
+const FORGET_STOP: std::time::Duration = std::time::Duration::from_secs(600);
+
 /// How long a starting daemon waits for the state lock of an instance that
 /// is on its way out.
 const STATE_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -563,6 +567,23 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
                     diag::warn(
                         "daemon_stop_timeout",
                         serde_json::json!({ "after_s": SHUTDOWN_STOP.as_secs(), "why": "services did not stop in time; they end with the daemon" }),
+                    );
+                }
+            }
+            _ = tokio::signal::ctrl_c() => {
+                diag::warn("daemon_stop_forced", serde_json::json!({ "reason": "ctrl-c again" }));
+            }
+        }
+        // A lane being forgotten ends its forget first (minutes with Docker
+        // Desktop), with a budget of its own: the services' stop above did
+        // not wait for it (code review before 0.51.0, finding 3).
+        let l = lanes.clone();
+        tokio::select! {
+            r = tokio::time::timeout(FORGET_STOP, tokio::task::spawn_blocking(move || l.wait_forgotten())) => {
+                if r.is_err() {
+                    diag::warn(
+                        "daemon_forget_timeout",
+                        serde_json::json!({ "after_s": FORGET_STOP.as_secs(), "why": "a lane's forget did not end in time; what is left of it goes at the next forget" }),
                     );
                 }
             }

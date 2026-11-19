@@ -166,4 +166,41 @@ describe('the share setup dialog', () => {
     await vi.waitFor(() => expect(sent).toEqual({ enabled: true, distro: 'Ubuntu-24.04' }));
     await vi.waitFor(() => expect(q('share-setup-outcome')).not.toBeNull());
   });
+
+  // Code review before 0.51.0, finding 7.
+  it('shows the check of the distribution chosen last, not a slower earlier one', async () => {
+    const fake = t.current!;
+    const later: Array<() => void> = [];
+    fake.on('/hub/pool/share/check', (_m, _p, body) => {
+      const d = (body as { distro?: string }).distro;
+      const answer = ok(
+        d === 'Ubuntu-24.04'
+          ? { ready: false, problem: 'Docker is missing in Ubuntu-24.04', distros: ['Ubuntu', 'Ubuntu-24.04'] }
+          : { ready: true, distros: ['Ubuntu', 'Ubuntu-24.04'], checks: [{ name: 'docker', ok: true, detail: 'Docker Engine' }] },
+      );
+      // The check of `Ubuntu` answers only when let go.
+      return d === 'Ubuntu' ? new Promise((done) => later.push(() => done(answer))) : answer;
+    });
+    usePool().share = status({ switch: { enabled: true, distro: 'Ubuntu-24.04' }, host: { state: 'blocked', guests: 0 } });
+    const Dialog = (await import('./ShareSetupDialog.vue')).default;
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    createApp({ render: () => h(Dialog) }).mount(el);
+    usePool().shareSetup = true;
+    const q = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+    await vi.waitFor(() => expect(q('share-setup-problem')?.textContent).toContain('Ubuntu-24.04'));
+    const select = q('share-setup-distro') as HTMLSelectElement;
+    select.value = 'Ubuntu';
+    select.dispatchEvent(new Event('change'));
+    await vi.waitFor(() => expect(later).toHaveLength(1));
+    // While `Ubuntu` is checked, the other's verdict is not shown as its.
+    expect(q('share-setup-problem')).toBeNull();
+    select.value = 'Ubuntu-24.04';
+    select.dispatchEvent(new Event('change'));
+    await vi.waitFor(() => expect(q('share-setup-problem')?.textContent).toContain('Ubuntu-24.04'));
+    later[0]();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(q('share-setup-ready')).toBeNull();
+    expect(q('share-setup-problem')?.textContent).toContain('Ubuntu-24.04');
+  });
 });

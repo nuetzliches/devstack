@@ -392,7 +392,9 @@ devstack promote --lane main            # back to the main working tree
 What a lane's Compose files may ask of a node is less than on your machine:
 the node runs them on its own Docker engine. It refuses, naming each, a
 service that is privileged, adds capabilities or devices (GPUs with the
-`nvidia` driver excepted, limited to the lane's: see GPUs below), shares a namespace of the host (`pid`, `ipc`,
+`nvidia` driver excepted, limited to the lane's: see GPUs below), asks for
+devices by annotation (`cdi.k8s.io/…`, `nvidia.com/…`) or sets a `runtime`
+other than `runc`, shares a namespace of the host (`pid`, `ipc`,
 `network_mode: host`, ...), sets `userns_mode`, `cgroup_parent`,
 `security_opt`, `sysctls`, `oom_kill_disable` or a negative `oom_score_adj`,
 uses `use_api_socket` or a `provider`, logs through a driver other than
