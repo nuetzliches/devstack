@@ -4,15 +4,16 @@
 // granted it; on Windows in a WSL distribution the user names, whose checks
 // and setup prompt are shown here. Off while others' lanes run, the agent
 // takes no new ones and ends with the last. `compact` is the sidebar tile.
+// Switched on, it opens the setup dialog, which turns it on once the checks
+// pass; green only while the agent runs and the machine is granted.
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import type { ShareHost, ShareSwitch } from '@/api/types';
 import { bytes } from '@/lib/format';
 import { usePool } from '@/stores/pool';
-import { useUi } from '@/stores/ui';
+import ShareChecks from './ShareChecks.vue';
 
 const props = defineProps<{ compact?: boolean }>();
 const pool = usePool();
-const ui = useUi();
 const s = computed(() => pool.share);
 const sw = computed<ShareSwitch>(() => s.value?.switch ?? { enabled: false });
 const host = computed<ShareHost | undefined>(() => s.value?.host);
@@ -60,8 +61,12 @@ const changed = computed(() => {
 
 async function toggle() {
   if (!s.value) return;
+  if (!on.value) {
+    pool.shareSetup = true;
+    return;
+  }
   busy.value = true;
-  await pool.setShare(props.compact ? { ...sw.value, enabled: !on.value } : form(!on.value));
+  await pool.setShare(props.compact ? { ...sw.value, enabled: false } : form(false));
   busy.value = false;
 }
 async function save() {
@@ -89,7 +94,7 @@ const stateText = computed(() => {
     case 'draining':
       return `No new lanes; ${h.guests} of others still run here`;
     case 'blocked':
-      return 'Not ready yet';
+      return 'Setup incomplete: finish it';
     case 'failed':
       return 'The node agent ended';
     case 'foreign':
@@ -106,29 +111,22 @@ const stateClass = computed(() => {
   if (st === 'blocked' || st === 'failed') return 'warn';
   return 'muted';
 });
+/** Switched on, its agent does not run: the setup dialog says what is missing. */
+const stuck = computed(() => on.value && (host.value?.state === 'blocked' || host.value?.state === 'failed'));
 const windows = computed(() => !!host.value?.distros?.length || !!sw.value.distro);
-const missing = computed(() => (host.value?.checks ?? []).filter((c) => !c.ok));
-
-async function copy(text: string, what: string) {
-  try {
-    await navigator.clipboard.writeText(text);
-    ui.toast('success', `${what} copied`, '');
-  } catch {
-    ui.toast('error', 'Could not copy', 'The browser did not allow it.');
-  }
-}
 </script>
 
 <template>
-  <div v-if="s && (s.member || !props.compact)" class="share" :class="{ compact: props.compact, on }" data-testid="share">
+  <div v-if="s && (s.member || !props.compact)" class="share" :class="[{ compact: props.compact, on }, on ? `tone-${stateClass}` : '']" data-testid="share">
     <div class="row">
       <button
         type="button"
         role="switch"
         class="switch"
+        :class="`tone-${stateClass}`"
         :aria-checked="on"
         :disabled="busy || !s.member || host?.state === 'unsupported'"
-        :title="s.member ? (on ? 'Stop sharing this machine' : 'Let other members of the pool run lanes on this machine') : 'Join a pool first'"
+        :title="s.member ? (on ? 'Stop sharing this machine' : 'Set up sharing: let other members of the pool run lanes on this machine') : 'Join a pool first'"
         data-testid="share-switch"
         @click="toggle"
       >
@@ -137,7 +135,8 @@ async function copy(text: string, what: string) {
       <span class="label">
         <strong>{{ on ? 'Sharing' : 'Not sharing' }}</strong>
         <span v-if="props.compact && pool.pools.filter((p) => p.joined).length > 1" class="faint small" data-testid="share-pool">{{ pool.current }}</span>
-        <span v-if="stateText" class="small" :class="stateClass" data-testid="share-state">{{ stateText }}</span>
+        <button v-if="stuck" type="button" class="state-link small warn" data-testid="share-state" title="Open the setup" @click="pool.shareSetup = true">{{ stateText }}</button>
+        <span v-else-if="stateText" class="small" :class="stateClass" data-testid="share-state">{{ stateText }}</span>
       </span>
     </div>
     <template v-if="!props.compact">
@@ -167,21 +166,11 @@ async function copy(text: string, what: string) {
         <button type="button" class="btn btn-sm" :disabled="!changed || busy" data-testid="share-save" @click="save">Save</button>
       </div>
       <p v-if="host?.detail && host.state !== 'unsupported'" class="small" :class="stateClass" data-testid="share-detail">{{ host.detail }}</p>
-      <p v-if="host?.api && (host.state === 'running' || host.state === 'draining')" class="faint small">Other members reach its agent at {{ host.api }}.</p>
-      <ul v-if="host?.checks?.length" class="checks" data-testid="share-checks">
-        <li v-for="c in host.checks" :key="c.name" :class="c.ok ? 'ok' : c.optional ? 'muted' : 'warn'">
-          <span class="mark">{{ c.ok ? '✓' : c.optional ? '–' : '✗' }}</span>
-          <span>{{ c.detail }}</span>
-          <span v-if="!c.ok && c.fix" class="fix">
-            <code>{{ c.fix }}</code>
-            <button type="button" class="btn btn-xs" @click="copy(c.fix, 'Command')">Copy</button>
-          </span>
-        </li>
-      </ul>
-      <p v-if="host?.prompt && (missing.length || !sw.distro)" class="small">
-        <button type="button" class="btn btn-sm" data-testid="share-prompt" @click="copy(host.prompt, 'Prompt')">Copy a setup prompt for a coding agent</button>
-        <span class="faint"> It sets up what is missing, asking before each step; what needs an elevated shell stays with you.</span>
+      <p v-if="stuck">
+        <button type="button" class="btn btn-sm btn-primary" data-testid="share-finish" @click="pool.shareSetup = true">Finish the setup</button>
       </p>
+      <p v-if="host?.api && (host.state === 'running' || host.state === 'draining')" class="faint small">Other members reach its agent at {{ host.api }}.</p>
+      <ShareChecks :checks="host?.checks ?? []" :prompt="host?.prompt" />
       <details v-if="host?.output?.length" class="output">
         <summary class="small">The node agent's last lines</summary>
         <pre>{{ host.output.join('\n') }}</pre>
@@ -196,8 +185,21 @@ async function copy(text: string, what: string) {
   border-radius: 8px;
   background: var(--surface-hover);
 }
-.share.compact.on {
+.share.compact.tone-ok {
   background: color-mix(in srgb, var(--ok) 14%, transparent);
+}
+.share.compact.tone-warn {
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+.state-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  text-decoration: underline;
+  cursor: pointer;
 }
 .row {
   display: flex;
@@ -234,8 +236,15 @@ async function copy(text: string, what: string) {
   cursor: pointer;
   padding: 0;
 }
+/* On, the switch says how it went: green runs, amber needs the setup. */
 .switch[aria-checked='true'] {
+  background: var(--accent);
+}
+.switch[aria-checked='true'].tone-ok {
   background: var(--ok);
+}
+.switch[aria-checked='true'].tone-warn {
+  background: var(--warn);
 }
 .switch:disabled {
   opacity: 0.5;
@@ -271,38 +280,6 @@ async function copy(text: string, what: string) {
 .caps input,
 .caps select {
   width: 170px;
-}
-.checks {
-  list-style: none;
-  margin: 8px 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 13px;
-}
-.checks li {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: baseline;
-}
-.mark {
-  width: 1em;
-  flex: none;
-}
-.fix {
-  display: flex;
-  gap: 6px;
-  align-items: baseline;
-  flex-basis: 100%;
-  padding-left: 1.4em;
-  min-width: 0;
-}
-.fix code {
-  font-size: 11px;
-  overflow-wrap: anywhere;
-  color: var(--text);
 }
 .output pre {
   max-height: 200px;

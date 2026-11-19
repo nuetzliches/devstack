@@ -57,6 +57,8 @@ pub const WSL_DIR: &str = "/var/lib/devstack-node";
 #[cfg_attr(not(windows), allow(dead_code))]
 pub const FIREWALL_RULE: &str = "devstack-node";
 
+const MAC: &str = "A Mac cannot run other members' lanes yet.";
+
 /// The switch of one pool, in `node-host.json` beside its membership. A file
 /// of its own: the `share.json` of releases before 0.23 may still say
 /// `enabled`, which must not start an agent now.
@@ -136,9 +138,12 @@ pub struct Check {
     pub ok: bool,
     /// What was found.
     pub detail: String,
-    /// What to run when it is missing.
+    /// What to run when it is missing: the command alone, to be copied.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fix: Option<String>,
+    /// Where `fix` runs, or what comes before it ("In `Ubuntu` as root").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fix_note: Option<String>,
     /// Missing, the agent still starts (the GPU, the firewall rule).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub optional: bool,
@@ -472,7 +477,7 @@ fn round(pool: &str, dir: &Path, poked: bool) {
     if cfg!(target_os = "macos") {
         set(pool, |h| {
             h.state = State::Unsupported;
-            h.detail = Some("A Mac cannot run other members' lanes yet.".into());
+            h.detail = Some(MAC.into());
         });
         return;
     }
@@ -684,22 +689,61 @@ fn round(pool: &str, dir: &Path, poked: bool) {
     }
 }
 
-/// Whether what the agent needs is there; the checks go to the pool's
-/// [`Host`]. On Linux the agent's own start says what is missing.
-fn ready(pool: &str, sw: &Switch) -> Result<(), String> {
+/// What the agent would find with a switch, before it is on: the setup
+/// dialog shows it (`POST /hub/pool/share/check`), and a start goes by it.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Preflight {
+    /// Every required check passes: the agent would start.
+    pub ready: bool,
+    /// Why it would not.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub problem: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<Check>,
+    /// Windows: the distributions there are (Docker Desktop's left out).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub distros: Vec<String>,
+    /// For a coding agent: how to set up what `checks` misses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+}
+
+impl Preflight {
+    fn not(problem: String) -> Self {
+        Self {
+            problem: Some(problem),
+            ..Self::default()
+        }
+    }
+}
+
+/// Runs the checks (on Windows `wsl.exe` and PowerShell, seconds): not on an
+/// async thread.
+pub fn preflight(sw: &Switch) -> Preflight {
+    if cfg!(target_os = "macos") {
+        return Preflight::not(MAC.into());
+    }
+    if let Some(why) = sw.problem() {
+        return Preflight::not(why);
+    }
+    needs(sw)
+}
+
+/// Whether what the agent needs is there. On Linux the agent's own start
+/// says what is missing.
+fn needs(sw: &Switch) -> Preflight {
     #[cfg(windows)]
     {
         let distros = wsl::distros();
-        set(pool, |h| h.distros = distros.clone());
         let Some(distro) = sw.distro.clone() else {
-            set(pool, |h| {
-                h.checks.clear();
-                h.prompt = Some(wsl::prompt(None, &[], sw.port()));
-            });
-            return Err(
-                "Choose the WSL distribution the node agent runs in (one with Docker Engine of its own, not Docker Desktop's)."
-                    .into(),
-            );
+            return Preflight {
+                prompt: Some(wsl::prompt(None, &[], sw.port())),
+                distros,
+                ..Preflight::not(
+                    "Choose the WSL distribution the node agent runs in (one with Docker Engine of its own, not Docker Desktop's)."
+                        .into(),
+                )
+            };
         };
         let checks = wsl::checks(&distro, &distros, sw.port());
         let missing = checks.iter().any(|c| !c.ok && !c.optional);
@@ -707,22 +751,37 @@ fn ready(pool: &str, sw: &Switch) -> Result<(), String> {
             .iter()
             .any(|c| !c.ok)
             .then(|| wsl::prompt(Some(&distro), &checks, sw.port()));
-        set(pool, |h| {
-            h.checks = checks;
-            h.prompt = prompt;
-        });
-        if missing {
-            return Err(format!(
-                "The WSL distribution `{distro}` lacks what the node agent needs: see the checks."
-            ));
+        Preflight {
+            ready: !missing,
+            problem: missing.then(|| {
+                format!(
+                    "The WSL distribution `{distro}` lacks what the node agent needs: see the checks."
+                )
+            }),
+            checks,
+            distros,
+            prompt,
         }
-        Ok(())
     }
     #[cfg(not(windows))]
     {
-        let _ = (pool, sw);
-        Ok(())
+        let _ = sw;
+        Preflight {
+            ready: true,
+            ..Preflight::default()
+        }
     }
+}
+
+/// [`needs`], with the checks put on the pool's [`Host`].
+fn ready(pool: &str, sw: &Switch) -> Result<(), String> {
+    let p = needs(sw);
+    set(pool, |h| {
+        h.distros = p.distros;
+        h.checks = p.checks;
+        h.prompt = p.prompt;
+    });
+    p.problem.map_or(Ok(()), Err)
 }
 
 /// Last lines of output kept per agent.
@@ -924,6 +983,7 @@ echo "memory=$(awk '/MemTotal/ {print $2 * 1024}' /proc/meminfo)""#;
                 format!("no WSL distribution `{distro}`")
             },
             fix: (!exists).then(|| format!("wsl --install -d {distro}")),
+            fix_note: (!exists).then(|| "In PowerShell".into()),
             optional: false,
         }];
         if !exists {
@@ -934,8 +994,9 @@ echo "memory=$(awk '/MemTotal/ {print $2 * 1024}' /proc/meminfo)""#;
             name: "networking".into(),
             ok: mode == "mirrored",
             detail: format!("networking mode: {}", if mode.is_empty() { "unknown" } else { mode }),
-            fix: (mode != "mirrored").then(|| {
-                "In %UserProfile%\\.wslconfig under [wsl2]: networkingMode=mirrored, then `wsl --shutdown` (ends Docker Desktop too: start it again)".into()
+            fix: (mode != "mirrored").then(|| "wsl --shutdown".into()),
+            fix_note: (mode != "mirrored").then(|| {
+                "In %UserProfile%\\.wslconfig under [wsl2] set networkingMode=mirrored, then in PowerShell (ends Docker Desktop too: start it again)".into()
             }),
             optional: false,
         });
@@ -951,9 +1012,10 @@ echo "memory=$(awk '/MemTotal/ {print $2 * 1024}' /proc/meminfo)""#;
             } else {
                 "`docker` talks to Docker Desktop".into()
             },
-            fix: (!own).then(|| {
+            fix: (!own).then(|| "curl -fsSL https://get.docker.com | sh".into()),
+            fix_note: (!own).then(|| {
                 format!(
-                    "Turn Docker Desktop's WSL integration off for `{distro}`, then in it as root: curl -fsSL https://get.docker.com | sh"
+                    "Turn Docker Desktop's WSL integration off for `{distro}`, then in `{distro}` as root"
                 )
             }),
             optional: false,
@@ -970,9 +1032,10 @@ echo "memory=$(awk '/MemTotal/ {print $2 * 1024}' /proc/meminfo)""#;
             },
             fix: (!same).then(|| {
                 format!(
-                    "In `{distro}` as root: curl -fsSL https://github.com/nuetzliches/devstack/releases/latest/download/install.sh | sh -s -- --version {version}"
+                    "curl -fsSL https://github.com/nuetzliches/devstack/releases/latest/download/install.sh | sh -s -- --version {version}"
                 )
             }),
+            fix_note: (!same).then(|| format!("In `{distro}` as root")),
             optional: false,
         });
         let gpus: u32 = get("gpus").parse().unwrap_or(0);
@@ -986,7 +1049,10 @@ echo "memory=$(awk '/MemTotal/ {print $2 * 1024}' /proc/meminfo)""#;
                 (n, false) => format!("{n} NVIDIA GPU(s), but Docker has no `nvidia` runtime"),
             },
             fix: (gpus > 0 && !runtime).then(|| {
-                "Install the NVIDIA Container Toolkit in the distribution, then: nvidia-ctk runtime configure --runtime=docker && systemctl restart docker".into()
+                "nvidia-ctk runtime configure --runtime=docker && systemctl restart docker".into()
+            }),
+            fix_note: (gpus > 0 && !runtime).then(|| {
+                format!("Install the NVIDIA Container Toolkit in `{distro}`, then in it as root")
             }),
             optional: true,
         });
@@ -998,9 +1064,10 @@ echo "memory=$(awk '/MemTotal/ {print $2 * 1024}' /proc/meminfo)""#;
                 Some(false) => format!("no Hyper-V firewall rule `{FIREWALL_RULE}`: other members may not reach port {port}"),
                 None => "the Hyper-V firewall rule could not be read".into(),
             },
+            fix_note: (firewall != Some(true)).then(|| "In an elevated PowerShell".into()),
             fix: (firewall != Some(true)).then(|| {
                 format!(
-                    "In an elevated PowerShell: New-NetFirewallHyperVRule -Name {FIREWALL_RULE} -DisplayName \"devstack node agent\" -Direction Inbound -VMCreatorId '{{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}}' -Protocol TCP -LocalPorts {port}"
+                    "New-NetFirewallHyperVRule -Name {FIREWALL_RULE} -DisplayName \"devstack node agent\" -Direction Inbound -VMCreatorId '{{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}}' -Protocol TCP -LocalPorts {port}"
                 )
             }),
             optional: true,
@@ -1063,8 +1130,10 @@ echo "memory=$(awk '/MemTotal/ {print $2 * 1024}' /proc/meminfo)""#;
                 for c in checks.iter().filter(|c| !c.ok) {
                     n += 1;
                     p.push_str(&format!("{n}. {}: {}", c.name, c.detail));
-                    if let Some(f) = &c.fix {
-                        p.push_str(&format!(". {f}"));
+                    match (&c.fix_note, &c.fix) {
+                        (Some(w), Some(f)) => p.push_str(&format!(". {w}: `{f}`")),
+                        (None, Some(f)) => p.push_str(&format!(". `{f}`")),
+                        _ => {}
                     }
                     p.push('\n');
                 }
@@ -1379,6 +1448,13 @@ mod tests {
             .collect();
         assert_eq!(required, ["networking", "docker", "devstack"]);
         assert!(c.iter().filter(|c| !c.ok).all(|c| c.fix.is_some()));
+        // The command alone is copied: where it runs stays beside it.
+        let devstack = c.iter().find(|c| c.name == "devstack").unwrap();
+        assert!(
+            devstack.fix.as_deref().unwrap().starts_with("curl -fsSL "),
+            "{devstack:?}"
+        );
+        assert_eq!(devstack.fix_note.as_deref(), Some("In `Ubuntu` as root"));
         let p = wsl::prompt(Some("Ubuntu"), &c, 4261);
         assert!(
             p.contains("--version 0.50.0") && p.contains("networkingMode=mirrored"),

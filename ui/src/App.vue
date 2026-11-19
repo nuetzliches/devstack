@@ -8,6 +8,7 @@ import { ago, useNow } from '@/lib/format';
 import TopBar from '@/components/TopBar.vue';
 import Toasts from '@/components/Toasts.vue';
 import GlobalDialogs from '@/components/GlobalDialogs.vue';
+import ShareSetupDialog from '@/components/ShareSetupDialog.vue';
 import CommandPalette from '@/components/CommandPalette.vue';
 import Icon from '@/components/icons/Icon.vue';
 import Sidebar from '@/components/Sidebar.vue';
@@ -189,6 +190,7 @@ async function startHub() {
     </div>
     <Toasts />
     <GlobalDialogs />
+    <ShareSetupDialog />
     <WhatsNewDialog />
     <CommandPalette />
   </template>

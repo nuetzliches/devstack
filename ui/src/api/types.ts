@@ -936,8 +936,10 @@ export type ShareStatus = {
 };
 /** The share switch of one pool: `PUT /hub/pool/share`. `distro` is the WSL distribution on Windows. */
 export type ShareSwitch = { enabled: boolean; max_cpus?: number; max_memory?: number; distro?: string; port?: number };
-/** One thing the node agent needs, and whether this machine has it; `optional`: it starts without. */
-export type ShareCheck = { name: string; ok: boolean; detail: string; fix?: string; optional?: boolean };
+/** One thing the node agent needs, and whether this machine has it; `optional`: it starts without. `fix` is the command alone, `fix_note` where it runs (absent from an older hub, whose `fix` says both). */
+export type ShareCheck = { name: string; ok: boolean; detail: string; fix?: string; fix_note?: string; optional?: boolean };
+/** `POST /hub/pool/share/check`: what the node agent would find with a switch, before it is on. */
+export type SharePreflight = { ready: boolean; problem?: string; checks?: ShareCheck[]; distros?: string[]; prompt?: string };
 /** The node agent the share switch runs, as the hub last saw it. */
 export type ShareHost = {
   state: 'off' | 'unsupported' | 'blocked' | 'starting' | 'running' | 'draining' | 'failed' | 'foreign';

@@ -98,6 +98,7 @@ export const paths = {
   poolPlacement: (pool: string, repo: string, lane: string, profile?: string, gpus?: number) =>
     `/hub/pool/placement?repo=${enc(repo)}&lane=${enc(lane)}${pool !== 'default' ? `&pool=${enc(pool)}` : ''}${profile ? `&profile=${enc(profile)}` : ''}${gpus ? `&gpus=${gpus}` : ''}`,
   poolShare: '/hub/pool/share',
+  poolShareCheck: '/hub/pool/share/check',
   poolApprove: (id: string) => `/hub/pool/members/${enc(id)}/approve`,
   poolRemove: (id: string) => `/hub/pool/members/${enc(id)}/remove`,
   poolRole: (id: string) => `/hub/pool/members/${enc(id)}/role`,
