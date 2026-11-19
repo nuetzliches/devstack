@@ -124,26 +124,35 @@ pub fn builds(
                 if state == "building" && v["status"]["build_id"].is_null() {
                     pending_start.get_or_insert(at);
                 }
-                // The main instance runs a build, or a job ran it: it is live.
-                let live = if job {
-                    state == "completed" && v["status"]["exit_code"] == 0
-                } else {
-                    state == "healthy" || state == "running"
+                // The main instance runs a build: it is live. A job's build
+                // runs, then is live once the job completed, or failed.
+                let outcome = match (job, state) {
+                    (false, "healthy" | "running") => Some("live"),
+                    (true, "running") => Some("running"),
+                    (true, "completed") if v["status"]["exit_code"] == 0 => Some("live"),
+                    (true, "failed" | "completed") => Some("failed"),
+                    _ => None,
                 };
-                if let Some(id) = v["build_id"].as_str().filter(|_| live) {
+                if let (Some(id), Some(outcome)) = (v["build_id"].as_str(), outcome) {
+                    let reason = (outcome == "failed")
+                        .then(|| v["status"]["reason"].as_str().map(str::to_string))
+                        .flatten();
                     match out.iter_mut().find(|e| e.build == id) {
                         Some(e) => {
-                            if e.outcome != "live" {
-                                e.outcome = "live".into();
+                            if e.outcome != outcome {
+                                e.outcome = outcome.into();
                                 e.updated_ms = at;
+                            }
+                            if reason.is_some() {
+                                e.reason = reason;
                             }
                         }
                         None => out.push(BuildEntry {
                             build: id.into(),
                             started_ms: pending_start.take().unwrap_or(at),
                             updated_ms: at,
-                            outcome: "live".into(),
-                            reason: None,
+                            outcome: outcome.into(),
+                            reason,
                             current: false,
                             artifact: false,
                             log: false,
@@ -161,6 +170,10 @@ pub fn builds(
         if matches!(e.outcome.as_str(), "building" | "starting" | "switching")
             && on_way != Some(e.build.as_str())
         {
+            e.outcome = "interrupted".into();
+        }
+        // A job's run that is not the one running now.
+        if e.outcome == "running" && !e.current {
             e.outcome = "interrupted".into();
         }
     }
@@ -295,7 +308,10 @@ mod tests {
     }
 
     /// #571: a job is `running` while it runs (#544); its build is live once
-    /// it completed, not while it runs, and not when it failed after.
+    /// it completed, `running` while it runs, and `failed` when it failed
+    /// after. A rebuild of a job that does not run goes through the
+    /// candidate, which is gone before the job starts (code review before
+    /// 0.51.0, finding 2).
     #[test]
     fn a_jobs_build_is_live_once_the_job_completed() {
         let svc = |t, id: &str, status: &str| {
@@ -306,29 +322,56 @@ mod tests {
                 ),
             )
         };
+        let cand = |t, c: &str| {
+            ev(
+                t,
+                &format!("\"event\":\"candidate\",\"service\":\"migrate\",\"candidate\":{c}"),
+            )
+        };
         let lines = vec![
+            // up: the first build, run once
+            ev(
+                0,
+                r#""event":"service","service":"migrate","build_id":null,"status":{"state":"building","build_id":null}"#,
+            ),
             svc(1, "aaa", r#"{"state":"running"}"#),
             svc(2, "aaa", r#"{"state":"completed","exit_code":0}"#),
-            svc(3, "bbb", r#"{"state":"running"}"#),
+            // a change: built as a candidate, then run, and it fails
+            cand(3, r#"{"state":"building","build_id":null}"#),
+            cand(4, r#"{"state":"building","build_id":"bbb"}"#),
+            cand(5, "null"),
+            svc(6, "bbb", r#"{"state":"running"}"#),
             svc(
-                4,
+                7,
                 "bbb",
                 r#"{"state":"failed","reason":"job exited with code 1"}"#,
             ),
-            svc(5, "ccc", r#"{"state":"running"}"#),
+            // another change, and the job runs now
+            cand(8, r#"{"state":"building","build_id":"ccc"}"#),
+            cand(9, "null"),
+            svc(10, "ccc", r#"{"state":"running"}"#),
         ];
-        let got: Vec<(String, String)> = builds(&lines, "migrate", "", Some("ccc"), None, 10, true)
-            .into_iter()
-            .map(|e| (e.build, e.outcome))
-            .collect();
+        let got = |current| -> Vec<(String, String)> {
+            builds(&lines, "migrate", "", current, None, 10, true)
+                .into_iter()
+                .map(|e| (e.build, e.outcome))
+                .collect()
+        };
+        let s = |b: &str, o: &str| (b.to_string(), o.to_string());
         assert_eq!(
-            got,
-            [("aaa".to_string(), "live".to_string())],
-            "only the job that completed"
+            got(Some("ccc")),
+            [s("ccc", "running"), s("bbb", "failed"), s("aaa", "live")]
         );
+        let b = builds(&lines, "migrate", "", Some("ccc"), None, 10, true);
+        assert_eq!(b[1].reason.as_deref(), Some("job exited with code 1"));
+        // The daemon stopped while it ran: the log says no more.
+        assert_eq!(got(None)[0], s("ccc", "interrupted"));
         // A long-running service's `running` is live, as before.
         let b = builds(&lines, "migrate", "", None, None, 10, false);
-        assert_eq!(b.len(), 3);
+        assert_eq!(
+            (b[0].build.as_str(), b[0].outcome.as_str()),
+            ("ccc", "live")
+        );
     }
 
     #[test]

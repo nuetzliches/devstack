@@ -38,7 +38,8 @@ and listed with their assets on the
   migration still ran as ready on the start page; it now counts as starting
   until the job completed (#575). A job's build showed as live in the build
   timeline from its start, and stayed live when the job then failed; it is
-  live once the job completed (#571).
+  `running` while the job runs, live once it completed, and `failed` with
+  its reason when the job failed (#571).
 - **The MCP server no longer promises to follow an agent into a worktree.**
   It acts on the tree it was started in; its instructions and the `up` and
   `lanes` tools said that in a worktree every tool acts on its lane, so an
