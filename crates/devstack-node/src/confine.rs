@@ -297,6 +297,25 @@ fn model_problems(
                 }
             ));
         }
+        // Nor a device asked for by annotation: the NVIDIA runtime as
+        // Docker's default reads `cdi.k8s.io/…` (CDI mode) past the lease.
+        let device = |k: &str| k.starts_with("cdi.k8s.io/") || k.starts_with("nvidia.com/");
+        let keys: Vec<String> = match &s.annotations {
+            Some(serde_json::Value::Object(m)) => m.keys().cloned().collect(),
+            Some(serde_json::Value::Array(a)) => a
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(|kv| kv.split('=').next().unwrap_or("").to_string())
+                .collect(),
+            _ => Vec::new(),
+        };
+        let devices: Vec<String> = keys.into_iter().filter(|k| device(k)).collect();
+        if !devices.is_empty() {
+            no(format!(
+                "`annotations` that ask for devices ({}; ask for GPUs with `gpus` and `[lanes.need] gpus`)",
+                devices.join(", ")
+            ));
+        }
         let opts: Vec<&String> = s
             .security_opt
             .iter()
@@ -1240,6 +1259,23 @@ mod tests {
         let model: Model = serde_json::from_value(raw.clone()).unwrap();
         let e = check("app", &raw, &model, &src, Network::Internet, &[], &[]).unwrap_err();
         assert!(e.contains("`runtime: nvidia`"), "{e}");
+        // Nor does a CDI device asked for in an annotation, which the NVIDIA
+        // runtime as Docker's default hands out in CDI mode (security review
+        // before 0.51.0, finding 1); other annotations stay allowed.
+        for annotations in [
+            serde_json::json!({"cdi.k8s.io/x": "nvidia.com/gpu=all", "team": "a"}),
+            serde_json::json!(["nvidia.com/gpu.count=1"]),
+        ] {
+            let raw =
+                serde_json::json!({"services": {"x": {"image": "a", "annotations": annotations}}});
+            let model: Model = serde_json::from_value(raw.clone()).unwrap();
+            let e = check("app", &raw, &model, &src, Network::Internet, &[], &[]).unwrap_err();
+            assert!(e.contains("`annotations`"), "{e}");
+        }
+        let raw =
+            serde_json::json!({"services": {"x": {"image": "a", "annotations": {"team": "a"}}}});
+        let model: Model = serde_json::from_value(raw.clone()).unwrap();
+        check("app", &raw, &model, &src, Network::Internet, &[], &[]).unwrap();
 
         // Every started container is told exactly the lease's GPUs, or none,
         // whatever its image or Compose file says.

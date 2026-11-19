@@ -3066,24 +3066,32 @@ impl Lanes {
         failed
     }
 
+    /// Until no lane is being forgotten (the daemon is stopping): cut off,
+    /// its containers and data would be left half removed. Beside the stop
+    /// of everything else, which it does not hold up ([`Self::down_all`]);
+    /// the caller bounds the wait.
+    pub fn wait_forgotten(&self) {
+        if self.forgetting.lock().unwrap().is_empty() {
+            return;
+        }
+        let t0 = std::time::Instant::now();
+        while !self.forgetting.lock().unwrap().is_empty() {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        crate::diag::info(
+            "lanes_forgotten_before_stop",
+            serde_json::json!({ "ms": t0.elapsed().as_millis() as u64 }),
+        );
+    }
+
     /// Stop every lane's services (the daemon is stopping). For a restart
     /// (ADR-0052) what runs is noted for the next daemon first, and the
     /// lanes on nodes go on (renewed, forwarded) until [`Self::leave_all`].
-    /// A lane being forgotten ends that first: cut off, its containers and
-    /// data would be left half removed (the caller bounds the wait).
+    /// A lane being forgotten is out of `map` already: its forget goes on,
+    /// and [`Self::wait_forgotten`] waits for it.
     pub fn down_all(&self) {
         self.closing
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        if !self.forgetting.lock().unwrap().is_empty() {
-            let t0 = std::time::Instant::now();
-            while !self.forgetting.lock().unwrap().is_empty() {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-            crate::diag::info(
-                "lanes_forgotten_before_stop",
-                serde_json::json!({ "ms": t0.elapsed().as_millis() as u64 }),
-            );
-        }
         let restart = self.restarting();
         if restart {
             *self.carry.lock().unwrap() = Some(self.carry_now());
@@ -4604,7 +4612,7 @@ dockerfile = \"x\"
     /// `down` keeps nothing for it and `down --all` has nothing of it to
     /// stop; it only keeps the daemon until the forget is over.
     #[test]
-    fn a_lane_being_forgotten_is_not_started() {
+    fn a_lane_being_forgotten_keeps_only_the_daemon() {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .enable_all()
@@ -4627,7 +4635,9 @@ dockerfile = \"x\"
         assert_eq!(lanes.active(), vec!["next".to_string()]);
         assert!(lanes.any_local());
         lanes.pending.lock().unwrap().remove("next");
-        // A daemon that stops lets the forget end first.
+        // A daemon that stops lets the forget end before it exits, but stops
+        // everything else meanwhile: the wait has its own budget, not the
+        // services' (code review before 0.51.0, finding 3).
         let l = lanes.clone();
         let t0 = std::time::Instant::now();
         let done = std::thread::spawn(move || {
@@ -4637,8 +4647,13 @@ dockerfile = \"x\"
         });
         lanes.down_all();
         assert!(
+            t0.elapsed() < std::time::Duration::from_millis(300),
+            "the lanes' stop waited for the forget"
+        );
+        lanes.wait_forgotten();
+        assert!(
             t0.elapsed() >= std::time::Duration::from_millis(400),
-            "down_all ended while a lane was being forgotten"
+            "the wait ended while a lane was being forgotten"
         );
         done.join().unwrap();
         lanes.main.close();

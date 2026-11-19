@@ -63,7 +63,7 @@ export class MockPool {
           { name: 'distribution', ok: true, detail: '`Ubuntu` is there' },
           { name: 'networking', ok: true, detail: 'networking mode: mirrored' },
           { name: 'docker', ok: false, detail: '`docker` talks to Docker Desktop', fix: 'curl -fsSL https://get.docker.com | sh', fix_note: "Turn Docker Desktop's WSL integration off for `Ubuntu`, then in `Ubuntu` as root" },
-          { name: 'devstack', ok: false, detail: 'devstack is not installed in the distribution', fix: 'curl -fsSL https://github.com/nuetzliches/devstack/releases/latest/download/install.sh | sh -s -- --version 0.50.0', fix_note: 'In `Ubuntu` as root' },
+          { name: 'devstack', ok: false, detail: 'devstack is not installed in the distribution', fix: 'curl -fsSL https://github.com/nuetzliches/devstack/releases/download/v0.50.0/install.sh | sh -s -- --version 0.50.0', fix_note: 'In `Ubuntu` as root' },
           ...optional,
         ],
         prompt,

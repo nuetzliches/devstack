@@ -53,16 +53,24 @@ function form(enabled: boolean): ShareSwitch {
   };
 }
 
+/** The check asked last: an earlier one's answer, slower, is dropped. */
+let asked = 0;
+/** The distributions the last answer listed, kept while the next check runs. */
+const listed = ref<string[] | null>(null);
+
 async function check() {
+  const n = ++asked;
   checking.value = true;
   const p = await pool.checkShare(form(true));
+  if (n !== asked) return;
   checking.value = false;
   unchecked.value = p === null;
   pre.value = p;
+  if (p?.distros) listed.value = p.distros;
 }
 
 const distros = computed(() => {
-  const d = pre.value?.distros ?? host.value?.distros ?? [];
+  const d = pre.value?.distros ?? listed.value ?? host.value?.distros ?? [];
   return sw.value.distro && !d.includes(sw.value.distro) ? [...d, sw.value.distro] : d;
 });
 const windows = computed(() => distros.value.length > 0);
@@ -89,7 +97,9 @@ watch(
   },
   { immediate: true },
 );
+// Another distribution: what was found in the one before is not its.
 watch(distro, () => {
+  pre.value = null;
   if (pool.shareSetup) void check();
 });
 

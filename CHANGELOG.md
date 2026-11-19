@@ -21,6 +21,20 @@ and listed with their assets on the
   something is missing. A check's command is copied without the words about
   where it runs (`fix_note`).
 
+### Security
+
+- **A lane on a node can no longer ask for GPUs through an annotation.** A
+  Compose service's `annotations` with a `cdi.k8s.io/` or `nvidia.com/` key
+  are refused on a node, as `runtime: nvidia` is: where Docker's default
+  runtime is NVIDIA's in CDI mode, such an annotation handed a container
+  every GPU, past the lane's GPU lease (ADR-0112). Other annotations stay
+  allowed.
+- **The share setup takes what the distribution prints as plain text.** The
+  versions read in the WSL distribution reach the prompt for a coding agent
+  cut to a short line of plain characters, and the command that installs
+  devstack there fetches the install script of that release, not the
+  newest one's.
+
 ### Fixed
 
 - **A registry entry that does not read is no longer written over with only
@@ -40,6 +54,27 @@ and listed with their assets on the
   timeline from its start, and stayed live when the job then failed; it is
   `running` while the job runs, live once it completed, and `failed` with
   its reason when the job failed (#571).
+- **Switching sharing off no longer wipes the node's state on Windows.** Each
+  stop of the node agent in WSL (sharing switched off while guests run, a
+  changed cap, a crash, a hub update) removed its whole folder there: the
+  other members' running lanes, the kept slots and the node's secret went
+  with the membership's copy. Only the copy goes now (since 0.50.0).
+- **An agent an earlier hub left running is no longer stopped for want of an
+  answer.** A hub that started while the coordinator did not answer took the
+  count of guests on this machine for none and stopped the agent with their
+  lanes; not known now counts as some. The earlier hub's agent is dealt with
+  once something was done about it, not at the first look, which a blocked
+  check could cut short.
+- **What `wsl.exe` prints in another language reads right.** Its output came
+  as UTF-16 and was cut into lines one byte off, so letters beyond ASCII in
+  the agent's last lines read as `�`; the hub asks it for UTF-8.
+- **A `down` while a lane is being forgotten no longer cuts the forget
+  short.** The daemon stops everything else at once and then waits up to ten
+  minutes for the forget, instead of spending the 90 s its services have to
+  stop on it and leaving the lane's containers and data half removed.
+- **The setup dialog shows the check of the distribution chosen last.** A
+  slower answer for the one chosen before no longer replaces it, and while a
+  distribution is checked the findings of the previous one are not shown.
 - **The MCP server no longer promises to follow an agent into a worktree.**
   It acts on the tree it was started in; its instructions and the `up` and
   `lanes` tools said that in a worktree every tool acts on its lane, so an
