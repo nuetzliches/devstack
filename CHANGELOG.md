@@ -23,6 +23,15 @@ and listed with their assets on the
 
 ### Fixed
 
+- **A registry entry that does not read is no longer written over with only
+  its claims.** An entry that stayed cut off after its retries, or held JSON
+  that is no object, was taken for no entry: the daemon then wrote just its
+  claims (or a shift just the shift) over it, the entry lost its id and name,
+  dropped out of the stack list, and its ports no longer counted against
+  another stack's lanes. Such a write is now an error and leaves the file as
+  it is; only a registration, which names the whole stack (a daemon's
+  start), writes it anew. An entry that is no JSON object is now said in the
+  log, too (#570).
 - **The MCP server no longer promises to follow an agent into a worktree.**
   It acts on the tree it was started in; its instructions and the `up` and
   `lanes` tools said that in a worktree every tool acts on its lane, so an
