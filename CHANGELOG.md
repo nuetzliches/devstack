@@ -9,6 +9,18 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **Sharing on Windows finds devstack installed as the setup says.** The
+  hub ran its scripts in the WSL distribution with `wsl.exe … -- sh -c`,
+  which hands them to the distribution's shell first: that shell expanded
+  them before `sh` ran, so the setup's check looked for devstack without
+  `~/.local/bin`, where `install.sh` puts it, and said "devstack is not
+  installed in the distribution" right after the install. The hub runs
+  them with `--exec` now, as written (#597). Until this release, a link
+  helps: `ln -sf /root/.local/bin/devstack /usr/local/bin/devstack` in the
+  distribution as root.
+
 ## [0.51.0] - 2026-11-19
 
 Sharing a machine starts with a setup dialog: it says what sharing does,
