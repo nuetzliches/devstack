@@ -328,13 +328,15 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
     devstack_proc::ensure_console().map_err(|e| e.to_string())?;
     let token = token::load_or_create().map_err(|e| format!("token: {e}"))?;
     // Known to the hub from now on (ADR-0021); a failure costs only the listing.
-    let _ = registry::register(&registry::Entry {
+    let entry = registry::Entry {
         id: id.clone(),
         name: stack.stack.name.clone(),
         file: abs_file.clone(),
         repo: repo.clone(),
+        shift,
         ..registry::Entry::default()
-    });
+    };
+    let _ = registry::register(&entry);
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let proc_opts = devstack_proc::Options {
         cgroup_root: cgroup_root(&stack.stack.name),
@@ -419,7 +421,7 @@ pub fn serve(stack_file: &Path) -> Result<(), String> {
         // What it claims on this machine (ADR-0082 point 5), now and
         // whenever that changes.
         if !remote_lane() {
-            lanes.follow_claims(id.clone());
+            lanes.follow_claims(entry.clone());
         }
         // What the pool's collector gets every minute, if this machine
         // agreed (ADR-0037): lanes and services running.

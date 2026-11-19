@@ -30,7 +30,8 @@ and listed with their assets on the
   dropped out of the stack list, and its ports no longer counted against
   another stack's lanes. Such a write is now an error and leaves the file as
   it is; only a registration, which names the whole stack (a daemon's
-  start), writes it anew. An entry that is no JSON object is now said in the
+  start), writes it anew, and a running daemon does so with its shift before
+  it writes its claims. An entry that is no JSON object is now said in the
   log, too (#570).
 - **The MCP server no longer promises to follow an agent into a worktree.**
   It acts on the tree it was started in; its instructions and the `up` and

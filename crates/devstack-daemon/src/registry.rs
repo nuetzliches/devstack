@@ -239,9 +239,24 @@ fn set_shift_in(d: &Path, entry: &Entry, shift: u16) -> std::io::Result<()> {
     })
 }
 
-/// Write what the stack `id` claims; nothing when it claims that already.
-pub fn set_claims(id: &str, claims: &Claims) -> std::io::Result<()> {
-    set_claims_in(&dir(), id, claims)
+/// Write what the stack `entry` claims; nothing when it claims that already.
+/// Its daemon holds the whole entry, its shift too: one that does not parse
+/// is registered anew from it first, rather than left unseen (#570).
+pub fn set_claims(entry: &Entry, claims: &Claims) -> std::io::Result<()> {
+    set_claims_of_in(&dir(), entry, claims)
+}
+
+fn set_claims_of_in(d: &Path, entry: &Entry, claims: &Claims) -> std::io::Result<()> {
+    match set_claims_in(d, &entry.id, claims) {
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+            register_in(d, entry)?;
+            if entry.shift > 0 {
+                set_shift_in(d, entry, entry.shift)?;
+            }
+            set_claims_in(d, &entry.id, claims)
+        }
+        r => r,
+    }
 }
 
 fn set_claims_in(d: &Path, id: &str, claims: &Claims) -> std::io::Result<()> {
@@ -499,6 +514,26 @@ mod tests {
             register_in(d.path(), &entry("abc")).unwrap();
             assert_eq!(read_in(d.path(), "abc"), Some(entry("abc")), "{broken}");
         }
+    }
+
+    /// A daemon whose entry stopped parsing while it runs writes it anew from
+    /// the whole entry it holds, with its shift, and then its claims: else its
+    /// claims stay unseen by other stacks until it starts again (code review
+    /// before 0.51.0, finding 5).
+    #[test]
+    fn the_daemons_claims_write_an_entry_that_does_not_parse_anew() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(path_of(d.path(), "abc"), "[]").unwrap();
+        let mut own = entry("abc");
+        own.shift = 1000;
+        let claims = Claims {
+            main: vec![5600],
+            ..Claims::default()
+        };
+        set_claims_of_in(d.path(), &own, &claims).unwrap();
+        let e = read_in(d.path(), "abc").expect("an entry again");
+        assert_eq!((e.name.as_str(), e.shift), ("shop", 1000));
+        assert_eq!(e.claims, claims);
     }
 
     /// What never parses is not waited for: every `list` would pay for it
