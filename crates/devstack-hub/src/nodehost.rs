@@ -968,10 +968,12 @@ pub mod wsl {
     }
 
     /// `script` in `distro` as root, with `~/.local/bin` (where
-    /// `install.sh` puts devstack) and WSL's GPU tools on `PATH`.
-    fn sh(distro: &str, script: &str) -> Command {
+    /// `install.sh` puts devstack) and WSL's GPU tools on `PATH`. With
+    /// `--exec`, not `--`: that hands the command to the distribution's
+    /// shell first, which expands the script before `sh` sees it (#597).
+    pub fn sh(distro: &str, script: &str) -> Command {
         let mut c = command();
-        c.args(["-d", distro, "-u", "root", "--", "sh", "-c"]);
+        c.args(["-d", distro, "-u", "root", "--exec", "sh", "-c"]);
         c.arg(format!(
             "PATH=\"$HOME/.local/bin:/usr/local/bin:/usr/lib/wsl/lib:$PATH\"; export PATH; {script}"
         ));
@@ -1395,6 +1397,28 @@ mod tests {
         assert_eq!(guests_or(Some(0), Some(2)), Some(0));
         // Not asked yet and no answer: not known, not none.
         assert_eq!(guests_or(None, None), None);
+    }
+
+    /// #597: `wsl.exe … -- cmd` hands `cmd` to the distribution's default
+    /// shell first, which expands `$HOME`, `$PATH` and every `$(…)` of the
+    /// script before `sh` runs it: the probe then looked for devstack on
+    /// the default `PATH`, without `~/.local/bin`. `--exec` runs `sh` with
+    /// the script as one argument, as written.
+    #[test]
+    fn a_script_reaches_sh_in_the_distribution_as_written() {
+        let script = "echo \"devstack=$(devstack --version)\"";
+        let c = wsl::sh("Ubuntu-24.04", script);
+        let args: Vec<String> = c
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let exec = args.iter().position(|a| a == "--exec");
+        assert!(exec.is_some(), "{args:?}");
+        assert!(!args.iter().any(|a| a == "--"), "{args:?}");
+        let rest = &args[exec.unwrap() + 1..];
+        assert_eq!(rest[..2], ["sh", "-c"], "{args:?}");
+        assert_eq!(rest.len(), 3, "the script is one argument: {args:?}");
+        assert!(rest[2].ends_with(script) && rest[2].contains("$HOME/.local/bin"));
     }
 
     #[test]

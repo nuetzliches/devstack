@@ -106,8 +106,9 @@ did; their owners stop them, or an admin ends the lease.
   `networkingMode=mirrored` in `.wslconfig`, and devstack of the same
   version installed as root. The hub copies the machine's membership into
   it (`/var/lib/devstack-node/<pool>`, root only: one member per machine)
-  and runs `wsl.exe -d <distro> -u root -- devstack node agent --membership
-  …`. It never sets the distribution up: it checks it (the networking mode,
+  and runs `wsl.exe -d <distro> -u root --exec sh -c 'exec devstack node agent
+  --membership …'` (with `~/.local/bin`, where `install.sh` puts devstack, on
+  `PATH`). It never sets the distribution up: it checks it (the networking mode,
   the engine, devstack's version, an NVIDIA GPU and the container toolkit,
   the Hyper-V firewall rule `devstack-node` for the port) and shows what is
   missing with the command for it, and a prompt a coding agent can work
