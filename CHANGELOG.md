@@ -9,6 +9,18 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Changed
+
+- **Sharing a machine starts with a setup dialog.** Switched on, the share
+  switch no longer turns green at once and then says "Not ready yet": a
+  dialog says what sharing does, checks what the node agent needs before
+  anything is switched (`POST /hub/pool/share/check`), gives the command for
+  each missing piece, and starts it; an admin can grant the machine as a
+  node in the same step. The switch is green only while the agent runs and
+  the machine is granted, amber with a link back into the dialog while
+  something is missing. A check's command is copied without the words about
+  where it runs (`fix_note`).
+
 ### Fixed
 
 - **The MCP server no longer promises to follow an agent into a worktree.**

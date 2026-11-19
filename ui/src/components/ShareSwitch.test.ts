@@ -58,18 +58,24 @@ describe('the share switch', () => {
           distros: ['Ubuntu', 'Ubuntu-24.04'],
           checks: [
             { name: 'networking', ok: true, detail: 'networking mode: mirrored' },
-            { name: 'docker', ok: false, detail: '`docker` talks to Docker Desktop', fix: 'curl -fsSL https://get.docker.com | sh' },
+            { name: 'docker', ok: false, detail: '`docker` talks to Docker Desktop', fix: 'curl -fsSL https://get.docker.com | sh', fix_note: 'In `Ubuntu` as root' },
             { name: 'firewall', ok: false, detail: 'no Hyper-V firewall rule', fix: 'New-NetFirewallHyperVRule …', optional: true },
           ],
           prompt: 'Set up a WSL2 distribution …',
         },
       }),
     );
-    expect(el.querySelector('[data-testid="share-state"]')?.textContent).toContain('Not ready yet');
+    expect(el.querySelector('[data-testid="share-state"]')?.textContent).toContain('Setup incomplete');
+    expect(el.querySelector('[data-testid="share"]')?.classList).toContain('tone-warn');
     const checks = el.querySelector('[data-testid="share-checks"]')!;
     expect(checks.querySelectorAll('li.warn')).toHaveLength(1);
-    expect(checks.textContent).toContain('curl -fsSL https://get.docker.com | sh');
+    // The command alone is copied; where it runs stands above it.
+    expect(checks.querySelector('[data-testid="share-fix"]')?.textContent).toBe('curl -fsSL https://get.docker.com | sh');
+    expect(checks.querySelector('[data-testid="share-fix-note"]')?.textContent).toBe('In `Ubuntu` as root:');
     expect(el.querySelector('[data-testid="share-prompt"]')).not.toBeNull();
+    // The state and the button open the setup dialog.
+    el.querySelector<HTMLButtonElement>('[data-testid="share-finish"]')!.click();
+    expect(usePool().shareSetup).toBe(true);
     const select = el.querySelector<HTMLSelectElement>('[data-testid="share-distro"]')!;
     expect([...select.options].map((o) => o.value)).toEqual(['', 'Ubuntu', 'Ubuntu-24.04']);
     expect(select.value).toBe('Ubuntu');
@@ -101,18 +107,63 @@ describe('the share switch', () => {
     expect(cpus.value).toBe('2');
   });
 
-  it('sends the switch with the chosen distribution', async () => {
+  it('is green only while the agent runs and the machine is granted', async () => {
+    const el = await mounted(status({ switch: { enabled: true }, host: { state: 'running', granted: true, guests: 0 } }));
+    expect(el.querySelector('[data-testid="share"]')?.classList).toContain('tone-ok');
+    usePool().share = status({ switch: { enabled: true }, host: { state: 'running', granted: false, guests: 0 } });
+    await nextTick();
+    expect(el.querySelector('[data-testid="share"]')?.classList).not.toContain('tone-ok');
+  });
+
+  it('switched on, opens the setup instead of sending the switch', async () => {
     const el = await mounted(status({ switch: { enabled: false }, host: { state: 'off', guests: 0, distros: ['Ubuntu-24.04'] } }));
+    el.querySelector<HTMLButtonElement>('[data-testid="share-switch"]')!.click();
+    await nextTick();
+    expect(usePool().shareSetup).toBe(true);
+    expect(t.current!.requests.filter((r) => r.method === 'PUT')).toHaveLength(0);
+  });
+});
+
+describe('the share setup dialog', () => {
+  it('checks before the switch goes on, then sends it with the chosen distribution', async () => {
     const fake = t.current!;
+    const checked: unknown[] = [];
+    fake.on('/hub/pool/share/check', (_m, _p, body) => {
+      checked.push(body);
+      const d = (body as { distro?: string }).distro;
+      return ok(
+        d === 'Ubuntu-24.04'
+          ? { ready: true, distros: ['Ubuntu', 'Ubuntu-24.04'], checks: [{ name: 'docker', ok: true, detail: 'Docker Engine' }] }
+          : { ready: false, problem: 'Choose the WSL distribution', distros: ['Ubuntu', 'Ubuntu-24.04'] },
+      );
+    });
     let sent: unknown = null;
     fake.on('/hub/pool/share', (method, _path, body) => {
       if (method === 'PUT') sent = body;
       return ok(status({ switch: { enabled: true, distro: 'Ubuntu-24.04' }, host: { state: 'starting', guests: 0 } }));
     });
-    const select = el.querySelector<HTMLSelectElement>('[data-testid="share-distro"]')!;
+    usePool().share = status({ switch: { enabled: false }, host: { state: 'off', guests: 0 } });
+    const Dialog = (await import('./ShareSetupDialog.vue')).default;
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    createApp({ render: () => h(Dialog) }).mount(el);
+    usePool().shareSetup = true;
+    await vi.waitFor(() => expect(checked).toHaveLength(1));
+    const q = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+    expect(q('share-setup-about')).not.toBeNull();
+    q('share-setup-next')!.click();
+    await vi.waitFor(() => expect(q('share-setup-problem')?.textContent).toContain('Choose'));
+    expect((q('share-setup-next') as HTMLButtonElement).disabled).toBe(true);
+
+    const select = q('share-setup-distro') as HTMLSelectElement;
     select.value = 'Ubuntu-24.04';
     select.dispatchEvent(new Event('change'));
-    el.querySelector<HTMLButtonElement>('[data-testid="share-switch"]')!.click();
+    await vi.waitFor(() => expect(q('share-setup-ready')).not.toBeNull());
+    expect(sent).toBeNull();
+    q('share-setup-next')!.click();
+    await nextTick();
+    q('share-setup-go')!.click();
     await vi.waitFor(() => expect(sent).toEqual({ enabled: true, distro: 'Ubuntu-24.04' }));
+    await vi.waitFor(() => expect(q('share-setup-outcome')).not.toBeNull());
   });
 });

@@ -828,6 +828,7 @@ export class MockTransport implements Transport {
     if (p === '/hub/pool' && method === 'GET') return json(200, hub.pool.overview());
     if (p === '/hub/pool/share' && method === 'GET') return json(200, hub.pool.share());
     if (p === '/hub/pool/share' && method === 'PUT') return json(200, hub.pool.setShare(body as unknown as ShareSwitch));
+    if (p === '/hub/pool/share/check' && method === 'POST') return json(200, hub.pool.preflight(body as unknown as ShareSwitch));
     const pn = /^\/hub\/pool\/nodes\/([^/]+)\/(pause|resume)$/.exec(p);
     if (pn && method === 'POST') {
       const r = hub.pool.pause(decodeURIComponent(pn[1]), pn[2] === 'pause');

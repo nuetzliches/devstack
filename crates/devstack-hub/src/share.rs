@@ -14,6 +14,8 @@
 //! - `GET /hub/pool/share?pool=`: what is measured, the last report, the
 //!   coordinator's devstack, the switch and its agent (`switch`, `host`)
 //! - `PUT /hub/pool/share?pool=`: change the switch (`nodehost::Switch`)
+//! - `POST /hub/pool/share/check?pool=`: what the agent would find with a
+//!   switch, before it is on (`nodehost::Preflight`)
 
 use axum::Json;
 use axum::extract::Query;
@@ -317,6 +319,52 @@ pub async fn put(Query(q): Query<PoolQuery>, Json(new): Json<crate::nodehost::Sw
     }
     crate::nodehost::poke(&pool, &d);
     get(Query(PoolQuery { pool: Some(pool) })).await
+}
+
+/// What the switch's agent would find, without switching it: the setup
+/// dialog asks before the switch goes on. Changes nothing.
+pub async fn check(
+    Query(q): Query<PoolQuery>,
+    Json(sw): Json<crate::nodehost::Switch>,
+) -> Response {
+    let bad = |m: String| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": m })),
+        )
+            .into_response()
+    };
+    let Some(pool) = q.name() else {
+        return bad("pool: a-z, 0-9, `-` and `_`, at most 32".into());
+    };
+    let member = match devstack_node::member::Local::new(&dir(&pool)).membership() {
+        Ok(Some(m)) if m.state == State::Approved => m,
+        _ => {
+            return bad(format!(
+                "this machine is no approved member of the pool `{pool}`"
+            ));
+        }
+    };
+    let found = tokio::task::spawn_blocking(move || {
+        let mut p = crate::nodehost::preflight(&sw);
+        if p.ready && crate::nodehost::local_address(&member.coordinator).is_none() {
+            p.ready = false;
+            p.problem = Some(format!(
+                "No address of this machine reaches the coordinator at {}.",
+                member.coordinator
+            ));
+        }
+        p
+    })
+    .await;
+    match found {
+        Ok(p) => Json(p).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 #[cfg(test)]

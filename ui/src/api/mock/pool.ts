@@ -3,7 +3,7 @@
 // no pool, `?mock=poolmember` one without the admin role. A provisioner made
 // two nodes (ADR-0051): one runs a lane, one waits for an admin to confirm it;
 // a third machine's enrolment token was used twice (an alarm).
-import type { PoolAuditEntry, PoolLease, PoolMember, PoolNode, PoolOverview, PoolRole, Provisioning, ShareHost, ShareStatus, ShareSwitch } from '../types';
+import type { PoolAuditEntry, PoolLease, PoolMember, PoolNode, PoolOverview, PoolRole, Provisioning, ShareHost, SharePreflight, ShareStatus, ShareSwitch } from '../types';
 
 type R = { status: number; body: unknown };
 
@@ -36,46 +36,47 @@ export class MockPool {
   }
 
   private host(): ShareHost {
-    const distros = ['Ubuntu', 'Ubuntu-24.04'];
     const sw = this.switch;
-    if (!sw.enabled) return { state: 'off', guests: 0, distros };
-    if (!sw.distro)
+    const p = this.preflight(sw);
+    if (!sw.enabled) return { state: 'off', guests: 0, distros: p.distros };
+    if (!p.ready) return { state: 'blocked', detail: p.problem, guests: 0, distros: p.distros, checks: p.checks, prompt: p.prompt };
+    const me = this.members.find((m) => m.id === this.me);
+    return { state: 'running', api: 'https://10.0.0.21:4261', granted: !!me?.node, guests: 0, distros: p.distros, checks: p.checks };
+  }
+
+  /** `POST /hub/pool/share/check`: what the agent would find with `sw`. */
+  preflight(sw: ShareSwitch): SharePreflight {
+    const distros = ['Ubuntu', 'Ubuntu-24.04'];
+    const prompt = 'Set up a WSL2 distribution on this Windows machine so that devstack can run its node agent there…';
+    if (!sw.distro) return { ready: false, problem: "Choose the WSL distribution the node agent runs in (one with Docker Engine of its own, not Docker Desktop's).", distros, prompt };
+    const d = sw.distro;
+    const optional = [
+      { name: 'gpu', ok: true, detail: '1 NVIDIA GPU(s), the container toolkit is set up', optional: true },
+      { name: 'firewall', ok: true, detail: 'Hyper-V firewall rule `devstack-node` is there', optional: true },
+    ];
+    if (d === 'Ubuntu')
       return {
-        state: 'blocked',
-        detail: 'Choose the WSL distribution the node agent runs in (one with Docker Engine of its own, not Docker Desktop\'s).',
-        guests: 0,
-        distros,
-        prompt: 'Set up a WSL2 distribution on this Windows machine so that devstack can run its node agent there…',
-      };
-    if (sw.distro === 'Ubuntu')
-      return {
-        state: 'blocked',
-        detail: 'The WSL distribution `Ubuntu` lacks what the node agent needs: see the checks.',
-        guests: 0,
+        ready: false,
+        problem: 'The WSL distribution `Ubuntu` lacks what the node agent needs: see the checks.',
         distros,
         checks: [
           { name: 'distribution', ok: true, detail: '`Ubuntu` is there' },
           { name: 'networking', ok: true, detail: 'networking mode: mirrored' },
-          { name: 'docker', ok: false, detail: '`docker` talks to Docker Desktop', fix: "Turn Docker Desktop's WSL integration off for `Ubuntu`, then in it as root: curl -fsSL https://get.docker.com | sh" },
-          { name: 'devstack', ok: false, detail: 'devstack is not installed in the distribution', fix: 'In `Ubuntu` as root: curl -fsSL https://github.com/nuetzliches/devstack/releases/latest/download/install.sh | sh -s -- --version 0.50.0' },
-          { name: 'gpu', ok: true, detail: '1 NVIDIA GPU(s), the container toolkit is set up', optional: true },
-          { name: 'firewall', ok: true, detail: 'Hyper-V firewall rule `devstack-node` is there', optional: true },
+          { name: 'docker', ok: false, detail: '`docker` talks to Docker Desktop', fix: 'curl -fsSL https://get.docker.com | sh', fix_note: "Turn Docker Desktop's WSL integration off for `Ubuntu`, then in `Ubuntu` as root" },
+          { name: 'devstack', ok: false, detail: 'devstack is not installed in the distribution', fix: 'curl -fsSL https://github.com/nuetzliches/devstack/releases/latest/download/install.sh | sh -s -- --version 0.50.0', fix_note: 'In `Ubuntu` as root' },
+          ...optional,
         ],
-        prompt: 'Set up a WSL2 distribution on this Windows machine so that devstack can run its node agent there…',
+        prompt,
       };
     return {
-      state: 'running',
-      api: 'https://10.0.0.21:4261',
-      granted: true,
-      guests: 0,
+      ready: true,
       distros,
       checks: [
-        { name: 'distribution', ok: true, detail: `\`${sw.distro}\` is there` },
+        { name: 'distribution', ok: true, detail: `\`${d}\` is there` },
         { name: 'networking', ok: true, detail: 'networking mode: mirrored' },
         { name: 'docker', ok: true, detail: 'Docker Engine: Ubuntu 24.04.5 LTS' },
         { name: 'devstack', ok: true, detail: 'devstack 0.50.0 (this machine: 0.50.0)' },
-        { name: 'gpu', ok: true, detail: '1 NVIDIA GPU(s), the container toolkit is set up', optional: true },
-        { name: 'firewall', ok: true, detail: 'Hyper-V firewall rule `devstack-node` is there', optional: true },
+        ...optional,
       ],
     };
   }

@@ -131,3 +131,32 @@ Decided while building, not on the card:
 `crates/devstack-node/src/node.rs` (`sharing` from the settings),
 `crates/devstack/src/poolcmd.rs` (`--membership`, `--no-new-lanes`),
 `ui/src/components/ShareSwitch.vue`.
+
+## Addendum 2026-11-19: a setup dialog before the switch
+
+Switched on, the switch went green at once and then said "Not ready yet",
+while what was missing stood only on the page "This machine", and the
+admin's grant ("Runs the pool's lanes") was a second switch elsewhere
+without a visible link to it. The owner approved the card on 2026-11-19:
+
+1. Switching it on opens a setup dialog instead of saving `enabled`: what
+   sharing does (and that an admin has to grant the machine), the WSL
+   distribution, the caps and the checks with the command for each missing
+   piece, then the start.
+2. The hub checks without switching: `POST /hub/pool/share/check` runs what
+   a start runs (the switch's own problems, on Windows the distribution's
+   checks, the address toward the coordinator) and saves nothing. Before,
+   the checks ran only once the switch was on.
+3. The switch and the sidebar tile are green only while the agent runs and
+   the machine is granted; amber, with a link into the dialog, while the
+   agent is blocked or failed; the accent colour while it starts or waits
+   for an admin.
+4. The last step shows the admin's grant as its own state; an admin can
+   grant the machine there.
+
+A check's `fix` is now the command alone, to be copied; `fix_note` says
+where it runs. Decided while building: the page keeps its caps form for
+later changes; an admin's grant in the dialog is a checkbox, on by default;
+turning the switch off needs no dialog. Enforced by
+`crates/devstack-hub/src/share.rs` (`check`), `nodehost.rs` (`preflight`),
+`ui/src/components/ShareSetupDialog.vue`, `ShareChecks.vue`.

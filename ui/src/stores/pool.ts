@@ -9,7 +9,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { api, paths, Unreachable } from '@/api';
-import type { NodePolicy, PoolEntry, PoolFeed, PoolMember, PoolNode, PoolOverview, PoolRole, SharedLane, ShareStatus, ShareSwitch } from '@/api/types';
+import type { NodePolicy, PoolEntry, PoolFeed, PoolMember, PoolNode, PoolOverview, PoolRole, SharedLane, SharePreflight, ShareStatus, ShareSwitch } from '@/api/types';
 import { act } from '@/lib/actions';
 import { persist } from '@/lib/persist';
 import { webUrl } from '@/lib/format';
@@ -363,6 +363,19 @@ export const usePool = defineStore('pool', () => {
     return r.ok;
   }
 
+  /** The setup dialog of the share switch is open (one for the sidebar tile and the page). */
+  const shareSetup = ref(false);
+
+  /** What the node agent would find with `sw`, without switching; `null` when the hub could not say (an older one). */
+  async function checkShare(sw: ShareSwitch): Promise<SharePreflight | null> {
+    try {
+      const r = await api().request<SharePreflight>('POST', at(paths.poolShareCheck), sw);
+      return r.ok && r.body && typeof r.body === 'object' ? r.body : null;
+    } catch {
+      return null;
+    }
+  }
+
   async function setPaused(id: string, name: string, paused: boolean) {
     const r = await act({
       label: paused ? `Pause ${name}` : `Resume ${name}`,
@@ -609,6 +622,8 @@ export const usePool = defineStore('pool', () => {
     load,
     loadShare,
     setShare,
+    shareSetup,
+    checkShare,
     watch,
     watchJoin,
     busy,

@@ -78,6 +78,14 @@ knows the agent it runs itself.
 
 ### The share switch
 
+Switching it on opens a setup dialog: what sharing does, then the WSL
+distribution and the caps with what the agent needs checked before the
+switch goes on (`POST /hub/pool/share/check`), each missing piece with the
+command that sets it up, then the start; an admin can grant the machine as
+a node in the same step. The switch turns green only while the agent runs
+and the machine is granted; amber, with a link back into the dialog, while
+something is missing.
+
 On, the hub runs the node agent for the current pool and starts it again
 when it ends (after a failed start, a minute later); the switch, its caps,
 the WSL distribution and the port are kept in `node-host.json` beside the
