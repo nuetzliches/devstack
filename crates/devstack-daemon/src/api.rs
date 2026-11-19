@@ -1598,6 +1598,7 @@ async fn builds(
     }
     let view = s.sup.view().services.into_iter().find(|v| v.name == name);
     let current = view.as_ref().and_then(|v| v.build_id.clone());
+    let job = view.as_ref().is_some_and(|v| v.kind == "job");
     // The build on its way now, if any: the others the log leaves on their
     // way were interrupted.
     let on_way = view
@@ -1624,6 +1625,7 @@ async fn builds(
             current.as_deref(),
             on_way.as_deref(),
             limit,
+            job,
         );
         // What of each is still there: older builds outlive their artifact
         // and their log in the list.

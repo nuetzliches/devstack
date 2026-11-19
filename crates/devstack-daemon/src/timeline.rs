@@ -36,7 +36,9 @@ fn at_ms(v: &Value) -> Option<u64> {
 
 /// The builds of `service` in the diagnostic log lines, newest first, at most
 /// `limit`. `on_way` is the build the service's candidate has now while it
-/// builds, starts or switches: only that one is still on its way.
+/// builds, starts or switches: only that one is still on its way. `job`: the
+/// service is a job, whose build is live once it completed (it is `running`
+/// while it runs, #544, #571).
 pub fn builds(
     lines: &[String],
     service: &str,
@@ -44,6 +46,7 @@ pub fn builds(
     current: Option<&str>,
     on_way: Option<&str>,
     limit: usize,
+    job: bool,
 ) -> Vec<BuildEntry> {
     let mut out: Vec<BuildEntry> = Vec::new();
     // A build starts before its id is known (`building` without one).
@@ -121,11 +124,13 @@ pub fn builds(
                 if state == "building" && v["status"]["build_id"].is_null() {
                     pending_start.get_or_insert(at);
                 }
-                // The main instance runs a build: it is live.
-                if let Some(id) = v["build_id"]
-                    .as_str()
-                    .filter(|_| state == "healthy" || state == "running")
-                {
+                // The main instance runs a build, or a job ran it: it is live.
+                let live = if job {
+                    state == "completed" && v["status"]["exit_code"] == 0
+                } else {
+                    state == "healthy" || state == "running"
+                };
+                if let Some(id) = v["build_id"].as_str().filter(|_| live) {
                     match out.iter_mut().find(|e| e.build == id) {
                         Some(e) => {
                             if e.outcome != "live" {
@@ -172,10 +177,11 @@ pub fn from_log(
     current: Option<&str>,
     on_way: Option<&str>,
     limit: usize,
+    job: bool,
 ) -> Vec<BuildEntry> {
     let needle = format!("\"service\":\"{service}\"");
     let lines = crate::diag::tail(path, 50_000, Some(&needle));
-    builds(&lines, service, lane, current, on_way, limit)
+    builds(&lines, service, lane, current, on_way, limit, job)
 }
 
 #[cfg(test)]
@@ -229,9 +235,9 @@ mod tests {
                 r#""event":"service","service":"web","build_id":"zzz","status":{"state":"healthy"}"#,
             ),
         ];
-        let b = builds(&lines, "api", "", Some("bbb"), None, 10);
+        let b = builds(&lines, "api", "", Some("bbb"), None, 10, false);
         assert!(
-            builds(&lines, "api", "feat", None, None, 10).is_empty(),
+            builds(&lines, "api", "feat", None, None, 10, false).is_empty(),
             "another lane stays out"
         );
         let got: Vec<(&str, &str, bool)> = b
@@ -254,7 +260,7 @@ mod tests {
             "from the build start to the switch"
         );
         assert_eq!(b[0].reason.as_deref(), Some("exited with code 3"));
-        assert_eq!(builds(&lines, "api", "", None, None, 2).len(), 2);
+        assert_eq!(builds(&lines, "api", "", None, None, 2, false).len(), 2);
     }
 
     #[test]
@@ -276,13 +282,53 @@ mod tests {
             ),
         ];
         for lane in ["", "main"] {
-            let ids: Vec<String> = builds(&lines, "api", lane, None, None, 10)
+            let ids: Vec<String> = builds(&lines, "api", lane, None, None, 10, false)
                 .into_iter()
                 .map(|e| e.build)
                 .collect();
             assert_eq!(ids, ["bbb", "aaa"], "lane {lane:?}");
         }
-        assert_eq!(builds(&lines, "api", "feat", None, None, 10).len(), 1);
+        assert_eq!(
+            builds(&lines, "api", "feat", None, None, 10, false).len(),
+            1
+        );
+    }
+
+    /// #571: a job is `running` while it runs (#544); its build is live once
+    /// it completed, not while it runs, and not when it failed after.
+    #[test]
+    fn a_jobs_build_is_live_once_the_job_completed() {
+        let svc = |t, id: &str, status: &str| {
+            ev(
+                t,
+                &format!(
+                    "\"event\":\"service\",\"service\":\"migrate\",\"build_id\":\"{id}\",\"status\":{status}"
+                ),
+            )
+        };
+        let lines = vec![
+            svc(1, "aaa", r#"{"state":"running"}"#),
+            svc(2, "aaa", r#"{"state":"completed","exit_code":0}"#),
+            svc(3, "bbb", r#"{"state":"running"}"#),
+            svc(
+                4,
+                "bbb",
+                r#"{"state":"failed","reason":"job exited with code 1"}"#,
+            ),
+            svc(5, "ccc", r#"{"state":"running"}"#),
+        ];
+        let got: Vec<(String, String)> = builds(&lines, "migrate", "", Some("ccc"), None, 10, true)
+            .into_iter()
+            .map(|e| (e.build, e.outcome))
+            .collect();
+        assert_eq!(
+            got,
+            [("aaa".to_string(), "live".to_string())],
+            "only the job that completed"
+        );
+        // A long-running service's `running` is live, as before.
+        let b = builds(&lines, "migrate", "", None, None, 10, false);
+        assert_eq!(b.len(), 3);
     }
 
     #[test]
@@ -305,7 +351,7 @@ mod tests {
             c(3, "building", "bbb"),
         ];
         let outcomes = |on_way| {
-            builds(&lines, "api", "", Some("zzz"), on_way, 10)
+            builds(&lines, "api", "", Some("zzz"), on_way, 10, false)
                 .into_iter()
                 .map(|e| (e.build, e.outcome))
                 .collect::<Vec<_>>()

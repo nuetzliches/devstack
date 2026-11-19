@@ -89,6 +89,8 @@ const CASCADE_PREFIX: &str = "not started: ";
 
 #[derive(Debug, Default, Clone)]
 struct Svc {
+    /// `kind`, from the snapshot: a service event carries none.
+    kind: String,
     /// `status.state`.
     state: String,
     /// `status.reason` and `status.exit_code`, for what the tray shows.
@@ -120,6 +122,7 @@ impl Scope {
                         Some((
                             s["name"].as_str()?.to_string(),
                             Svc {
+                                kind: s["kind"].as_str().unwrap_or("").to_string(),
                                 state: state_of(&s["status"]),
                                 reason: reason_of(&s["status"]),
                                 exit_code: s["status"]["exit_code"].as_i64(),
@@ -174,6 +177,8 @@ impl Scope {
         for name in names {
             let svc = &self.services[name];
             match svc.state.as_str() {
+                // A job runs until it ends (#544): that is its start (#575).
+                "running" if svc.kind == "job" => g.starting = true,
                 "running" | "healthy" => g.ready += 1,
                 "completed" if svc.exit_code == Some(0) => g.ready += 1,
                 "building" | "starting" => g.starting = true,
@@ -519,6 +524,27 @@ mod tests {
         assert_eq!(g.attention[1].text, "worker: failed");
         assert_eq!(g.attention[1].service.as_deref(), Some("worker"));
         assert_eq!(g.attention[1].level, Level::Error);
+    }
+
+    /// #575: a job is `running` while it runs (#544), which is its start,
+    /// not a service that is ready; a long-running service's `running` is.
+    #[test]
+    fn a_running_job_counts_as_starting_not_ready() {
+        let mut s = Scope::default();
+        s.apply(&snapshot(json!([
+            { "name": "api", "kind": "long-running", "status": { "state": "running" } },
+            { "name": "migrate", "kind": "job", "status": { "state": "starting" } }
+        ])));
+        // The service event carries no kind: the snapshot's stays.
+        s.apply(&service("migrate", json!({ "state": "running" })));
+        let g = s.glance();
+        assert_eq!((g.ready, g.total, g.starting), (1, 2, true));
+        s.apply(&service(
+            "migrate",
+            json!({ "state": "completed", "exit_code": 0 }),
+        ));
+        let g = s.glance();
+        assert_eq!((g.ready, g.starting), (2, false));
     }
 
     #[test]

@@ -33,6 +33,12 @@ and listed with their assets on the
   start), writes it anew, and a running daemon does so with its shift before
   it writes its claims. An entry that is no JSON object is now said in the
   log, too (#570).
+- **A running job is no longer counted as ready or live.** Since a job is
+  `running` while it runs (#544), the hub's summary counted a stack whose
+  migration still ran as ready on the start page; it now counts as starting
+  until the job completed (#575). A job's build showed as live in the build
+  timeline from its start, and stayed live when the job then failed; it is
+  live once the job completed (#571).
 - **The MCP server no longer promises to follow an agent into a worktree.**
   It acts on the tree it was started in; its instructions and the `up` and
   `lanes` tools said that in a worktree every tool acts on its lane, so an
