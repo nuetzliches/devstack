@@ -18,6 +18,14 @@ and listed with their assets on the
   `EnterWorktree`) called `up` and got the main stack's `ready`. The texts
   now say so and point to `lane_start <lane>`, and `up` in the main working
   tree names the main stack and the lanes while there are any.
+- **A lane whose worktree was removed no longer holds the main tree's
+  `down`.** While the daemon forgot it (its containers and data removed,
+  which can take a minute or two), the lane counted as started: `devstack
+  down` in the main tree kept the containers and services that serve the
+  lanes, and `devstack down --all` failed with "lane `x` is not started".
+  Such a lane now counts as stopped, a daemon that stops lets the removal
+  end first, and the MCP `lanes` tool says that it is being removed, as
+  `devstack lane list` does.
 
 ## [0.50.0] - 2026-11-18
 

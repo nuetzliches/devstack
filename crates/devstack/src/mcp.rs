@@ -1102,7 +1102,11 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                 out.push_str("no lanes: the repository has no other worktree");
             }
             for l in lanes {
-                let running = if l["active"] == false {
+                // As `devstack lane list` says it: the lane stops and its
+                // data goes, which takes a while.
+                let running = if l["removing"] == true {
+                    "being removed (its worktree is gone)".to_string()
+                } else if l["active"] == false {
                     "not started".to_string()
                 } else {
                     format!("{}/{} running", l["running"], l["services"])

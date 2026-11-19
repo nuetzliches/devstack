@@ -3003,10 +3003,17 @@ impl Lanes {
 
     /// The lanes started, or starting, here and on nodes: while there is
     /// one, the main tree's `down` keeps the daemon they live in (ADR-0024).
+    /// Not one being forgotten (its worktree went): it stops already, and
+    /// nothing is kept for it, nor is there anything of it for `down --all`
+    /// to stop; it is in `pending` only to keep a start out. Until the forget
+    /// ends it keeps the daemon all the same ([`Self::any_running`],
+    /// [`Self::down_all`]).
     pub fn active(&self) -> Vec<String> {
+        let forgetting = self.forgetting.lock().unwrap().clone();
         let mut names: BTreeSet<String> = self.map.lock().unwrap().keys().cloned().collect();
         names.extend(self.remote.lock().unwrap().keys().cloned());
         names.extend(self.pending.lock().unwrap().iter().cloned());
+        names.retain(|n| !forgetting.contains(n));
         names.into_iter().collect()
     }
 
@@ -3023,9 +3030,22 @@ impl Lanes {
 
     /// A lane runs, or starts, on this machine: it may use the main tree's
     /// `shared` containers (ADR-0030). One starting may be for a node; it
-    /// counts all the same.
+    /// counts all the same. One being forgotten does not: it uses nothing
+    /// any more.
     pub fn any_local(&self) -> bool {
-        !self.map.lock().unwrap().is_empty() || !self.pending.lock().unwrap().is_empty()
+        let forgetting = self.forgetting.lock().unwrap().clone();
+        let here = self
+            .map
+            .lock()
+            .unwrap()
+            .keys()
+            .any(|n| !forgetting.contains(n));
+        here || self
+            .pending
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|n| !forgetting.contains(n))
     }
 
     /// Stop every lane (`down --all`): the one on the main ports gives them
@@ -3049,9 +3069,21 @@ impl Lanes {
     /// Stop every lane's services (the daemon is stopping). For a restart
     /// (ADR-0052) what runs is noted for the next daemon first, and the
     /// lanes on nodes go on (renewed, forwarded) until [`Self::leave_all`].
+    /// A lane being forgotten ends that first: cut off, its containers and
+    /// data would be left half removed (the caller bounds the wait).
     pub fn down_all(&self) {
         self.closing
             .store(true, std::sync::atomic::Ordering::SeqCst);
+        if !self.forgetting.lock().unwrap().is_empty() {
+            let t0 = std::time::Instant::now();
+            while !self.forgetting.lock().unwrap().is_empty() {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            crate::diag::info(
+                "lanes_forgotten_before_stop",
+                serde_json::json!({ "ms": t0.elapsed().as_millis() as u64 }),
+            );
+        }
         let restart = self.restarting();
         if restart {
             *self.carry.lock().unwrap() = Some(self.carry_now());
@@ -4524,5 +4556,91 @@ dockerfile = \"x\"
         assert_eq!(not_in_pool(&file), None);
         std::fs::write(&file, "not toml [").unwrap();
         assert_eq!(not_in_pool(&file), None);
+    }
+
+    /// The lanes of an empty repository, as the main tree's daemon loads them.
+    fn lanes_of(repo: &Path, rt: &tokio::runtime::Runtime) -> Arc<Lanes> {
+        let g = |args: &[&str]| git(repo, args).unwrap();
+        g(&["init", "-q"]);
+        g(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "x",
+        ]);
+        let stack = devstack_config::from_str(
+            "version = 1\n[stack]\nname = \"t\"\n[services.web]\nrun = \"x\"\nport = 4200\n",
+            Path::new("t"),
+        )
+        .unwrap();
+        let state = repo.join(".devstack");
+        let main = Supervisor::new(
+            stack,
+            repo.join("devstack.toml"),
+            repo.to_path_buf(),
+            state.clone(),
+            devstack_proc::Options::default(),
+            rt.handle().clone(),
+        )
+        .unwrap();
+        Lanes::load(
+            state,
+            main,
+            devstack_proc::Options::default(),
+            rt.handle().clone(),
+            Arc::new("t".into()),
+            0,
+        )
+    }
+
+    /// A lane whose worktree was removed is forgotten: its services stop,
+    /// then its containers and its data go, which takes a while (minutes
+    /// with Docker Desktop). Meanwhile it does not run, so the main tree's
+    /// `down` keeps nothing for it and `down --all` has nothing of it to
+    /// stop; it only keeps the daemon until the forget is over.
+    #[test]
+    fn a_lane_being_forgotten_is_not_started() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let d = tempfile::tempdir().unwrap();
+        let lanes = lanes_of(d.path(), &rt);
+        // `forget` while it runs: the lane is out of `map` already.
+        lanes.pending.lock().unwrap().insert("gone".into());
+        lanes.forgetting.lock().unwrap().insert("gone".into());
+        assert_eq!(lanes.active(), Vec::<String>::new());
+        assert!(
+            !lanes.any_local(),
+            "nothing of it may use shared containers"
+        );
+        assert_eq!(lanes.stop_all(), Vec::<String>::new());
+        assert!(lanes.any_running(), "the forget keeps the daemon");
+        // A lane being started still is one.
+        lanes.pending.lock().unwrap().insert("next".into());
+        assert_eq!(lanes.active(), vec!["next".to_string()]);
+        assert!(lanes.any_local());
+        lanes.pending.lock().unwrap().remove("next");
+        // A daemon that stops lets the forget end first.
+        let l = lanes.clone();
+        let t0 = std::time::Instant::now();
+        let done = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            l.forgetting.lock().unwrap().remove("gone");
+            l.pending.lock().unwrap().remove("gone");
+        });
+        lanes.down_all();
+        assert!(
+            t0.elapsed() >= std::time::Duration::from_millis(400),
+            "down_all ended while a lane was being forgotten"
+        );
+        done.join().unwrap();
+        lanes.main.close();
     }
 }
