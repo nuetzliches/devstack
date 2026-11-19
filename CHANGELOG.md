@@ -9,6 +9,21 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.51.0] - 2026-11-19
+
+Sharing a machine starts with a setup dialog: it says what sharing does,
+checks what the node agent needs before anything is switched, gives the
+command for each missing piece and starts the agent; the switch is green
+only while the agent runs and the machine is granted. On a node, a lane can
+no longer ask for GPUs through a CDI annotation. Fixed: switching sharing
+off on Windows no longer wipes the node's state in WSL (the other members'
+running lanes and the kept slots, since 0.50.0); a running job no longer
+counts as ready on the start page nor as live in the build timeline; a
+registry entry that does not read is no longer written over with only its
+claims; a lane being forgotten no longer holds the main tree's `down`, and
+a `down` no longer cuts its forget short; the MCP server says that it stays
+in the tree it was started in.
+
 ### Changed
 
 - **Sharing a machine starts with a setup dialog.** Switched on, the share
@@ -3825,7 +3840,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.50.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.51.0...HEAD
+[0.51.0]: https://github.com/nuetzliches/devstack/compare/v0.50.0...v0.51.0
 [0.50.0]: https://github.com/nuetzliches/devstack/compare/v0.49.4...v0.50.0
 [0.49.4]: https://github.com/nuetzliches/devstack/compare/v0.49.3...v0.49.4
 [0.49.3]: https://github.com/nuetzliches/devstack/compare/v0.49.2...v0.49.3
