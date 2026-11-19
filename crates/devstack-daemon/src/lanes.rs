@@ -1725,12 +1725,12 @@ impl Lanes {
         }
     }
 
-    /// Write what the stack claims into its registry entry `id` now, and
+    /// Write what the stack claims into its registry entry `entry` now, and
     /// again whenever it changes (a lane numbered, a container published)
     /// while the daemon runs. Kept when the daemon stops: whoever was first
     /// keeps its ports. Not while it stops, when its containers go.
-    pub fn follow_claims(self: &Arc<Self>, id: String) {
-        let _ = crate::registry::set_claims(&id, &self.claims());
+    pub fn follow_claims(self: &Arc<Self>, entry: crate::registry::Entry) {
+        let _ = crate::registry::set_claims(&entry, &self.claims());
         let weak = Arc::downgrade(self);
         let _ = std::thread::Builder::new()
             .name("claims".into())
@@ -1741,7 +1741,7 @@ impl Lanes {
                     if me.closing.load(std::sync::atomic::Ordering::SeqCst) {
                         return;
                     }
-                    if let Err(e) = crate::registry::set_claims(&id, &me.claims()) {
+                    if let Err(e) = crate::registry::set_claims(&entry, &me.claims()) {
                         crate::diag::warn(
                             "claims_not_written",
                             serde_json::json!({ "error": e.to_string() }),

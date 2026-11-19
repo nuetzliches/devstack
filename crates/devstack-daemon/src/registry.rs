@@ -148,41 +148,51 @@ fn unreadable(path: &Path, error: &Unread) {
     }
 }
 
-/// The entry file as it is, as JSON: what a write keeps. An error when it is
-/// there and does not read (a write then must not replace it with only what
-/// it sets); a file that reads and is no JSON object is given up, said in
-/// the log, and written anew.
+/// The entry file as it is, as JSON: what a write keeps; `Ok(None)` when
+/// there is none. An error when it is there and does not read as a JSON
+/// object, said in the log once (`InvalidData` when it reads and does not
+/// parse): a write then must not replace it with only what it sets (#570).
 fn read_raw(
     d: &Path,
     id: &str,
 ) -> std::io::Result<Option<serde_json::Map<String, serde_json::Value>>> {
     let path = path_of(d, id);
-    match read_json::<serde_json::Value>(&path) {
-        Ok(Some(serde_json::Value::Object(m))) => Ok(Some(m)),
-        Ok(None) => Ok(None),
-        Ok(Some(_)) => Ok(None),
-        Err(Unread::Io(e)) => Err(e),
-        Err(e) => {
-            unreadable(&path, &e);
-            Ok(None)
-        }
-    }
+    let e = match read_json::<serde_json::Value>(&path) {
+        Ok(Some(serde_json::Value::Object(m))) => return Ok(Some(m)),
+        Ok(None) => return Ok(None),
+        Ok(Some(_)) => Unread::Parse(serde::de::Error::custom("not a JSON object")),
+        Err(e) => e,
+    };
+    unreadable(&path, &e);
+    Err(match e {
+        Unread::Io(e) => e,
+        Unread::Parse(e) => std::io::Error::new(std::io::ErrorKind::InvalidData, e),
+    })
 }
 
 /// Change the entry `id` in `d` by `f`, keeping every field `f` does not
 /// touch. Written to a file of this process first, then renamed over the
 /// entry: a reader never sees half of it, and two writers never share the
-/// temporary file.
+/// temporary file. An entry that does not parse is an error, unless
+/// `replace_unparsed`: only a write that names the whole stack may start it
+/// anew (#570).
 fn change(
     d: &Path,
     id: &str,
+    replace_unparsed: bool,
     f: impl FnOnce(&mut serde_json::Map<String, serde_json::Value>),
 ) -> std::io::Result<()> {
     if !id.chars().all(|c| c.is_ascii_hexdigit()) || id.is_empty() {
         return Err(std::io::Error::other(format!("not a stack id: {id}")));
     }
     std::fs::create_dir_all(d)?;
-    let mut m = read_raw(d, id)?.unwrap_or_default();
+    let mut m = match read_raw(d, id) {
+        Ok(m) => m.unwrap_or_default(),
+        Err(e) if replace_unparsed && e.kind() == std::io::ErrorKind::InvalidData => {
+            serde_json::Map::new()
+        }
+        Err(e) => return Err(e),
+    };
     f(&mut m);
     let tmp = d.join(format!("{id}.json.{}.tmp", std::process::id()));
     std::fs::write(
@@ -195,14 +205,15 @@ fn change(
 }
 
 /// Register the stack: its id, name, stack file and repository. Its shift
-/// and claims, and whatever else the entry holds, stay.
+/// and claims, and whatever else the entry holds, stay; an entry that does
+/// not parse is written anew, which its daemon's start does.
 pub fn register(entry: &Entry) -> std::io::Result<()> {
     register_in(&dir(), entry)
 }
 
 fn register_in(d: &Path, entry: &Entry) -> std::io::Result<()> {
     let v = serde_json::to_value(entry).expect("entry serialises");
-    change(d, &entry.id, |m| {
+    change(d, &entry.id, true, |m| {
         for k in ["id", "name", "file", "repo"] {
             m.insert(k.into(), v[k].clone());
         }
@@ -216,7 +227,7 @@ pub fn set_shift(entry: &Entry, shift: u16) -> std::io::Result<()> {
 
 fn set_shift_in(d: &Path, entry: &Entry, shift: u16) -> std::io::Result<()> {
     let v = serde_json::to_value(entry).expect("entry serialises");
-    change(d, &entry.id, |m| {
+    change(d, &entry.id, false, |m| {
         for k in ["id", "name", "file", "repo"] {
             m.entry(k).or_insert_with(|| v[k].clone());
         }
@@ -228,9 +239,24 @@ fn set_shift_in(d: &Path, entry: &Entry, shift: u16) -> std::io::Result<()> {
     })
 }
 
-/// Write what the stack `id` claims; nothing when it claims that already.
-pub fn set_claims(id: &str, claims: &Claims) -> std::io::Result<()> {
-    set_claims_in(&dir(), id, claims)
+/// Write what the stack `entry` claims; nothing when it claims that already.
+/// Its daemon holds the whole entry, its shift too: one that does not parse
+/// is registered anew from it first, rather than left unseen (#570).
+pub fn set_claims(entry: &Entry, claims: &Claims) -> std::io::Result<()> {
+    set_claims_of_in(&dir(), entry, claims)
+}
+
+fn set_claims_of_in(d: &Path, entry: &Entry, claims: &Claims) -> std::io::Result<()> {
+    match set_claims_in(d, &entry.id, claims) {
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+            register_in(d, entry)?;
+            if entry.shift > 0 {
+                set_shift_in(d, entry, entry.shift)?;
+            }
+            set_claims_in(d, &entry.id, claims)
+        }
+        r => r,
+    }
 }
 
 fn set_claims_in(d: &Path, id: &str, claims: &Claims) -> std::io::Result<()> {
@@ -238,7 +264,7 @@ fn set_claims_in(d: &Path, id: &str, claims: &Claims) -> std::io::Result<()> {
         return Ok(());
     }
     let v = serde_json::to_value(claims).expect("claims serialise");
-    change(d, id, |m| {
+    change(d, id, false, |m| {
         if claims.is_empty() {
             m.remove("claims");
         } else {
@@ -410,7 +436,7 @@ mod tests {
         set_shift_in(d.path(), &entry("def"), 2000).unwrap();
         let e = read_in(d.path(), "def").unwrap();
         assert_eq!((e.name.as_str(), e.shift), ("shop", 2000));
-        assert!(change(d.path(), "../x", |_| {}).is_err());
+        assert!(change(d.path(), "../x", false, |_| {}).is_err());
     }
 
     /// #539: an entry met while its daemon replaces it is read again, not
@@ -463,6 +489,51 @@ mod tests {
         writer.join().unwrap();
         let e = read_in(d.path(), "abc").expect("still an entry");
         assert_eq!((e.name.as_str(), e.claims), ("shop", claims));
+    }
+
+    /// #570: an entry that does not read as one, after its retries, is not
+    /// written over by a write that sets only some fields: it would lose its
+    /// id and name, drop out of `list`, and its claims with it. A
+    /// registration names the whole stack and may replace it.
+    #[test]
+    fn a_write_of_some_fields_keeps_an_entry_that_does_not_read() {
+        let d = tempfile::tempdir().unwrap();
+        let path = path_of(d.path(), "abc");
+        let claims = Claims {
+            main: vec![4600],
+            ..Claims::default()
+        };
+        for broken in ["{\"id\":\"abc\",", "[]", "not json"] {
+            std::fs::write(&path, broken).unwrap();
+            assert!(set_claims_in(d.path(), "abc", &claims).is_err(), "{broken}");
+            assert!(
+                set_shift_in(d.path(), &entry("abc"), 1000).is_err(),
+                "{broken}"
+            );
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), broken);
+            register_in(d.path(), &entry("abc")).unwrap();
+            assert_eq!(read_in(d.path(), "abc"), Some(entry("abc")), "{broken}");
+        }
+    }
+
+    /// A daemon whose entry stopped parsing while it runs writes it anew from
+    /// the whole entry it holds, with its shift, and then its claims: else its
+    /// claims stay unseen by other stacks until it starts again (code review
+    /// before 0.51.0, finding 5).
+    #[test]
+    fn the_daemons_claims_write_an_entry_that_does_not_parse_anew() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(path_of(d.path(), "abc"), "[]").unwrap();
+        let mut own = entry("abc");
+        own.shift = 1000;
+        let claims = Claims {
+            main: vec![5600],
+            ..Claims::default()
+        };
+        set_claims_of_in(d.path(), &own, &claims).unwrap();
+        let e = read_in(d.path(), "abc").expect("an entry again");
+        assert_eq!((e.name.as_str(), e.shift), ("shop", 1000));
+        assert_eq!(e.claims, claims);
     }
 
     /// What never parses is not waited for: every `list` would pay for it
