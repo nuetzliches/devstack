@@ -104,7 +104,9 @@ did; their owners stop them, or an admin ends the lease.
   distribution you name: one with Docker Engine of its own, not Docker
   Desktop's (turn Desktop's WSL integration off for it), with
   `networkingMode=mirrored` in `.wslconfig`, and devstack of the same
-  version installed as root. The hub copies the machine's membership into
+  version installed as root, without a hub of its own
+  (`DEVSTACK_NO_HUB_INTEGRATION=1`: with mirrored networking the hub on
+  Windows answers on its port). The hub copies the machine's membership into
   it (`/var/lib/devstack-node/<pool>`, root only: one member per machine)
   and runs `wsl.exe -d <distro> -u root --exec sh -c 'exec devstack node agent
   --membership …'` (with `~/.local/bin`, where `install.sh` puts devstack, on

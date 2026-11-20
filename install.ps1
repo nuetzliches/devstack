@@ -161,6 +161,14 @@ function Test-Hub {
     catch { return $false }
 }
 
+function Test-HubIsOurs([string]$exe) {
+    # The hub that answers proves it knows this user's token, as `hub stop`
+    # and `hub start` check it; another one can answer on the port too
+    # (another user's, or with WSL's mirrored networking a distribution's, #596).
+    $first = & $exe hub status 2>$null | Select-Object -First 1
+    return ($first -like 'hub running*')
+}
+
 # Build provenance (GitHub artifact attestation) of the archive, when `gh` is
 # installed and logged in: it proves the archive was built by this
 # repository's release workflow, which the checksum alone cannot.
@@ -313,19 +321,24 @@ try {
         if ($LASTEXITCODE -eq 0) { Note 'no start at logon, no devstack:// link (devstack hub install adds them)' }
         else { Write-Warning "could not record the opt-out (devstack hub uninstall)" }
     }
-    if ($hubWasRunning) {
-        # The hub runs the old binary: move it onto the new one.
-        & $target hub stop | Out-Null
-        for ($i = 0; $i -lt 25 -and (Test-Hub); $i++) { Start-Sleep -Milliseconds 200 }
-    }
-    if ($firstInstall -and -not $NoOpen) {
-        & $target ui | Out-Null
-        if ($LASTEXITCODE -eq 0) { Note 'opened in your browser' }
-        else { Note 'run `devstack ui` to open it' }
+    if ($hubWasRunning -and -not (Test-HubIsOurs $target)) {
+        Note 'another hub answers on its port (not yours): left alone, not started'
     }
     else {
-        & $target hub start | Out-Null
-        Note 'running; `devstack ui` opens it'
+        if ($hubWasRunning) {
+            # The hub runs the old binary: move it onto the new one.
+            & $target hub stop | Out-Null
+            for ($i = 0; $i -lt 25 -and (Test-Hub); $i++) { Start-Sleep -Milliseconds 200 }
+        }
+        if ($firstInstall -and -not $NoOpen) {
+            & $target ui | Out-Null
+            if ($LASTEXITCODE -eq 0) { Note 'opened in your browser' }
+            else { Note 'run `devstack ui` to open it' }
+        }
+        else {
+            & $target hub start | Out-Null
+            Note 'running; `devstack ui` opens it'
+        }
     }
 
     Write-Host ''

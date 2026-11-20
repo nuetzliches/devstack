@@ -130,8 +130,10 @@ main() {
     "$dir/devstack" hub uninstall >/dev/null \
       || echo "Note: could not record the opt-out (devstack hub uninstall)." >&2
   fi
-  # The running hub serves from the old binary: move it onto the new one.
-  if [ -n "$hub_was_running" ]; then
+  # The running hub serves from the old binary: move it onto the new one, if
+  # it is this user's. Another hub can answer on the port: another user's, or
+  # inside WSL with mirrored networking the Windows host's (#596).
+  if [ -n "$hub_was_running" ] && hub_is_ours "$dir/devstack"; then
     "$dir/devstack" hub stop >/dev/null 2>&1 || true
     i=0
     while [ "$i" -lt 25 ] && hub_answers "$port"; do sleep 0.2; i=$((i + 1)); done
@@ -171,6 +173,12 @@ homebrew_copy() {
 
 hub_answers() {
   curl -fsS -m 2 -o /dev/null "http://127.0.0.1:$1/hub/ping" 2>/dev/null
+}
+
+# Whether the hub that answers proves it knows this user's token, as `hub
+# stop` and `hub start` check it (`$1`: the devstack binary).
+hub_is_ours() {
+  "$1" hub status 2>/dev/null | head -n 1 | grep -q '^hub running'
 }
 
 # `older 0.9.8 0.10.0`: true when the first version is lower (field by field,

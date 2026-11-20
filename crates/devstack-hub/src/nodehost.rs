@@ -1086,9 +1086,11 @@ echo "memory=$(awk '/MemTotal/ {print $2 * 1024}' /proc/meminfo)""#;
             },
             // The script of the release asked for, not the newest one's:
             // what runs as root is the one that release was checked with.
+            // No hub in the distribution: the one on Windows runs the agent
+            // there, and answers on its port with mirrored networking (#596).
             fix: (!same).then(|| {
                 format!(
-                    "curl -fsSL https://github.com/nuetzliches/devstack/releases/download/v{version}/install.sh | sh -s -- --version {version}"
+                    "curl -fsSL https://github.com/nuetzliches/devstack/releases/download/v{version}/install.sh | DEVSTACK_NO_HUB_INTEGRATION=1 sh -s -- --version {version}"
                 )
             }),
             fix_note: (!same).then(|| format!("In `{distro}` as root")),
@@ -1590,6 +1592,12 @@ mod tests {
         assert!(
             fix.as_deref()
                 .is_some_and(|f| f.contains("/releases/download/v0.50.0/install.sh")),
+            "{fix:?}"
+        );
+        // It registers no hub in the distribution (#596).
+        assert!(
+            fix.as_deref()
+                .is_some_and(|f| f.contains("| DEVSTACK_NO_HUB_INTEGRATION=1 sh -s")),
             "{fix:?}"
         );
         // What the distribution printed reaches a coding agent's prompt: a

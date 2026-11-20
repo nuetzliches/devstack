@@ -42,6 +42,14 @@ and listed with their assets on the
   in between was in neither, and its change went unseen until the next
   edit. The new folder is listed once more after its watch is in place
   (#587).
+- **Installing devstack in WSL no longer tries to restart the Windows hub.**
+  With mirrored networking the hub on Windows answers on the port inside
+  the distribution; `install.sh` took it for its own and ended with "port
+  4250 answers, but not as your devstack hub". It restarts a hub only when
+  that hub proves it is this user's, as `hub start` checks it, and so does
+  `install.ps1`. The setup's command for the distribution installs without
+  a hub there (`DEVSTACK_NO_HUB_INTEGRATION=1`): the one on Windows runs the
+  node agent (#596).
 
 ## [0.51.0] - 2026-11-19
 
