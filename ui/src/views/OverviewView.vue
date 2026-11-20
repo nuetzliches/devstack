@@ -71,7 +71,7 @@ function toggle(f: Filter) {
   filter.value = filter.value === f ? null : f;
 }
 function matches(m: Member, f: Filter): boolean {
-  if (m.kind === 'service') return f === 'pending' ? !!m.service.candidate : statusBucket(m.service.status) === f;
+  if (m.kind === 'service') return f === 'pending' ? !!m.service.candidate : statusBucket(m.service) === f;
   if (m.kind === 'container') return f !== 'pending' && !!m.container && containerBucket(m.container) === f;
   return false;
 }
@@ -116,7 +116,7 @@ const counts = computed(() => {
   const c = { healthy: 0, starting: 0, failed: 0, idle: 0 };
   const v = view.value;
   if (!v) return c;
-  for (const s of v.services) c[statusBucket(s.status)]++;
+  for (const s of v.services) c[statusBucket(s)]++;
   for (const g of v.infra) for (const x of g.containers) c[containerBucket(x)]++;
   return c;
 });

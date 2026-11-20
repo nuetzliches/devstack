@@ -339,7 +339,7 @@ class MockHub {
       return {
         id: s.entry.id,
         state: attention ? 'attention' : s.entry.running ? 'ok' : 'stopped',
-        ready: services.filter((v) => statusBucket(v.status) === 'healthy').length,
+        ready: services.filter((v) => statusBucket(v) === 'healthy').length,
         total: services.length,
         lanes: s.entry.running ? s.startedLanes.size : 0,
       };
@@ -1428,7 +1428,9 @@ export class MockTransport implements Transport {
         const svc = s.view.services.find((x) => x.name === r);
         const ctr = s.view.infra.flatMap((g) => g.containers).find((c) => c.service === r);
         const state = svc ? svc.status.state : ctr ? (ctr.state === 'running' ? 'running' : ctr.state) : 'missing';
-        if (!ready(state)) return json(409, { error: `${name} requires ${r}, which is not ready (${state})` });
+        // A job that still runs is not ready (#591), as the daemon counts it.
+        const isReady = svc ? statusBucket(svc) === 'healthy' : ready(state);
+        if (!isReady) return json(409, { error: `${name} requires ${r}, which is not ready (${state})` });
       }
       const run = s.startRun(name, commandPlan(name));
       return json(202, { run: run.id });

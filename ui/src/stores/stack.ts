@@ -294,7 +294,7 @@ export const useStack = defineStore('stack', () => {
       active: mainActive.value,
       port_offset: 0,
       owns_main: !(lanesOf.value === id.value && lanes.value.some((l) => l.owns_main)),
-      running: services.filter((x) => statusBucket(x.status) !== 'idle').length,
+      running: services.filter((x) => statusBucket(x) !== 'idle').length,
       services: services.length,
       containers_running: containers.filter((c) => c.state === 'running').length,
       containers: containers.length,
@@ -319,7 +319,7 @@ export const useStack = defineStore('stack', () => {
   const runningLanes = computed(() => (lanesOf.value === id.value ? lanes.value.filter((l) => l.active !== false).map((l) => l.name) : []));
   /** The main tree is shown and nothing of it runs, while its daemon stays for the lanes. */
   const mainIdle = computed(
-    () => running.value && lane.value === null && live.value && services.value.length > 0 && services.value.every((s) => statusBucket(s.status) === 'idle'),
+    () => running.value && lane.value === null && live.value && services.value.length > 0 && services.value.every((s) => statusBucket(s) === 'idle'),
   );
 
   /**
@@ -350,7 +350,7 @@ export const useStack = defineStore('stack', () => {
     if (!running.value) return false;
     const mv = mainView.value;
     if (!mv) return true;
-    if (mv.services.length) return mv.services.some((x) => statusBucket(x.status) !== 'idle');
+    if (mv.services.length) return mv.services.some((x) => statusBucket(x) !== 'idle');
     const containers = mv.infra.flatMap((g) => g.containers).filter((c) => c.managed !== false);
     return !containers.length || containers.some((c) => c.state === 'running');
   });
@@ -634,7 +634,7 @@ export const useStack = defineStore('stack', () => {
       } catch {
         /* the last view seen */
       }
-      const names = list.filter((x) => statusBucket(x.status) !== 'idle' && (how === 'restart' || x.build_id)).map((x) => x.name);
+      const names = list.filter((x) => statusBucket(x) !== 'idle' && (how === 'restart' || x.build_id)).map((x) => x.name);
       if (!names.length) {
         ui.toast('info', `${what} main`, 'Nothing of it runs.');
         return;
@@ -877,7 +877,7 @@ export const useStack = defineStore('stack', () => {
     }
   });
   /** A service that runs, or is on its way to. */
-  const ran = (s: ServiceView) => !['idle', 'failed'].includes(statusBucket(s.status));
+  const ran = (s: ServiceView) => !['idle', 'failed'].includes(statusBucket(s));
 
   function connect() {
     if (!id.value) return;
