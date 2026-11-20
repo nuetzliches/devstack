@@ -3709,10 +3709,11 @@ async fn daemon_send(
         let copy = repeatable.then(|| again(&req));
         match sender.try_send_request(req).await {
             Ok(resp) => {
+                // The daemon's own API: no login bound to its connection.
                 return Ok(devstack_node::connpool::GiveBack::wrap(
                     daemon_pool(),
                     port,
-                    sender,
+                    Some(sender),
                     resp,
                 ));
             }

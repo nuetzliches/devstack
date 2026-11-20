@@ -50,6 +50,13 @@ and listed with their assets on the
   `install.ps1`. The setup's command for the distribution installs without
   a hub there (`DEVSTACK_NO_HUB_INTEGRATION=1`): the one on Windows runs the
   node agent (#596).
+- **A Windows login of one visitor no longer reaches the next.** The
+  service proxy, a static service's `forward` and the public link router
+  keep their connections to a service (#556, #559). A service that ties its
+  login to the connection (Windows Negotiate or NTLM, Kestrel's and
+  HTTP.sys's default) took the next visitor's request on such a connection
+  as the first visitor's. A connection whose request or answer carries
+  Negotiate or NTLM is closed after its answer now, as YARP does (#569).
 
 ## [0.51.0] - 2026-11-19
 

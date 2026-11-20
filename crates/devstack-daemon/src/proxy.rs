@@ -457,7 +457,7 @@ async fn handle(sh: Arc<Shared>, mut req: Request<Incoming>) -> Result<Response<
                 _ = aborted(&mut abort), if !bounded => break false,
             }
         };
-        if complete {
+        if complete && let Some(sender) = sender {
             give_back(&sh, port, sender).await;
         }
     });
