@@ -97,7 +97,27 @@ pub struct LaneEntry {
     pub load: Load,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disk: Option<Disk>,
+    /// The GPUs its node gave it, while they are measured: only a lane on a
+    /// node holds GPUs of its own (ADR-0112).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gpu: Option<LaneGpu>,
 }
+
+/// A lane's GPUs together.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LaneGpu {
+    pub count: u32,
+    /// Their names, one per kind (`NVIDIA GeForce RTX 4090`).
+    pub name: String,
+    /// Their memory, and what of it is used now, bytes.
+    pub memory: u64,
+    pub memory_used: u64,
+    /// Their load now, percent of one GPU summed (may exceed 100, as CPU).
+    pub load: f64,
+}
+
+/// The series of a lane's GPUs: load as `cpu`, used memory as `memory`.
+const GPU_KEY: &str = "gpu";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct UsageReport {
@@ -221,8 +241,11 @@ impl Series {
 
 #[derive(Default)]
 struct Inner {
-    /// `service:<name>`, `build`, `container:<group>/<service>`.
+    /// `service:<name>`, `build`, `container:<group>/<service>`, `gpu`.
     series: BTreeMap<String, Series>,
+    /// What the lane's GPUs are: count, names, memory (their series is
+    /// [`GPU_KEY`]).
+    gpus: Option<(u32, String, u64)>,
     disk: Disk,
     disk_measured: bool,
     docker_error: Option<String>,
@@ -389,6 +412,26 @@ impl Sampler {
             }
         }
         unmeasured(&mut inner, &seen, running);
+        match ext.gpus.filter(|g| fresh && !g.is_empty()) {
+            Some(gpus) => {
+                let mut names: Vec<&str> = gpus.iter().map(|g| g.name.as_str()).collect();
+                names.dedup();
+                inner.gpus = Some((
+                    gpus.len() as u32,
+                    names.join(", "),
+                    gpus.iter().map(|g| g.memory).sum(),
+                ));
+                inner.series.entry(GPU_KEY.into()).or_default().push(Load {
+                    cpu: gpus.iter().map(|g| g.load).sum(),
+                    memory: gpus.iter().map(|g| g.memory_used).sum(),
+                });
+            }
+            None => {
+                if let Some(s) = inner.series.get_mut(GPU_KEY) {
+                    s.missed();
+                }
+            }
+        }
     }
 
     fn sample_volumes(&self, sup: &Supervisor) {
@@ -446,10 +489,12 @@ impl Sampler {
             sup.docker().project_images(&projects).unwrap_or(0)
         };
         let inner = self.inner.lock().unwrap();
+        // A GPU's memory is not the lane's memory.
         let (cpus, memory) = inner
             .series
-            .values()
-            .map(Series::peak)
+            .iter()
+            .filter(|(k, _)| *k != GPU_KEY)
+            .map(|(_, s)| s.peak())
             .fold((0.0, 0), |(c, m), (pc, pm)| (c + pc, m + pm));
         let d = &inner.disk;
         Estimate {
@@ -543,10 +588,24 @@ impl Sampler {
                 },
                 load: lane,
                 disk: inner.disk_measured.then(|| inner.disk.clone()),
+                gpu: lane_gpu(inner.gpus.as_ref(), get(GPU_KEY).current),
             }],
             docker_error: inner.docker_error.clone(),
         }
     }
+}
+
+/// The lane's GPUs as reported: what they are, and their load now; none
+/// while they are not measured.
+fn lane_gpu(gpus: Option<&(u32, String, u64)>, now: Option<Load>) -> Option<LaneGpu> {
+    let ((count, name, memory), now) = gpus.zip(now)?;
+    Some(LaneGpu {
+        count: *count,
+        name: name.clone(),
+        memory: *memory,
+        memory_used: now.memory,
+        load: now.cpu,
+    })
 }
 
 /// The containers this round measured no number for: a running one keeps its
@@ -642,6 +701,47 @@ mod tests {
         s.idle();
         assert_eq!(s.load(), Load::default());
         assert_eq!(s.history.len(), 3, "history survives a stop");
+    }
+
+    #[test]
+    fn a_lanes_gpus_come_from_its_nodes_file_and_not_into_its_memory() {
+        let sampler = Sampler {
+            inner: Mutex::new(Inner::default()),
+            tree: Mutex::new(None),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("external-infra.json");
+        let write = |gpus: serde_json::Value| {
+            let v = serde_json::json!({ "groups": {}, "at": now_ms() as u64, "gpus": gpus });
+            std::fs::write(&file, v.to_string()).unwrap();
+        };
+        let gpu = |load: f64| serde_json::json!({ "name": "RTX", "memory": 8u64 << 30, "memory_used": 2u64 << 30, "load": load, "offered": false });
+        write(serde_json::json!([gpu(90.0), gpu(30.0)]));
+        sampler.sample_external(&file, &[]);
+        let inner = sampler.inner.lock().unwrap();
+        let g = lane_gpu(inner.gpus.as_ref(), inner.series[GPU_KEY].current).unwrap();
+        assert_eq!(
+            g,
+            LaneGpu {
+                count: 2,
+                name: "RTX".into(),
+                memory: 16 << 30,
+                memory_used: 4 << 30,
+                load: 120.0,
+            }
+        );
+        drop(inner);
+        // A round without them keeps the last for a few, then there are none.
+        std::fs::write(
+            &file,
+            serde_json::json!({ "groups": {}, "at": now_ms() as u64 }).to_string(),
+        )
+        .unwrap();
+        for _ in 0..=MISS_GRACE {
+            sampler.sample_external(&file, &[]);
+        }
+        let inner = sampler.inner.lock().unwrap();
+        assert!(lane_gpu(inner.gpus.as_ref(), inner.series[GPU_KEY].current).is_none());
     }
 
     #[test]

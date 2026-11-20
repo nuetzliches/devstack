@@ -17,6 +17,10 @@ pub struct Settings {
     /// The most memory it ever offers, bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_memory: Option<u64>,
+    /// The most GPUs its lanes hold together; `None`: every one, `0`: none
+    /// (the owner keeps them).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_gpus: Option<u32>,
 }
 
 /// CPU cores and memory (bytes).
@@ -200,6 +204,51 @@ pub struct Gpu {
     /// The lane that holds it (`<repo>/<lane>`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lane: Option<String>,
+    /// Not offered because a process outside the pool's lanes uses it: more
+    /// than [`IN_USE`] of its memory, with no lane holding it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub busy: bool,
+}
+
+/// The part of a free GPU's memory that, used by other processes, keeps it
+/// from the pool: its owner works on it.
+pub const IN_USE: f64 = 0.25;
+
+impl Gpu {
+    /// Whether processes on the machine use more than [`IN_USE`] of its
+    /// memory.
+    pub fn in_use(&self) -> bool {
+        self.memory > 0 && self.memory_used as f64 > self.memory as f64 * IN_USE
+    }
+}
+
+/// The machine's GPUs as a node offers them (ADR-0112 point 5): one a lease
+/// holds (`holder` names its lane) is not offered, nor one in use on the
+/// machine, nor one beyond `max` held and offered together; every other is.
+pub fn offered_gpus(
+    gpus: Vec<Gpu>,
+    holder: impl Fn(&str) -> Option<String>,
+    max: Option<u32>,
+) -> Vec<Gpu> {
+    let lanes: Vec<Option<String>> = gpus.iter().map(|g| holder(&g.id)).collect();
+    let held = lanes.iter().filter(|l| l.is_some()).count() as u32;
+    let mut room = max.map_or(u32::MAX, |m| m.saturating_sub(held));
+    gpus.into_iter()
+        .zip(lanes)
+        .map(|(g, lane)| {
+            let busy = lane.is_none() && g.in_use();
+            let offered = lane.is_none() && !busy && room > 0;
+            if offered {
+                room -= 1;
+            }
+            Gpu {
+                offered,
+                busy,
+                lane,
+                ..g
+            }
+        })
+        .collect()
 }
 
 /// The machine's GPUs, as the vendor's tool reports them (`nvidia-smi`, on
@@ -238,22 +287,19 @@ pub fn parse_nvidia_smi(text: &str) -> Vec<Gpu> {
                 load: load.parse().unwrap_or(0.0),
                 offered: false,
                 lane: None,
+                busy: false,
             })
         })
         .collect()
 }
 
 /// The GPUs a lane that needs `need` is given (ADR-0112 point 2): the first
-/// ones not `taken` by another lease with the memory it asks for, in the
+/// offered ones ([`offered_gpus`]) with the memory it asks for, in the
 /// vendor tool's order. `Err`: how many there are, fewer than it asks for.
-pub fn assign_gpus(
-    gpus: &[Gpu],
-    taken: &std::collections::HashSet<&str>,
-    need: GpuNeed,
-) -> Result<Vec<String>, usize> {
+pub fn assign_gpus(gpus: &[Gpu], need: GpuNeed) -> Result<Vec<String>, usize> {
     let fit: Vec<String> = gpus
         .iter()
-        .filter(|g| !g.id.is_empty() && !taken.contains(g.id.as_str()) && g.memory >= need.memory)
+        .filter(|g| g.offered && !g.id.is_empty() && g.memory >= need.memory)
         .map(|g| g.id.clone())
         .collect();
     if (fit.len() as u32) < need.count {
@@ -313,17 +359,75 @@ mod tests {
             count,
             memory: gib * GIB,
         };
-        let none = std::collections::HashSet::new();
-        assert_eq!(assign_gpus(&gpus, &none, need(1, 0)), Ok(vec!["a".into()]));
-        assert_eq!(assign_gpus(&gpus, &none, need(1, 16)), Ok(vec!["b".into()]));
-        let taken: std::collections::HashSet<&str> = ["b"].into();
+        let offer = |held: &[&str], max| {
+            let held: Vec<String> = held.iter().map(|h| h.to_string()).collect();
+            offered_gpus(
+                gpus.to_vec(),
+                |id| held.iter().any(|h| h == id).then(|| "shop/x".into()),
+                max,
+            )
+        };
         assert_eq!(
-            assign_gpus(&gpus, &taken, need(1, 16)),
+            assign_gpus(&offer(&[], None), need(1, 0)),
+            Ok(vec!["a".into()])
+        );
+        assert_eq!(
+            assign_gpus(&offer(&[], None), need(1, 16)),
+            Ok(vec!["b".into()])
+        );
+        assert_eq!(
+            assign_gpus(&offer(&["b"], None), need(1, 16)),
             Ok(vec!["c".into()])
         );
-        assert_eq!(assign_gpus(&gpus, &taken, need(2, 16)), Err(1));
+        assert_eq!(assign_gpus(&offer(&["b"], None), need(2, 16)), Err(1));
+        // The owner's cap counts what lanes hold already.
+        assert_eq!(assign_gpus(&offer(&["b"], Some(1)), need(1, 0)), Err(0));
+        assert_eq!(assign_gpus(&offer(&[], Some(0)), need(1, 0)), Err(0));
         // A GPU whose id the tool did not say cannot be given to a container.
-        assert_eq!(assign_gpus(&[gpu("", 24)], &none, need(1, 0)), Err(0));
+        let unnamed = offered_gpus(vec![gpu("", 24)], |_| None, None);
+        assert_eq!(assign_gpus(&unnamed, need(1, 0)), Err(0));
+    }
+
+    #[test]
+    fn a_node_offers_no_gpu_beyond_its_cap_or_in_use_on_the_machine() {
+        let gpu = |id: &str, used_gib: u64| Gpu {
+            id: id.into(),
+            memory: 16 * GIB,
+            memory_used: used_gib * GIB,
+            ..Gpu::default()
+        };
+        // `b`: a quarter of its memory is still free to take; `c` is the
+        // owner's training.
+        let gpus = vec![gpu("a", 0), gpu("b", 4), gpu("c", 5), gpu("d", 0)];
+        let all = offered_gpus(
+            gpus.clone(),
+            |id| (id == "d").then(|| "shop/x".into()),
+            None,
+        );
+        let state: Vec<(bool, bool, bool)> = all
+            .iter()
+            .map(|g| (g.offered, g.busy, g.lane.is_some()))
+            .collect();
+        assert_eq!(
+            state,
+            [
+                (true, false, false),
+                (true, false, false),
+                (false, true, false),
+                (false, false, true)
+            ]
+        );
+        // At most two: `d`, held, and the first free one.
+        let capped = offered_gpus(gpus, |id| (id == "d").then(|| "shop/x".into()), Some(2));
+        let offered: Vec<&str> = capped
+            .iter()
+            .filter(|g| g.offered)
+            .map(|g| g.id.as_str())
+            .collect();
+        assert_eq!(offered, ["a"]);
+        // A GPU a lane holds is never busy, whatever it uses.
+        let held = offered_gpus(vec![gpu("a", 15)], |_| Some("shop/x".into()), None);
+        assert!(!held[0].busy && !held[0].offered);
     }
 
     const GIB: u64 = 1 << 30;
@@ -355,6 +459,7 @@ mod tests {
             enabled: true,
             max_cpus: Some(2.0),
             max_memory: Some(4 * GIB),
+            max_gpus: None,
         };
         assert_eq!(
             capped.offer(free, None),
@@ -437,6 +542,7 @@ mod tests {
             enabled: true,
             max_cpus: Some(3.0),
             max_memory: None,
+            max_gpus: Some(0),
         };
         s.save(dir.path()).unwrap();
         assert_eq!(Settings::load(dir.path()), s);

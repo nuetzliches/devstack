@@ -40,7 +40,7 @@ export type LaneStartAsked = {
   moved: boolean;
 };
 
-/** Keys of usage series: svc:<name>, ctr:<group>/<service>, builds, grp:<name>, lane:<name>. */
+/** Keys of usage series: svc:<name>, ctr:<group>/<service>, builds, grp:<name>, lane:<name>, gpu:<lane>. */
 export type SeriesKey = string;
 
 /** The selected stack: its last state, live events, usage history, command runs. */
@@ -1150,6 +1150,8 @@ export const useStack = defineStore('stack', () => {
     add('builds', r.builds.cpu, r.builds.memory);
     for (const g of r.groups) add(`grp:${g.name}`, g.cpu, g.memory);
     for (const l of r.lanes) add(`lane:${l.name}`, l.cpu, l.memory);
+    // A lane's GPUs: their load as `cpu`, their used memory as `memory`.
+    for (const l of r.lanes) if (l.gpu) add(`gpu:${l.name}`, l.gpu.load, l.gpu.memory_used);
     triggerRef(history);
   }
 

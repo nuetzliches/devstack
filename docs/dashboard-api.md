@@ -150,9 +150,9 @@ and `Referrer-Policy: no-referrer`. The dashboard has no inline script.
 | `POST /hub/pool/nodes/{id}/policy` (a `NodePolicy` or `null`) | cookie + Origin | admins only: what the node lets run on it, `{allow, repos, memory_headroom?, max_cpus?, share_percent?, network: "lan"\|"internet"\|"none"}`; `null` lifts it |
 | `POST /hub/pool/join {"coordinator", "fingerprint", "name"?}` | cookie + Origin | ask a pool to admit this machine (`devstack join` without waiting); `GET /hub/pool` shows it pending until an admin approves. `coordinator` is `https://<host>[:<port>]` and nothing more (`400` otherwise). Errors of every `/hub/pool...` route pass on the coordinator's own `{"error"}` only, never the body of whatever else answered |
 | `POST /hub/pool/members/{id}/role {"role"}` | cookie + Origin | admins only: `member` or `admin`; `409 {"error"}` for the last admin. A member who is no admin gets `403` from all three |
-| `GET /hub/pool/share?pool=` | cookie | this machine in the pool, per pool: what it has and what is free (`total`, `free`), whether it is an approved member, the last report (`reported_at`, `error`), whether a node agent of the same membership runs here and reports the machine instead of the hub (`agent`, [#170](https://github.com/nuetzliches/devstack/issues/170)), the `PoolRelease` the coordinator answered it with (`coordinator?`), the machine's GPUs as measured (`gpus?`: `[{name, memory, memory_used, load, offered}]`), the share switch (`switch`: `{enabled, max_cpus?, max_memory?, distro?, port?}`) and the node agent it runs (`host`: `{state: off\|unsupported\|blocked\|starting\|running\|draining\|failed\|foreign, detail?, api?, granted?, guests, checks?: [{name, ok, detail, fix?, fix_note?, optional?}], distros?, prompt?, output?}`, [ADR-0113](adr/0113-the-share-switch-runs-the-node-agent.md)); `fix` is the command alone, `fix_note` where it runs ("In `Ubuntu` as root"; since 0.51.0, before that `fix` said both) |
-| `PUT /hub/pool/share?pool= {enabled, max_cpus?, max_memory?, distro?, port?}` | cookie + Origin | change the share switch: saved in `node-host.json` beside the membership and acted on within seconds; answers like `GET`. `400 {"error"}` for a machine that is no approved member, a cap of 0 or less, port 0, or a distribution name `wsl -l` would not show |
-| `POST /hub/pool/share/check?pool= {enabled, max_cpus?, max_memory?, distro?, port?}` | cookie + Origin | what the node agent would find with that switch, without saving or starting anything (since 0.51.0): `{ready, problem?, checks?, distros?, prompt?}` as in `host` above; `ready` is false while a required check fails, the switch is impossible, no address of this machine reaches the coordinator, or on macOS. Runs the checks (on Windows `wsl.exe` and PowerShell, seconds). `400 {"error"}` for a machine that is no approved member. The setup dialog asks it before the switch goes on |
+| `GET /hub/pool/share?pool=` | cookie | this machine in the pool, per pool: what it has and what is free (`total`, `free`), whether it is an approved member, the last report (`reported_at`, `error`), whether a node agent of the same membership runs here and reports the machine instead of the hub (`agent`, [#170](https://github.com/nuetzliches/devstack/issues/170)), the `PoolRelease` the coordinator answered it with (`coordinator?`), the machine's GPUs as measured (`gpus?`: `[{name, memory, memory_used, load, offered}]`; the switch's `max_gpus`: the most GPUs other members' lanes hold, `0` none, since ADR-0115), the share switch (`switch`: `{enabled, max_cpus?, max_memory?, max_gpus?, distro?, port?}`) and the node agent it runs (`host`: `{state: off\|unsupported\|blocked\|starting\|running\|draining\|failed\|foreign, detail?, api?, granted?, guests, checks?: [{name, ok, detail, fix?, fix_note?, optional?}], distros?, prompt?, output?}`, [ADR-0113](adr/0113-the-share-switch-runs-the-node-agent.md)); `fix` is the command alone, `fix_note` where it runs ("In `Ubuntu` as root"; since 0.51.0, before that `fix` said both) |
+| `PUT /hub/pool/share?pool= {enabled, max_cpus?, max_memory?, max_gpus?, distro?, port?}` | cookie + Origin | change the share switch: saved in `node-host.json` beside the membership and acted on within seconds; answers like `GET`. `400 {"error"}` for a machine that is no approved member, a cap of 0 or less, port 0, or a distribution name `wsl -l` would not show |
+| `POST /hub/pool/share/check?pool= {enabled, max_cpus?, max_memory?, max_gpus?, distro?, port?}` | cookie + Origin | what the node agent would find with that switch, without saving or starting anything (since 0.51.0): `{ready, problem?, checks?, distros?, prompt?}` as in `host` above; `ready` is false while a required check fails, the switch is impossible, no address of this machine reaches the coordinator, or on macOS. Runs the checks (on Windows `wsl.exe` and PowerShell, seconds). `400 {"error"}` for a machine that is no approved member. The setup dialog asks it before the switch goes on |
 | `POST /hub/shutdown` | `Authorization: Bearer <user token>` | `202`; the hub exits (`devstack hub stop`) |
 | `POST /hub/pair` | `Authorization: Bearer <user token>` | `{"code": "...", "url": "http://127.0.0.1:4250/auth?code=..."}` (CLI only) |
 
@@ -190,7 +190,7 @@ type PoolOverview = {
       leases?: { id: string; member: string; repo: string; lane: string; expires_in: number }[];
       total?: { cpus: number; memory: number };        // what the machine has (ADR-0036)
       used?: { cpus: number; memory: number };         // what its lanes use
-      gpus?: { name: string; memory: number; memory_used: number; load: number; offered: boolean; lane?: string }[]; // `lane` (`<repo>/<lane>`): the lane holding it, not offered then (ADR-0112)
+      gpus?: { name: string; memory: number; memory_used: number; load: number; offered: boolean; lane?: string; busy?: boolean }[]; // `lane` (`<repo>/<lane>`): the lane holding it, not offered then (ADR-0112); `busy`: in use on the machine, not offered (ADR-0115)
       kept?: { lanes: number; bytes: number; store_bytes?: number }; // stopped lanes it keeps (ADR-0038) and the members' stores of what `prepare` makes (ADR-0062), together in `bytes`; `store_bytes` the stores' part (older nodes omit it)
       devstack?: PoolRelease;                           // what it runs; absent from a release before version reporting
     };
@@ -385,7 +385,12 @@ type UsageReport = {
   builds: { name: "builds"; cpu_time_ms?: number; processes?: number; history?: Point[] } & Load;
   containers: ({ group: string; service: string; history?: Point[] } & Load)[];
   groups: ({ name: string } & Load)[];
-  lanes: ({ name: string; disk?: { snapshot: number; artifacts: number; logs: number; volumes: number | null } } & Load)[];
+  lanes: ({
+    name: string;
+    disk?: { snapshot: number; artifacts: number; logs: number; volumes: number | null };
+    /** A lane on a node holding GPUs (ADR-0115), while its node measures them: load in % of one GPU, summed. */
+    gpu?: { count: number; name: string; memory: number; memory_used: number; load: number };
+  } & Load)[];
   docker_error?: string;
 };
 ```

@@ -457,6 +457,7 @@ mod tests {
                 enabled: true,
                 max_cpus: Some(4.0),
                 max_memory: Some(4 << 30),
+                max_gpus: None,
             },
             dedicated: false,
             // Fixed, so that a busy machine running the test does not

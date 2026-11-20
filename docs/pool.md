@@ -161,6 +161,9 @@ why; so does the share switch.
 - `--max-cpus`, `--max-memory-gib`: caps on what its lanes take together;
   below them, half of what is free right now, or the part its policy says
   (`share_percent`).
+- `--max-gpus`: the most GPUs its lanes hold together; `0` offers none. A
+  GPU a process on the machine uses (more than a quarter of its memory) is
+  never offered.
 - `--api https://host:port`: where requesters reach it, when `--listen` is
   every address (`0.0.0.0:4261`).
 - `--pool <name>`: the pool it serves (one agent per pool, see [Several
@@ -604,8 +607,15 @@ that asks for a GPU (`gpus`, or a `deploy.resources.reservations.devices`
 entry with the `nvidia` driver) gets those too: `count: n` the first n,
 `all` every one, `device_ids` only ids among them. A lane that holds no GPU
 may ask for none: the start says to set `[lanes.need] gpus`. A warm lease
-holds none. The node reports each GPU as free, held by a lane, or not
-offered; the pool area shows which. The node needs `nvidia-smi` and the
+holds none. What a node offers of its GPUs
+([ADR-0115](adr/0115-a-machine-keeps-its-gpus-and-a-lane-shows-its-own.md)):
+at most `--max-gpus` held and offered together (the share switch's GPU
+cap; `0` keeps them all for the owner, not set: every one), and none whose
+memory is more than a quarter used by processes on the machine (its owner
+works on it). The node reports each GPU as free, held by a lane, in use on
+the machine, or not offered; the pool area shows which, and the lane's
+usage shows its GPUs' load and memory, measured by the node and written
+into the lane's file with its containers. The node needs `nvidia-smi` and the
 NVIDIA Container Toolkit. A GPU reaches a lane only this way: `runtime:
 nvidia` is refused, and every container of the lane (its own included)
 is told exactly its GPUs, or none, in `NVIDIA_VISIBLE_DEVICES`, whatever

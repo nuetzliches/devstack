@@ -28,6 +28,7 @@ const step = ref<Step>('about');
 const GIB = 2 ** 30;
 const cpuCap = ref('');
 const memCap = ref('');
+const gpuCap = ref('');
 const distro = ref('');
 const pre = ref<SharePreflight | null>(null);
 const checking = ref(false);
@@ -42,12 +43,20 @@ function num(v: string): number | undefined {
   const n = Number(v.replace(',', '.'));
   return v.trim() && Number.isFinite(n) && n > 0 ? n : undefined;
 }
+/** A count, 0 included (no GPU for the pool). */
+function count(v: string): number | undefined {
+  const n = Number(v);
+  return v.trim() && Number.isInteger(n) && n >= 0 ? n : undefined;
+}
+/** The machine's GPUs. */
+const gpus = computed(() => s.value?.gpus?.length ?? 0);
 function form(enabled: boolean): ShareSwitch {
   const m = num(memCap.value);
   return {
     enabled,
     max_cpus: num(cpuCap.value),
     max_memory: m === undefined ? undefined : Math.round(m * GIB),
+    max_gpus: count(gpuCap.value),
     distro: distro.value || undefined,
     port: sw.value.port,
   };
@@ -85,6 +94,7 @@ watch(
     const v = sw.value;
     cpuCap.value = v.max_cpus !== undefined ? String(v.max_cpus) : '';
     memCap.value = v.max_memory !== undefined ? String(Math.round((v.max_memory / GIB) * 10) / 10) : '';
+    gpuCap.value = v.max_gpus !== undefined ? String(v.max_gpus) : '';
     pre.value = null;
     unchecked.value = false;
     grant.value = true;
@@ -175,6 +185,10 @@ function close() {
           <span>Memory cap (GiB)</span>
           <input v-model="memCap" class="input" type="text" inputmode="decimal" :placeholder="`no cap (of ${s ? bytes(s.total.memory) : '?'})`" />
         </label>
+        <label v-if="gpus" title="How many of its GPUs lanes of others may hold; 0 keeps them for you. A GPU you use yourself is never offered.">
+          <span>GPU cap</span>
+          <input v-model="gpuCap" class="input" type="text" inputmode="numeric" :placeholder="`no cap (of ${gpus})`" data-testid="share-setup-cap-gpus" />
+        </label>
       </div>
       <p v-if="checking && !pre" class="muted small"><span class="spinner" /> Checking what the node agent needs…</p>
       <p v-else-if="unchecked" class="muted small">This hub cannot check before the start: what is missing shows once sharing is on.</p>
@@ -196,6 +210,13 @@ function close() {
           <dd>{{ num(cpuCap) !== undefined ? `at most ${num(cpuCap)} cores` : 'half of what is free, no cap' }}</dd>
           <dt>Memory</dt>
           <dd>{{ num(memCap) !== undefined ? `at most ${num(memCap)} GiB` : 'half of what is free, no cap' }}</dd>
+          <template v-if="gpus">
+            <dt>GPU</dt>
+            <dd>
+              {{ count(gpuCap) === 0 ? 'none, kept for you' : count(gpuCap) !== undefined ? `at most ${Math.min(count(gpuCap)!, gpus)} of ${gpus}` : `all ${gpus}` }}, not
+              while you use one
+            </dd>
+          </template>
         </dl>
         <label v-if="pool.isAdmin && me && !granted" class="grant">
           <input v-model="grant" type="checkbox" data-testid="share-setup-grant" />

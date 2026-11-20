@@ -159,24 +159,23 @@ pub struct NodeLease {
 }
 
 /// The machine's GPUs as a node reports them: one a lease holds names its
-/// lane and is not offered, every other one is (ADR-0112 point 5).
+/// lane (ADR-0112 point 5); what is offered of the rest says
+/// [`crate::share::offered_gpus`] with the owner's cap.
 fn held_gpus(
     gpus: Vec<crate::share::Gpu>,
     leases: &HashMap<String, NodeLease>,
+    max: Option<u32>,
 ) -> Vec<crate::share::Gpu> {
-    gpus.into_iter()
-        .map(|g| {
-            let lane = leases
+    crate::share::offered_gpus(
+        gpus,
+        |id| {
+            leases
                 .values()
-                .find(|l| l.gpus.contains(&g.id))
-                .map(|l| format!("{}/{}", l.repo, l.lane));
-            crate::share::Gpu {
-                offered: lane.is_none(),
-                lane,
-                ..g
-            }
-        })
-        .collect()
+                .find(|l| l.gpus.iter().any(|g| g == id))
+                .map(|l| format!("{}/{}", l.repo, l.lane))
+        },
+        max,
+    )
 }
 
 /// What a slot keeps about itself (`slots/<slot>/slot.json`).
@@ -1795,11 +1794,8 @@ async fn admit(
     };
     let mut leases = s.leases.lock().unwrap();
     if let Some(g) = gpu_need {
-        let taken: HashSet<&str> = leases
-            .values()
-            .flat_map(|x| x.gpus.iter().map(String::as_str))
-            .collect();
-        l.gpus = crate::share::assign_gpus(&machine_gpus, &taken, g).map_err(|fit| {
+        let offered = held_gpus(machine_gpus, &leases, s.share.max_gpus);
+        l.gpus = crate::share::assign_gpus(&offered, g).map_err(|fit| {
             err(
                 StatusCode::CONFLICT,
                 format!(
@@ -2792,7 +2788,7 @@ fn act_named(
         }
     }
     // The new states, for the lane's dashboard at once.
-    let _ = laneinfra::refresh(&run.dir, &run.src());
+    let _ = laneinfra::refresh(&run.dir, &run.src(), None);
     Some(Acted { single, failed })
 }
 
@@ -2972,7 +2968,7 @@ async fn infra(
                 crate::laneinfra::may_act(&stack, &group, &service, &action)?;
                 let r = crate::laneinfra::act(&name, &action);
                 // The new state, for the lane's dashboard at once.
-                let _ = crate::laneinfra::refresh(&dir, &dir.join("src"));
+                let _ = crate::laneinfra::refresh(&dir, &dir.join("src"), None);
                 r
             })
             .await;
@@ -3950,7 +3946,7 @@ async fn background(s: Shared) {
         let gpus: Vec<crate::share::Gpu> = tokio::task::spawn_blocking(crate::share::gpus)
             .await
             .unwrap_or_default();
-        let gpus = held_gpus(gpus, &s.leases.lock().unwrap());
+        let gpus = held_gpus(gpus, &s.leases.lock().unwrap(), s.share.max_gpus);
         // A node sends what concerns the pool's lanes with the coordinator's
         // setting alone (ADR-0037 point 3): its capacity, every minute.
         if sent.elapsed() >= Duration::from_secs(60) {
@@ -4279,12 +4275,33 @@ pub async fn serve(
                 std::thread::sleep(crate::laneinfra::EVERY);
                 let Some(s) = weak.upgrade() else { return };
                 let ids: Vec<String> = s.daemons.lock().unwrap().keys().cloned().collect();
+                // What the GPUs do, for the lanes holding one (its usage
+                // page shows them): asked once a round, and only then.
+                let machine_gpus = if ids.iter().any(|id| {
+                    s.leases
+                        .lock()
+                        .unwrap()
+                        .get(id)
+                        .is_some_and(|l| !l.gpus.is_empty())
+                }) {
+                    crate::share::gpus()
+                } else {
+                    Vec::new()
+                };
                 for id in ids {
                     let Some(l) = s.leases.lock().unwrap().get(&id).cloned() else {
                         continue;
                     };
                     let dir = s.dir_of(&l);
-                    if let Err(e) = crate::laneinfra::refresh(&dir, &dir.join("src")) {
+                    let gpus: Vec<crate::share::Gpu> = machine_gpus
+                        .iter()
+                        .filter(|g| l.gpus.contains(&g.id))
+                        .cloned()
+                        .collect();
+                    // A lane without a GPU, or whose GPUs the tool did not
+                    // name this time, gets none written.
+                    let gpus = (!gpus.is_empty()).then_some(gpus.as_slice());
+                    if let Err(e) = crate::laneinfra::refresh(&dir, &dir.join("src"), gpus) {
                         eprintln!("lane {id}: its containers: {e}");
                     }
                 }
@@ -4441,7 +4458,7 @@ mod tests {
         let mut held = lease("train", true);
         held.gpus = vec!["b".into()];
         let leases: HashMap<String, NodeLease> = [("train".to_string(), held)].into();
-        let r = held_gpus(vec![gpu("a"), gpu("b")], &leases);
+        let r = held_gpus(vec![gpu("a"), gpu("b")], &leases, None);
         assert!(r[0].offered && r[0].lane.is_none());
         assert!(!r[1].offered);
         assert_eq!(r[1].lane.as_deref(), Some("r/train"));

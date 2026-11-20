@@ -4,7 +4,7 @@
 import { bytes } from '@/lib/format';
 
 /** A GPU as a node's or the hub's report carries it. */
-export type Gpu = { name: string; memory: number; memory_used: number; load: number; offered: boolean; lane?: string };
+export type Gpu = { name: string; memory: number; memory_used: number; load: number; offered: boolean; lane?: string; busy?: boolean };
 
 export type GpuSummary = {
   /** All the machine has. */
@@ -36,8 +36,25 @@ export function summarise(gpus: Gpu[] | undefined): GpuSummary | null {
     title: gpus
       .map(
         (g) =>
-          `${g.name}, ${bytes(g.memory)} (${bytes(g.memory_used)} used, ${g.load.toFixed(0)} %): ${g.lane ? `held by ${g.lane}` : g.offered ? 'free' : 'not offered'}`,
+          `${g.name}, ${bytes(g.memory)} (${bytes(g.memory_used)} used, ${g.load.toFixed(0)} %): ${gpuState(g)}`,
       )
       .join('\n'),
   };
+}
+
+/** What a GPU is to the pool, in a word or three. */
+export function gpuState(g: Gpu): string {
+  if (g.lane) return `held by ${g.lane}`;
+  if (g.offered) return 'free';
+  return g.busy ? 'in use on the machine' : 'not offered';
+}
+
+/** A shared machine's GPUs in its row: `1 GPU free`, `1 GPU held`, `2 GPUs (1 free)`; none offered: `GPU in use` or `GPU not offered`. */
+export function sharedText(gpus: Gpu[] | undefined): string | null {
+  const s = summarise(gpus);
+  if (!s) return null;
+  if (!s.offered) return gpus!.some((g) => g.busy) ? 'GPU in use' : 'GPU not offered';
+  const n = `${s.offered} GPU${s.offered === 1 ? '' : 's'}`;
+  if (s.offered === 1) return `${n} ${s.free ? 'free' : 'held'}`;
+  return `${n} (${s.free} free)`;
 }
