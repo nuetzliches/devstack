@@ -899,6 +899,7 @@ fn pool_one(pool: &str, local: &Local) -> Result<()> {
 pub struct AgentShare {
     pub max_cpus: Option<f64>,
     pub max_memory_gib: Option<f64>,
+    pub max_gpus: Option<u32>,
     pub new_lanes: bool,
 }
 
@@ -926,6 +927,7 @@ pub fn agent(
         max_memory: offer
             .max_memory_gib
             .map(|g| (g * f64::from(1u32 << 30)) as u64),
+        max_gpus: offer.max_gpus,
     };
     let dir = match membership {
         Some(d) => d,
@@ -965,8 +967,7 @@ pub fn agent_unit(
     pool: &str,
     listen: &str,
     api: Option<&str>,
-    max_cpus: Option<f64>,
-    max_memory_gib: Option<f64>,
+    offer: AgentShare,
     dedicated: bool,
 ) -> Result<String> {
     let exe = std::env::current_exe()?;
@@ -981,11 +982,14 @@ pub fn agent_unit(
     if let Some(a) = api {
         args.extend(["--api".into(), a.into()]);
     }
-    if let Some(c) = max_cpus {
+    if let Some(c) = offer.max_cpus {
         args.extend(["--max-cpus".into(), c.to_string()]);
     }
-    if let Some(m) = max_memory_gib {
+    if let Some(m) = offer.max_memory_gib {
         args.extend(["--max-memory-gib".into(), m.to_string()]);
+    }
+    if let Some(g) = offer.max_gpus {
+        args.extend(["--max-gpus".into(), g.to_string()]);
     }
     if dedicated {
         args.push("--dedicated".into());

@@ -104,6 +104,7 @@ fn node(file: &Path, action: NodeAction) -> Result<()> {
             api,
             max_cpus,
             max_memory_gib,
+            max_gpus,
             dedicated,
             pool,
             print_unit: true,
@@ -115,8 +116,12 @@ fn node(file: &Path, action: NodeAction) -> Result<()> {
                     &pool,
                     &listen,
                     api.as_deref(),
-                    max_cpus,
-                    max_memory_gib,
+                    poolcmd::AgentShare {
+                        max_cpus,
+                        max_memory_gib,
+                        max_gpus,
+                        new_lanes: true,
+                    },
                     dedicated
                 )?
             );
@@ -127,6 +132,7 @@ fn node(file: &Path, action: NodeAction) -> Result<()> {
             api,
             max_cpus,
             max_memory_gib,
+            max_gpus,
             dedicated,
             pool,
             membership,
@@ -139,6 +145,7 @@ fn node(file: &Path, action: NodeAction) -> Result<()> {
             poolcmd::AgentShare {
                 max_cpus,
                 max_memory_gib,
+                max_gpus,
                 new_lanes: !no_new_lanes,
             },
             dedicated,

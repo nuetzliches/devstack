@@ -73,12 +73,14 @@ export class MockStack {
   buildsActive = 0;
   failedBuild = new Set<string>();
   private lastUsage: UsageReport | null = null;
+  private gpu?: MockStackSeed['gpu'];
   onEntryChange: () => void = () => {};
 
   constructor(seed: MockStackSeed) {
     this.entry = seed.entry;
     this.view = seed.view;
     this.previous = seed.previous;
+    this.gpu = seed.gpu;
     for (const s of this.view.services) {
       const lines: string[] = [];
       if (s.status.state !== 'stopped') {
@@ -448,7 +450,10 @@ export class MockStack {
     const cpu = Math.round(all.reduce((a, b) => a + b.cpu, 0) * 100) / 100;
     const memory = all.reduce((a, b) => a + b.memory, 0);
     const logBytes = [...this.logs.values()].reduce((a, b) => a + b.length * 110, 0);
-    const lanes = [{ name: 'main', cpu, memory, disk: { snapshot: 48_502_117, artifacts: 312_880_640, logs: 1_204_311 + logBytes, volumes: 734_003_200 } }];
+    const g = this.gpu;
+    const gl = g && this.entry.running ? this.step(this.walk('gpu', 45, g.memory * 0.6), true) : undefined;
+    const gpu = g && gl ? { ...g, load: Math.min(100 * g.count, gl.cpu), memory_used: Math.min(g.memory, gl.memory) } : undefined;
+    const lanes = [{ name: 'main', cpu, memory, disk: { snapshot: 48_502_117, artifacts: 312_880_640, logs: 1_204_311 + logBytes, volumes: 734_003_200 }, gpu }];
     return { at, services, builds, containers, groups, lanes };
   }
 

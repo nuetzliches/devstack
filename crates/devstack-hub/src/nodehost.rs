@@ -19,8 +19,9 @@
 //!
 //! - `GET /hub/pool/share?pool=` carries the switch and the agent's state
 //!   (`switch`, `host`), see `share.rs`
-//! - `PUT /hub/pool/share?pool=` `{enabled, max_cpus?, max_memory?, distro?,
-//!   port?}`: change the switch; acted on within a few seconds
+//! - `PUT /hub/pool/share?pool=` `{enabled, max_cpus?, max_memory?,
+//!   max_gpus?, distro?, port?}`: change the switch; acted on within a few
+//!   seconds
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -71,6 +72,9 @@ pub struct Switch {
     pub max_cpus: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_memory: Option<u64>,
+    /// The most GPUs they hold together; `0`: the owner keeps them all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_gpus: Option<u32>,
     /// Windows: the WSL distribution the agent runs in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub distro: Option<String>,
@@ -282,6 +286,11 @@ pub fn agent_args(
             "--max-memory-gib".into(),
             format!("{:.2}", m as f64 / f64::from(1u32 << 30)),
         ]);
+    }
+    // Only when set: an agent of an earlier release in the distribution
+    // does not know it.
+    if let Some(g) = sw.max_gpus {
+        a.extend(["--max-gpus".into(), g.to_string()]);
     }
     if !new_lanes {
         a.push("--no-new-lanes".into());
@@ -840,6 +849,7 @@ fn launch(
                 enabled: new_lanes,
                 max_cpus: sw.max_cpus,
                 max_memory: sw.max_memory,
+                max_gpus: sw.max_gpus,
             },
             dedicated: false,
             free: None,
@@ -1484,6 +1494,7 @@ mod tests {
             enabled: true,
             max_cpus: Some(8.0),
             max_memory: Some(8 << 30),
+            max_gpus: Some(0),
             distro: Some("Ubuntu-24.04".into()),
             port: None,
         };
@@ -1497,7 +1508,12 @@ mod tests {
         let s = a.join(" ");
         assert_eq!(
             s,
-            "node agent --pool default --listen 0.0.0.0:4261 --api https://10.0.0.7:4261 --membership /var/lib/devstack-node/default --max-cpus 8 --max-memory-gib 8.00 --no-new-lanes"
+            "node agent --pool default --listen 0.0.0.0:4261 --api https://10.0.0.7:4261 --membership /var/lib/devstack-node/default --max-cpus 8 --max-memory-gib 8.00 --max-gpus 0 --no-new-lanes"
+        );
+        // Not set: not passed, for an agent that does not know it.
+        assert!(
+            !agent_args("default", &Switch::default(), "https://x:4261", None, true)
+                .contains(&"--max-gpus".to_string())
         );
         assert!(
             !agent_args("default", &Switch::default(), "https://x:4261", None, true)

@@ -23,24 +23,33 @@ const busy = ref(false);
 const GIB = 2 ** 30;
 const cpuCap = ref('');
 const memCap = ref('');
+const gpuCap = ref('');
 const distro = ref('');
 // The form follows what is saved only when that changes (saved here or
 // elsewhere): a reading every few seconds brings the same values in a new
 // object, which must not undo what is being typed.
 watch(
-  () => [sw.value.max_cpus, sw.value.max_memory, sw.value.distro].join('|'),
+  () => [sw.value.max_cpus, sw.value.max_memory, sw.value.max_gpus, sw.value.distro].join('|'),
   () => {
     const v = sw.value;
     cpuCap.value = v.max_cpus !== undefined ? String(v.max_cpus) : '';
     memCap.value = v.max_memory !== undefined ? String(Math.round((v.max_memory / GIB) * 10) / 10) : '';
+    gpuCap.value = v.max_gpus !== undefined ? String(v.max_gpus) : '';
     distro.value = v.distro ?? '';
   },
   { immediate: true },
 );
+/** The machine's GPUs, and a cap saved before one was seen. */
+const gpus = computed(() => s.value?.gpus?.length ?? 0);
 
 function num(v: string): number | undefined {
   const n = Number(v.replace(',', '.'));
   return v.trim() && Number.isFinite(n) && n > 0 ? n : undefined;
+}
+/** A count, 0 included (no GPU for the pool). */
+function count(v: string): number | undefined {
+  const n = Number(v);
+  return v.trim() && Number.isInteger(n) && n >= 0 ? n : undefined;
 }
 /** The switch as the form says it, `enabled` as given. */
 function form(enabled: boolean): ShareSwitch {
@@ -49,6 +58,7 @@ function form(enabled: boolean): ShareSwitch {
     enabled,
     max_cpus: num(cpuCap.value),
     max_memory: m === undefined ? undefined : Math.round(m * GIB),
+    max_gpus: count(gpuCap.value),
     distro: distro.value || undefined,
     port: sw.value.port,
   };
@@ -56,7 +66,9 @@ function form(enabled: boolean): ShareSwitch {
 const changed = computed(() => {
   const f = form(on.value);
   const v = sw.value;
-  return f.max_cpus !== v.max_cpus || f.max_memory !== v.max_memory || (f.distro ?? '') !== (v.distro ?? '');
+  return (
+    f.max_cpus !== v.max_cpus || f.max_memory !== v.max_memory || f.max_gpus !== v.max_gpus || (f.distro ?? '') !== (v.distro ?? '')
+  );
 });
 
 async function toggle() {
@@ -142,7 +154,8 @@ const windows = computed(() => !!host.value?.distros?.length || !!sw.value.distr
     <template v-if="!props.compact">
       <p class="muted small">
         With sharing on, this machine runs a node agent: other members of the pool can start lanes here once an admin granted the machine as a node. It
-        offers half of the CPU and memory free right now, never more than the caps below. Turned off, it takes no new lanes; those running go on until
+        offers half of the CPU and memory free right now, never more than the caps below; a GPU goes whole to one lane, and one you use yourself is not
+        offered. Turned off, it takes no new lanes; those running go on until
         their owners stop them.
         <template v-if="windows">On Windows the agent runs in a WSL distribution with Docker Engine of its own (not Docker Desktop's).</template>
       </p>
@@ -162,6 +175,10 @@ const windows = computed(() => !!host.value?.distros?.length || !!sw.value.distr
         <label>
           <span>Memory cap (GiB)</span>
           <input v-model="memCap" class="input" type="text" inputmode="decimal" :placeholder="`no cap (of ${bytes(s.total.memory)})`" data-testid="share-cap-memory" />
+        </label>
+        <label v-if="gpus || sw.max_gpus !== undefined" title="How many of its GPUs lanes of others may hold; 0 keeps them for you. A GPU you use yourself is never offered.">
+          <span>GPU cap</span>
+          <input v-model="gpuCap" class="input" type="text" inputmode="numeric" :placeholder="`no cap (of ${gpus})`" data-testid="share-cap-gpus" />
         </label>
         <button type="button" class="btn btn-sm" :disabled="!changed || busy" data-testid="share-save" @click="save">Save</button>
       </div>

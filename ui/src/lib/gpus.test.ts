@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { summarise } from './gpus';
+import { sharedText, summarise } from './gpus';
 
 const GIB = 2 ** 30;
 const gpu = (offered: boolean, lane?: string) => ({ name: 'NVIDIA L4', memory: 24 * GIB, memory_used: 2 * GIB, load: 10, offered, lane });
@@ -18,5 +18,20 @@ describe("a machine's GPUs as one line", () => {
       'NVIDIA L4, 24.0 GB (2.0 GB used, 10 %): held by shop/train',
       'NVIDIA L4, 24.0 GB (2.0 GB used, 10 %): not offered',
     ]);
+  });
+
+  it('says a GPU the owner uses is in use on the machine', () => {
+    expect(summarise([{ ...gpu(false), busy: true }])!.title).toBe('NVIDIA L4, 24.0 GB (2.0 GB used, 10 %): in use on the machine');
+  });
+});
+
+describe("a shared machine's GPUs in its row", () => {
+  it('counts what it offers, and says why it offers none', () => {
+    expect(sharedText(undefined)).toBeNull();
+    expect(sharedText([gpu(true)])).toBe('1 GPU free');
+    expect(sharedText([gpu(false, 'shop/train')])).toBe('1 GPU held');
+    expect(sharedText([gpu(true), gpu(false, 'shop/train'), gpu(false)])).toBe('2 GPUs (1 free)');
+    expect(sharedText([gpu(false)])).toBe('GPU not offered');
+    expect(sharedText([{ ...gpu(false), busy: true }])).toBe('GPU in use');
   });
 });

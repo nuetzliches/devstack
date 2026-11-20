@@ -4,7 +4,7 @@
 // done with a machine is on its page.
 import { computed, ref } from 'vue';
 import { ago, bytes, useNow } from '@/lib/format';
-import { summarise } from '@/lib/gpus';
+import { sharedText, summarise } from '@/lib/gpus';
 import { kindText, kindTitle, releaseClass, releaseTitle, updateText } from '@/lib/poolText';
 import { usePool } from '@/stores/pool';
 import { useHub } from '@/stores/hub';
@@ -67,7 +67,9 @@ const showRemoved = ref(false);
               </div>
             </td>
             <td class="tabular nowrap">
-              <template v-if="m.node?.report?.sharing">{{ m.node.report.cpus.toFixed(1) }} CPU · {{ bytes(m.node.report.memory) }}</template>
+              <template v-if="m.node?.report?.sharing">
+                {{ m.node.report.cpus.toFixed(1) }} CPU · {{ bytes(m.node.report.memory) }}<span v-if="sharedText(m.node.report.gpus)" :title="summarise(m.node.report.gpus)?.title" data-testid="pool-node-gpus"> · {{ sharedText(m.node.report.gpus) }}</span>
+              </template>
               <span v-else class="faint">not shared</span>
             </td>
             <td class="tabular nowrap">

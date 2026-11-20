@@ -45,6 +45,8 @@ export type MockStackSeed = {
   view: StackView;
   /** Previous build per service, for rollback. */
   previous: Record<string, string>;
+  /** The GPUs its lane holds, as a lane on a node does (ADR-0112). */
+  gpu?: { count: number; name: string; memory: number };
 };
 
 export function shopSeed(now: number): MockStackSeed {
@@ -227,6 +229,7 @@ export function crmSeed(now: number): MockStackSeed {
     },
     view: { name: 'crm', repo, version: '0.2.0', services, infra, groups, commands },
     previous,
+    gpu: { count: 1, name: 'NVIDIA GeForce RTX 4070', memory: 12 * 2 ** 30 },
   };
 }
 

@@ -7,6 +7,7 @@
 import { computed, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { ago, bytes, duration, useNow } from '@/lib/format';
+import { gpuState } from '@/lib/gpus';
 import { actionText, kindText, kindTitle, policyText, releaseClass, releaseTitle, updateText } from '@/lib/poolText';
 import { usePool } from '@/stores/pool';
 import { useHub } from '@/stores/hub';
@@ -145,8 +146,8 @@ async function savePolicy(clear = false) {
                 <template v-if="report.gpus?.length">
                   <dt>GPUs</dt>
                   <dd>
-                    <!-- Free, held by a lane, or not offered (ADR-0112 point 5). -->
-                    <span v-for="(g, i) in report.gpus" :key="i" class="gpu">{{ g.name }}, {{ bytes(g.memory) }}<span class="faint">{{ g.lane ? ` · held by ${g.lane}` : g.offered ? ' · free' : ' · not offered' }}</span></span>
+                    <!-- Free, held by a lane, in use on the machine or not offered (ADR-0112 point 5). -->
+                    <span v-for="(g, i) in report.gpus" :key="i" class="gpu">{{ g.name }}, {{ bytes(g.memory) }}<span class="faint"> · {{ gpuState(g) }}</span></span>
                   </dd>
                 </template>
                 <template v-if="report.kept?.lanes || report.kept?.store_bytes">

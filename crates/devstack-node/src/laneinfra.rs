@@ -73,7 +73,7 @@ pub fn set_group(
     with_group(&mut infra, group, state, error);
     let json = serde_json::to_vec_pretty(&infra).expect("infra serialises");
     write_agent_file(dir, &json).map_err(|e| e.to_string())?;
-    refresh(dir, src)
+    refresh(dir, src, None)
 }
 
 /// What the agent says of a group it was bringing up when it ended.
@@ -111,7 +111,7 @@ pub fn interrupted(dir: &Path, src: &Path) {
     if interrupted_in(&mut infra) {
         let json = serde_json::to_vec_pretty(&infra).expect("infra serialises");
         if write_agent_file(dir, &json).is_ok() {
-            let _ = refresh(dir, src);
+            let _ = refresh(dir, src, None);
         }
     }
 }
@@ -360,11 +360,13 @@ struct Load {
 
 /// The daemon's file with the states, health and load of now written into
 /// it: `base` is the agent's own copy (what it wrote at start), `found` what
-/// `docker ps` sees per group, `load` what `docker stats` measured.
+/// `docker ps` sees per group, `load` what `docker stats` measured, `gpus`
+/// what the lane's GPUs do (`None`: not measured this time, left out).
 fn current(
     base: &serde_json::Value,
     found: &BTreeMap<String, Vec<Container>>,
     load: &BTreeMap<String, Load>,
+    gpus: Option<&[crate::share::Gpu]>,
     at: u128,
 ) -> serde_json::Value {
     let mut out = base.clone();
@@ -400,13 +402,18 @@ fn current(
             }
         }
     }
+    // Name, memory, what is used of it, load: the vendor's id stays here.
+    if let Some(g) = gpus {
+        out["gpus"] = serde_json::to_value(g).expect("gpus serialise");
+    }
     out["at"] = serde_json::Value::from(at as u64);
     out
 }
 
 /// Write the states and load of the lease's containers into the daemon's
-/// file (`src` the mirror, `dir` the lease's directory beside it).
-pub fn refresh(dir: &Path, src: &Path) -> Result<(), String> {
+/// file (`src` the mirror, `dir` the lease's directory beside it), and the
+/// GPUs it holds when `gpus` measured them.
+pub fn refresh(dir: &Path, src: &Path, gpus: Option<&[crate::share::Gpu]>) -> Result<(), String> {
     let Ok(text) = std::fs::read(dir.join(AGENT_FILE)) else {
         return Ok(()); // started by an older agent
     };
@@ -444,8 +451,8 @@ pub fn refresh(dir: &Path, src: &Path) -> Result<(), String> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis());
-    let json =
-        serde_json::to_vec_pretty(&current(&base, &found, &load, now)).expect("infra serialises");
+    let json = serde_json::to_vec_pretty(&current(&base, &found, &load, gpus, now))
+        .expect("infra serialises");
     crate::safefs::write_beneath(src, Path::new(LANE_FILE), 0o644, |f| {
         std::io::Write::write_all(f, &json)
     })
@@ -569,7 +576,27 @@ members = ["compose.app.db", "compose.app.web", "api"]
                 memory: 1 << 20,
             },
         )]);
-        let v = current(&base, &found, &load, 42);
+        let gpu = crate::share::Gpu {
+            id: "GPU-5b7c".into(),
+            name: "RTX".into(),
+            memory: 8 << 30,
+            memory_used: 2 << 30,
+            load: 93.0,
+            lane: Some("shop/x".into()),
+            ..crate::share::Gpu::default()
+        };
+        let v = current(&base, &found, &load, Some(std::slice::from_ref(&gpu)), 42);
+        assert_eq!(v["gpus"][0]["load"], 93.0);
+        assert_eq!(v["gpus"][0]["memory_used"], 2u64 << 30);
+        assert!(
+            v["gpus"][0].get("id").is_none(),
+            "the vendor's id stays on the node"
+        );
+        assert!(
+            current(&base, &found, &load, None, 42)
+                .get("gpus")
+                .is_none()
+        );
         let s = &v["groups"]["app"]["services"];
         assert_eq!(s["db"]["health"], "healthy");
         assert_eq!(s["db"]["cpu"], 12.5);
@@ -598,7 +625,7 @@ members = ["compose.app.db", "compose.app.web", "api"]
         with_group(&mut infra, "nope", UP, None);
         assert!(infra["groups"].get("nope").is_none(), "no group is made up");
         // The refresh writes what the agent's file says of each group.
-        let v = current(&infra, &BTreeMap::new(), &BTreeMap::new(), 1);
+        let v = current(&infra, &BTreeMap::new(), &BTreeMap::new(), None, 1);
         assert_eq!(v["groups"]["app"]["state"], UP);
         assert_eq!(v["groups"]["tools"]["state"], CREATED);
     }

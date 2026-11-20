@@ -1,6 +1,7 @@
 <script setup lang="ts">
-// What one lane costs now: CPU and memory with the last 10 minutes, and its
-// disk. The usage page shows one per lane, the overview the one it shows.
+// What one lane costs now: CPU and memory with the last 10 minutes, its GPUs
+// where its node gave it some (ADR-0112), and its disk. The usage page shows
+// one per lane, the overview the one it shows.
 import type { LaneDisk, LaneUsage as Lane } from '@/api/types';
 import { CPU_HINT, bytes, percent } from '@/lib/format';
 import { useStack } from '@/stores/stack';
@@ -18,6 +19,9 @@ function cpuSeries(key: string) {
 }
 function memSeries(key: string) {
   return (stack.history.get(key) ?? []).map((p) => p.memory);
+}
+function gpuSeries(lane: string) {
+  return cpuSeries(`gpu:${lane}`);
 }
 
 const diskParts = (d: LaneDisk) =>
@@ -72,7 +76,7 @@ function diskTotal(d: LaneDisk) {
         </RouterLink>
       </template>
     </header>
-    <div class="card-body lane-body">
+    <div class="card-body lane-body" :class="{ 'with-gpu': lane.gpu }">
       <div class="metric">
         <span class="ml" :title="CPU_HINT"><Icon name="cpu" :size="13" /> CPU</span>
         <span class="mv tabular">{{ percent(lane.cpu) }}</span>
@@ -82,6 +86,14 @@ function diskTotal(d: LaneDisk) {
         <span class="ml"><Icon name="memoryStick" :size="13" /> Memory</span>
         <span class="mv tabular">{{ bytes(lane.memory) }}</span>
         <Sparkline :values="memSeries(`lane:${lane.name}`)" :width="240" :height="40" :min-max="16 * 1024 * 1024" :zero-based="false" fluid color="var(--ok)" :label="`Lane ${lane.name} memory`" />
+      </div>
+      <div v-if="lane.gpu" class="metric" data-testid="lane-gpu">
+        <span class="ml" :title="`${lane.gpu.name}: the GPU${lane.gpu.count === 1 ? '' : 's'} its node gave this lane, no other lane's. Load in % of one GPU, summed.`">
+          <Icon name="gpu" :size="13" /> GPU<template v-if="lane.gpu.count > 1"> ×{{ lane.gpu.count }}</template>
+        </span>
+        <span class="mv tabular">{{ percent(lane.gpu.load) }}</span>
+        <Sparkline :values="gpuSeries(lane.name)" :width="240" :height="40" :min-max="10" fluid color="var(--info)" :label="`Lane ${lane.name} GPU load`" />
+        <span class="sub tabular" :title="`GPU memory: ${bytes(lane.gpu.memory_used)} used of ${bytes(lane.gpu.memory)}`">{{ bytes(lane.gpu.memory_used) }} of {{ bytes(lane.gpu.memory) }}</span>
       </div>
       <div v-if="lane.disk" class="metric disk">
         <span class="ml"><Icon name="hardDrive" :size="13" /> Disk</span>
@@ -106,8 +118,12 @@ function diskTotal(d: LaneDisk) {
   grid-template-columns: 1fr 1fr 1.3fr;
   gap: 24px;
 }
+.lane-body.with-gpu {
+  grid-template-columns: 1fr 1fr 1fr 1.3fr;
+}
 @media (max-width: 860px) {
-  .lane-body {
+  .lane-body,
+  .lane-body.with-gpu {
     grid-template-columns: 1fr 1fr;
   }
   .disk {
@@ -115,9 +131,14 @@ function diskTotal(d: LaneDisk) {
   }
 }
 @media (max-width: 480px) {
-  .lane-body {
+  .lane-body,
+  .lane-body.with-gpu {
     grid-template-columns: 1fr;
   }
+}
+.sub {
+  font-size: 12.5px;
+  color: var(--text-muted);
 }
 .more {
   display: inline-flex;

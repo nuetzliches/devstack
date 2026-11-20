@@ -26,6 +26,25 @@ pub struct ExternalInfra {
     /// requester or agent leaves it out, and the ports stay not forwarded.
     #[serde(default)]
     pub udp: bool,
+    /// The GPUs the node gave the lane, as the agent measured them with its
+    /// containers; an agent of an earlier release, or a lane without a GPU,
+    /// leaves it out.
+    #[serde(default)]
+    pub gpus: Option<Vec<ExternalGpu>>,
+}
+
+/// One GPU of the lane: its name, memory and what is used of it (bytes),
+/// its load (percent).
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ExternalGpu {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub memory: u64,
+    #[serde(default)]
+    pub memory_used: u64,
+    #[serde(default)]
+    pub load: f64,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

@@ -9,6 +9,18 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **A shared machine keeps the GPUs its owner wants.** The share switch
+  takes a GPU cap (`max_gpus`, the agent's `--max-gpus`): the most GPUs
+  other members' lanes hold here, `0` none. A GPU whose memory is more than
+  a quarter used by processes on the machine is not offered either; the
+  pool shows it as "in use on the machine" (ADR-0115).
+- **A lane shows its GPUs.** A lane on a node that holds GPUs gets a GPU
+  tile on its card and usage page: load, its last ten minutes, and memory
+  used, measured by the node. The machines table's "Shares" column says the
+  GPUs a machine offers (`· 1 GPU free`).
+
 ### Fixed
 
 - **Sharing on Windows finds devstack installed as the setup says.** The

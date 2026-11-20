@@ -688,7 +688,9 @@ export type BuildsUsage = { name: 'builds'; cpu_time_ms?: number; processes?: nu
 export type ContainerUsage = { group: string; service: string; history?: Point[] } & Load;
 export type GroupUsage = { name: string; history?: Point[] } & Load;
 export type LaneDisk = { snapshot: number; artifacts: number; logs: number; volumes: number | null };
-export type LaneUsage = { name: string; disk?: LaneDisk; history?: Point[] } & Load;
+/** A lane's GPUs together (only a lane on a node holds its own): load in percent of one GPU, summed. */
+export type LaneGpu = { count: number; name: string; memory: number; memory_used: number; load: number };
+export type LaneUsage = { name: string; disk?: LaneDisk; gpu?: LaneGpu; history?: Point[] } & Load;
 
 export type UsageReport = {
   at: number;
@@ -804,8 +806,8 @@ export type PoolNode = {
     /** What the machine has, what its lanes use (ADR-0036). */
     total?: PoolAmount;
     used?: PoolAmount;
-    /** `lane` (`<repo>/<lane>`): the lane that holds it, then not offered (ADR-0112); older nodes omit it. */
-    gpus?: { name: string; memory: number; memory_used: number; load: number; offered: boolean; lane?: string }[];
+    /** `lane` (`<repo>/<lane>`): the lane that holds it, then not offered (ADR-0112); `busy`: in use on the machine, not offered; older nodes omit them. */
+    gpus?: { name: string; memory: number; memory_used: number; load: number; offered: boolean; lane?: string; busy?: boolean }[];
     /** Stopped lanes it keeps for their next start (ADR-0038); older nodes omit it. */
     kept?: { lanes: number; bytes: number; /** Of `bytes`, the members' stores of what `prepare` makes (ADR-0062); older nodes omit it. */ store_bytes?: number };
     /** How the last update an admin ordered goes (ADR-0039). */
@@ -928,14 +930,14 @@ export type ShareStatus = {
   /** The devstack the coordinator runs, from its answer to the last report; absent from an older one. */
   coordinator?: PoolRelease;
   /** The machine's GPUs as measured; absent without one, or from an older hub. */
-  gpus?: { name: string; memory: number; memory_used: number; load: number; offered: boolean }[];
+  gpus?: { name: string; memory: number; memory_used: number; load: number; offered: boolean; busy?: boolean }[];
   /** The share switch (ADR-0113); absent from an older hub. */
   switch?: ShareSwitch;
   /** The node agent the switch runs; absent from an older hub. */
   host?: ShareHost;
 };
 /** The share switch of one pool: `PUT /hub/pool/share`. `distro` is the WSL distribution on Windows. */
-export type ShareSwitch = { enabled: boolean; max_cpus?: number; max_memory?: number; distro?: string; port?: number };
+export type ShareSwitch = { enabled: boolean; max_cpus?: number; max_memory?: number; max_gpus?: number; distro?: string; port?: number };
 /** One thing the node agent needs, and whether this machine has it; `optional`: it starts without. `fix` is the command alone, `fix_note` where it runs (absent from an older hub, whose `fix` says both). */
 export type ShareCheck = { name: string; ok: boolean; detail: string; fix?: string; fix_note?: string; optional?: boolean };
 /** `POST /hub/pool/share/check`: what the node agent would find with a switch, before it is on. */
