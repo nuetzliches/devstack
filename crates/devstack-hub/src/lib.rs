@@ -37,6 +37,7 @@ static UI: Dir<'_> = include_dir!("$OUT_DIR/ui");
 pub mod activity;
 pub mod agenthooks;
 pub mod agentmcp;
+mod asks;
 mod branches;
 mod exit;
 pub mod filters;
@@ -523,6 +524,12 @@ pub fn serve() -> Result<(), String> {
             let notify = notify.clone();
             guests::on_started(move |g| {
                 notify.guest_started(g);
+            });
+        }
+        {
+            let notify = notify.clone();
+            asks::on_started(move |a| {
+                notify.machine_asks(a);
             });
         }
         let state = AppState {

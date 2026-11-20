@@ -150,7 +150,14 @@ devstack node agent --listen 10.0.0.7:4261 --dedicated --max-cpus 12 --max-memor
 A machine runs the pool's lanes only once an admin granted it (`devstack node
 members node <id> on`, or `off` to take it back): until then the coordinator
 ignores the API its agent reports, places nothing there, and the agent says
-why; so does the share switch.
+why; so does the share switch. The admins see such a machine under **Admin**
+in the pool area as asking to run lanes, with what it offers and a button
+to grant it, counted in the pool's badge and marked in **Machines**; their
+hub notifies the desktop when one starts asking (`machine_asks`,
+[ADR-0116](adr/0116-admins-see-a-machine-that-asks-to-run-lanes.md)). Where
+another member looks like the same machine (the same address, or the same
+name with a suffix such as `-wsl`), the request says so, so the right one
+gets the grant.
 
 - `--no-new-lanes`: take no new lanes; those running go on. The share
   switch turned off while others' lanes run uses it.

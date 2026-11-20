@@ -297,6 +297,39 @@ impl Center {
         true
     }
 
+    /// A machine of a pool this machine is an admin of switched sharing on
+    /// and waits for its grant (`asks.rs`, #599). Once per machine that
+    /// starts asking; whether it was told.
+    pub fn machine_asks(&self, a: &crate::asks::Ask) -> bool {
+        if !self.settings.lock().unwrap().on(Kind::MachineAsks) {
+            return false;
+        }
+        let key = format!("asks/{}/{}", a.pool, a.id);
+        diag::info(
+            "notice",
+            serde_json::json!({
+                "kind": Kind::MachineAsks.key(), "pool": a.pool, "member": a.id,
+                "shown": self.sink.status().is_ok(),
+            }),
+        );
+        let pool = if a.pool == devstack_node::member::DEFAULT_POOL {
+            String::new()
+        } else {
+            format!(" · pool {}", a.pool)
+        };
+        self.sink.show(note(
+            format!("{} asks to run the pool's lanes", a.name),
+            format!("It shares and waits for an admin{pool}"),
+            "Grant it under Admin in the pool area.".into(),
+            &Target {
+                pool: true,
+                ..Target::default()
+            },
+            blake3::hash(key.as_bytes()).to_hex()[..16].to_string(),
+        ));
+        true
+    }
+
     /// What `GET /hub/notify` answers.
     fn view(&self) -> Value {
         let s = self.settings.lock().unwrap();

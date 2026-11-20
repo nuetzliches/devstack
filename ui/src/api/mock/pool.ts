@@ -98,12 +98,16 @@ export class MockPool {
       { id: '5566778899aabbcc', name: 'laptop-ben', state: 'pending', role: 'member', requested_at: s - 240, address: '100.64.0.12' },
       { id: 'c0ffee0011223344', name: 'cloud-1', state: 'approved', role: 'member', requested_at: s - 3600, address: '203.0.113.7', node: true, provisioned: { request: 'r-7f3a', machine: 'srv-4815', address: '203.0.113.7', confirmed: true } },
       { id: 'c0ffee5566778899', name: 'cloud-2', state: 'approved', role: 'member', requested_at: s - 120, address: '203.0.113.9', node: true, provisioned: { request: 'r-8b1c', machine: 'srv-4816', address: '203.0.113.9' } },
+      // Shares and waits for its grant (#599); an earlier setup by hand in WSL left a second entry.
+      { id: 'd15c0d15c0d15c00', name: 'gpu-desk', state: 'approved', role: 'member', requested_at: s - 86_400 * 2, address: '10.0.0.33' },
+      { id: 'd15c0d15c0d15c01', name: 'gpu-desk-wsl', state: 'approved', role: 'member', requested_at: s - 86_400 * 9, address: '10.0.0.34', node: true },
     ];
     this.members[0].provision = true;
     this.nodes = [
       { id: this.me, name: 'dev-pc', online: true, seen: 4, report: { sharing: false, cpus: 0, memory: 0 }, kind: 'machine' },
       { id: '9f8e7d6c5b4a3921', name: 'build-server', online: true, seen: 7, report: { sharing: true, cpus: 12, memory: 48 * 2 ** 30, api: 'https://10.0.0.14:4261', devstack: { version: '0.10.0', protocol: 1 }, total: { cpus: 32, memory: 128 * 2 ** 30 }, used: { cpus: 6.5, memory: 22 * 2 ** 30 }, kept: { lanes: 1, bytes: 5 * 2 ** 30, store_bytes: 2 * 2 ** 30 }, gpus: [{ name: 'NVIDIA L4', memory: 24 * 2 ** 30, memory_used: 3 * 2 ** 30, load: 18, offered: true }, { name: 'NVIDIA L4', memory: 24 * 2 ** 30, memory_used: 14 * 2 ** 30, load: 71, offered: false, lane: 'shop/train-model' }, { name: 'NVIDIA L4', memory: 24 * 2 ** 30, memory_used: 9 * 2 ** 30, load: 64, offered: false, busy: true }] }, kind: 'server' },
       { id: '1122334455667788', name: 'laptop-anna', online: false, seen: 7200, kind: 'machine' },
+      { id: 'd15c0d15c0d15c00', name: 'gpu-desk', online: true, seen: 6, kind: 'node', report: { sharing: true, cpus: 14.2, memory: 6.7 * 2 ** 30, devstack: { version: '0.10.0', protocol: 1 }, gpus: [{ name: 'NVIDIA GeForce RTX 4070', memory: 12 * 2 ** 30, memory_used: 1.2 * 2 ** 30, load: 3, offered: true }] } },
       {
         id: 'c0ffee0011223344', name: 'cloud-1', online: true, seen: 3, kind: 'server',
         report: { sharing: true, cpus: 7.2, memory: 28 * 2 ** 30, api: 'https://203.0.113.7:4261', devstack: { version: '0.10.0', protocol: 1 }, total: { cpus: 8, memory: 32 * 2 ** 30 }, used: { cpus: 1.5, memory: 6 * 2 ** 30 } },

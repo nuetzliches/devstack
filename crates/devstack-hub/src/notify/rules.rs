@@ -21,10 +21,11 @@ pub enum Kind {
     MainPorts,
     Live,
     GuestLane,
+    MachineAsks,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 7] = [
+    pub const ALL: [Kind; 8] = [
         Kind::BuildFailed,
         Kind::Held,
         Kind::ServiceFailed,
@@ -32,6 +33,7 @@ impl Kind {
         Kind::MainPorts,
         Kind::Live,
         Kind::GuestLane,
+        Kind::MachineAsks,
     ];
 
     pub fn key(self) -> &'static str {
@@ -43,6 +45,7 @@ impl Kind {
             Kind::MainPorts => "main_ports",
             Kind::Live => "live",
             Kind::GuestLane => "guest_lane",
+            Kind::MachineAsks => "machine_asks",
         }
     }
 
@@ -59,6 +62,7 @@ impl Kind {
             Kind::MainPorts => "A lane took or gave back the main ports",
             Kind::Live => "A candidate went live",
             Kind::GuestLane => "A lane of another member started on this machine",
+            Kind::MachineAsks => "A machine asks to run the pool's lanes (to its admins)",
         }
     }
 

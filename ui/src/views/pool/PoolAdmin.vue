@@ -1,11 +1,14 @@
 <script setup lang="ts">
-// What only an admin sees (ADR-0032): the requests to join, the nodes the
+// What only an admin sees (ADR-0032): the requests to join, the machines that
+// ask to run the pool's lanes (#599), the nodes the
 // provisioner made (ADR-0051), the MCP upstreams the pool names (ADR-0069),
 // the skill sets it hands out (ADR-0074) and the admin log. The coordinator checks the role on every action.
 import { computed, watchEffect } from 'vue';
 import { useRouter } from 'vue-router';
 import { ago, bytes, useNow } from '@/lib/format';
 import { actionText } from '@/lib/poolText';
+import { sameMachine } from '@/lib/asks';
+import { sharedText } from '@/lib/gpus';
 import { usePool } from '@/stores/pool';
 import Icon from '@/components/icons/Icon.vue';
 import PoolUpstreams from '@/components/PoolUpstreams.vue';
@@ -63,6 +66,42 @@ watchEffect(() => {
         <p class="hint muted">
           {{ pool.pending.length ? "Check the machine's name and where it asked from before approving: a request alone grants nothing." : 'No machine asks to join.' }}
         </p>
+      </div>
+    </section>
+
+    <!-- Members that switched sharing on and wait for their grant (#599). -->
+    <section v-if="pool.asks.length" class="card" data-testid="pool-asks">
+      <header class="card-header">
+        <Icon name="server" :size="18" />
+        <h2>Asks to run lanes</h2>
+        <span class="count">{{ pool.asks.length }}</span>
+      </header>
+      <div class="card-body flush table-wrap">
+        <table class="table">
+          <thead>
+            <tr><th>Machine</th><th>Offers</th><th>Last report</th><th /></tr>
+          </thead>
+          <tbody>
+            <tr v-for="a in pool.asks" :key="a.member.id" :data-member="a.member.id">
+              <td>
+                <RouterLink :to="machine(a.member.id)"><strong>{{ a.member.name }}</strong></RouterLink>
+                <div v-if="sameMachine(a.member, o)" class="faint small" data-testid="pool-asks-same">
+                  same machine as {{ sameMachine(a.member, o)!.name }}?<template v-if="sameMachine(a.member, o)!.node"> That one may run lanes already.</template>
+                </div>
+              </td>
+              <td class="tabular nowrap">
+                {{ a.node.report!.cpus.toFixed(1) }} CPU · {{ bytes(a.node.report!.memory) }}<template v-if="sharedText(a.node.report!.gpus)"> · {{ sharedText(a.node.report!.gpus) }}</template>
+              </td>
+              <td class="faint nowrap">{{ a.node.seen === undefined ? '–' : ago(now - a.node.seen * 1000, now) }}</td>
+              <td class="actions">
+                <button type="button" class="btn btn-sm btn-primary" :disabled="!!pool.busy[a.member.id]" data-testid="pool-asks-grant" @click="pool.setNode(a.member.id, a.member.name, true)">
+                  <Icon name="check" :size="14" /> Grant
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="hint muted">Its owner switched sharing on: granted, it runs the pool's lanes. Until then it runs none.</p>
       </div>
     </section>
 

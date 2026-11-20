@@ -162,9 +162,11 @@ fn set(pool: &str, change: impl FnOnce(&mut Pool)) {
 fn read(pool: &str, dir: &std::path::Path, topics: &[&str]) {
     let Some(feed) = FEED.get() else { return };
     let guests = topics.contains(&events::LEASES) || topics.contains(&events::NODES);
+    // A machine that asks to run lanes (#599): it reports, or its grant changed.
+    let asks = topics.contains(&events::NODES) || topics.contains(&events::MEMBERS);
     let upstreams = topics.contains(&events::UPSTREAMS);
     let skill_sets = topics.contains(&events::SKILLS);
-    if !guests && !upstreams && !skill_sets {
+    if !guests && !asks && !upstreams && !skill_sets {
         return;
     }
     let (pool, dir, ups) = (pool.to_string(), dir.to_path_buf(), feed.upstreams.clone());
@@ -172,6 +174,9 @@ fn read(pool: &str, dir: &std::path::Path, topics: &[&str]) {
     feed.rt.spawn_blocking(move || {
         if guests {
             crate::guests::seen(&pool, crate::share::guests(&pool));
+        }
+        if asks {
+            crate::asks::seen(&pool, crate::share::asks(&pool));
         }
         if upstreams {
             // A coordinator that cannot be asked now: the list it named

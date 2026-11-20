@@ -18,6 +18,8 @@ const isMe = (id: string) => o.value?.me?.id === id;
 const lanesOn = (id: string) => (o.value?.leases ?? []).filter((l) => l.node === id).length;
 const removed = computed(() => (o.value?.members ?? []).filter((m) => m.state === 'removed'));
 const showRemoved = ref(false);
+/** Machines that share and wait for their grant (#599). */
+const asks = computed(() => new Set(pool.asks.map((a) => a.member.id)));
 </script>
 
 <template>
@@ -49,6 +51,7 @@ const showRemoved = ref(false);
               <div class="pills">
                 <span v-if="m.member" class="pill sm" :class="m.member.role === 'admin' ? 'accent' : 'outline'">{{ m.member.role }}</span>
                 <span v-if="m.member?.node" class="pill sm accent" title="An admin let it run the pool's lanes" data-testid="pool-node-granted">runs lanes</span>
+                <span v-else-if="asks.has(m.id)" class="pill sm warn" title="It shares and waits for an admin to let it run the pool's lanes (Admin)" data-testid="pool-node-asks">asks to run lanes</span>
               </div>
             </td>
             <td data-testid="pool-node-version">
