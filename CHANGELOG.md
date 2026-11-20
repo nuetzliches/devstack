@@ -36,6 +36,12 @@ and listed with their assets on the
   overview's "healthy" count, its filter and a job's shortcut card put a
   running job (a migration) there; it counts as starting now until it
   completed, as the daemon and the hub's summary count it (#591).
+- **On Linux, a file written right after its new folder makes its
+  candidate.** inotify watches a new folder only after the watcher handled
+  its event, and the watcher listed the folder before that: a file written
+  in between was in neither, and its change went unseen until the next
+  edit. The new folder is listed once more after its watch is in place
+  (#587).
 
 ## [0.51.0] - 2026-11-19
 
