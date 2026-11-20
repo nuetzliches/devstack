@@ -127,7 +127,7 @@ stay.
 | [0042](0042-a-dev-servers-rebuilds-show-like-builds.md) | A dev server's rebuilds show like builds, read from its output | Accepted |
 | [0043](0043-a-dev-servers-fixed-port-is-devstacks.md) | A dev server's fixed port is devstack's, forwarded to its instance | Accepted |
 | [0044](0044-a-lanes-prepared-directories-can-be-linked-into-its-worktree.md) | A lane's prepared directories can be linked into its worktree | Accepted; point 5 replaced for lanes on a node by ADR-0063; `link` ⊆ `outputs` by ADR-0062 |
-| [0045](0045-the-hub-notifies-the-desktop.md) | The hub notifies the desktop of what needs attention, without a tray | Accepted, amended 2026-10-21 (`guest_lane`) |
+| [0045](0045-the-hub-notifies-the-desktop.md) | The hub notifies the desktop of what needs attention, without a tray | Accepted, amended 2026-10-21 (`guest_lane`), amended 2026-11-20 (`machine_asks`, ADR-0116) |
 | [0046](0046-the-hub-opens-a-worktree-in-the-users-programs.md) | The hub opens a stack's worktree in the user's own programs, from a fixed list | Accepted, amended 2026-10-21 (the program opens in front on Windows; GitHub Desktop), 2026-10-22 (an agent started with a prompt the hub writes) |
 | [0047](0047-the-dashboard-makes-a-lane-from-a-branch.md) | The dashboard makes a lane from a branch; the main tree's checkout stays the user's | Accepted; a branch without a stack file by ADR-0055; ahead and behind by ADR-0088 |
 | [0048](0048-a-containers-main-port-can-move-with-the-main-slot.md) | A container's main port can be devstack's, and then moves with the main slot | Accepted; point 2 detailed by ADR-0057 (an announced port is not held) |
@@ -198,3 +198,4 @@ stay.
 | [0113](0113-the-share-switch-runs-the-node-agent.md) | The share switch runs the node agent: in the hub on Linux, in WSL2 on Windows | Accepted (card in the pull request); built; amended 2026-11-19 (a setup dialog before the switch) |
 | [0114](0114-a-start-in-the-pool-can-ask-for-gpus.md) | A start in the pool can ask for GPUs, and the dashboard shows where they are | Accepted (card in the pull request); built |
 | [0115](0115-a-machine-keeps-its-gpus-and-a-lane-shows-its-own.md) | A machine keeps the GPUs its owner wants, and a lane shows its own | Accepted (card in the pull request); built |
+| [0116](0116-admins-see-a-machine-that-asks-to-run-lanes.md) | Admins see a machine that asks to run lanes, and are told when one starts | Accepted (card in the pull request); built |

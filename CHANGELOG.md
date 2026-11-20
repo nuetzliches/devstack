@@ -20,6 +20,14 @@ and listed with their assets on the
   tile on its card and usage page: load, its last ten minutes, and memory
   used, measured by the node. The machines table's "Shares" column says the
   GPUs a machine offers (`· 1 GPU free`).
+- **Admins see a machine that asks to run lanes.** A member that switches
+  sharing on waits for an admin's grant; the admins saw nothing of it. It
+  shows under Admin in the pool area now ("Asks to run lanes", with what it
+  offers and a Grant button), counts in the pool's badge, is marked in
+  Machines, and an admin's hub notifies the desktop when one starts asking
+  (`machine_asks`, on by default). A second member entry of the same machine
+  (the same address, or a name such as `<name>-wsl`) is pointed out
+  (ADR-0116, #599).
 
 ### Fixed
 

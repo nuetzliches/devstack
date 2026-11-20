@@ -1,6 +1,6 @@
 # ADR-0045: The hub notifies the desktop of what needs attention, without a tray
 
-- **Status:** Accepted (2026-10-21), amended 2026-10-21 (`guest_lane`)
+- **Status:** Accepted (2026-10-21), amended 2026-10-21 (`guest_lane`), amended 2026-11-20 (`machine_asks`, ADR-0116)
 - **Date:** 2026-10-21
 - **Deciders:** project owner
 - **Related:** [#156](https://github.com/nuetzliches/devstack/issues/156), [#1](https://github.com/nuetzliches/devstack/issues/1) (the tray), [ADR-0018](0018-dashboard-is-a-browser-page.md) (point 2 amended here), [ADR-0019](0019-control-api-security.md), [ADR-0021](0021-a-hub-serves-the-dashboard.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0025](0025-a-lane-can-run-on-another-node.md)
@@ -135,3 +135,11 @@ another member started running on this machine (#167). The hub reads the
 pool's leases after each report to the coordinator; a pool's first reading
 is the baseline, and a lease is told once, when it runs. A click opens the
 pool area (`devstack://open?page=pool`).
+
+*Amended 2026-11-20.* An eighth kind, `machine_asks`, on by default, the
+first about the pool: to the admins of a pool, a machine switched sharing on
+and waits for its grant to run lanes
+([ADR-0116](0116-admins-see-a-machine-that-asks-to-run-lanes.md), #599).
+Read when the pool's stream says its members or nodes changed; a pool's
+first reading is the baseline, and a machine is told once per time it
+starts asking.

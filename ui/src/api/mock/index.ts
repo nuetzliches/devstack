@@ -489,6 +489,7 @@ const notify: NotifySettings = {
     { kind: 'main_ports', label: 'A lane took or gave back the main ports', on: false, default: false },
     { kind: 'live', label: 'A candidate went live', on: false, default: false },
     { kind: 'guest_lane', label: 'A lane of another member started on this machine', on: true, default: true },
+    { kind: 'machine_asks', label: "A machine asks to run the pool's lanes (to its admins)", on: true, default: true },
   ],
   muted: [],
 };

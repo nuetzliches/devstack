@@ -11,6 +11,7 @@ import { computed, ref } from 'vue';
 import { api, paths, Unreachable } from '@/api';
 import type { NodePolicy, PoolEntry, PoolFeed, PoolMember, PoolNode, PoolOverview, PoolRole, SharedLane, SharePreflight, ShareStatus, ShareSwitch } from '@/api/types';
 import { act } from '@/lib/actions';
+import { asking } from '@/lib/asks';
 import { persist } from '@/lib/persist';
 import { webUrl } from '@/lib/format';
 import { useUi } from './ui';
@@ -71,15 +72,19 @@ export const usePool = defineStore('pool', () => {
       return { id, name: member?.name ?? node?.name ?? id, member, node };
     });
   });
+  /** Machines that share and wait for an admin's grant (#599). */
+  const asks = computed(() => asking(overview.value));
   /**
-   * What waits for an admin of pool `p`, by where it is handled: requests and
-   * provisioning alarms under Admin, provisioned nodes to confirm under
-   * Machines. Nothing where this machine is no admin there.
+   * What waits for an admin of pool `p`, by where it is handled: requests,
+   * machines that ask to run lanes and provisioning alarms under Admin,
+   * provisioned nodes to confirm under Machines. Nothing where this machine
+   * is no admin there.
    */
   function due(p = current.value) {
     const o = overviews.value[p];
     if (o?.me?.role !== 'admin') return { admin: 0, machines: 0, all: 0 };
-    const admin = (o.members ?? []).filter((m) => m.state === 'pending').length + (o.provisioning?.machines ?? []).filter((m) => m.alarm).length;
+    const admin =
+      (o.members ?? []).filter((m) => m.state === 'pending').length + (o.provisioning?.machines ?? []).filter((m) => m.alarm).length + asking(o).length;
     const machines = (o.nodes ?? []).filter((n) => n.provisioned?.unconfirmed).length;
     return { admin, machines, all: admin + machines };
   }
@@ -614,6 +619,7 @@ export const usePool = defineStore('pool', () => {
     share,
     isAdmin,
     pending,
+    asks,
     machines,
     nameOf,
     due,
