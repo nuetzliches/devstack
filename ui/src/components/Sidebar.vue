@@ -230,8 +230,8 @@ watch(
   () => [stack.id, stack.lane, stack.live, stack.services] as const,
   ([id, lane, live, services]) => {
     if (id && lane === null && live && services.length) {
-      mainActive.value[id] = services.some((x) => statusBucket(x.status) !== 'idle');
-      mainFails.value[id] = services.some((x) => statusBucket(x.status) === 'failed');
+      mainActive.value[id] = services.some((x) => statusBucket(x) !== 'idle');
+      mainFails.value[id] = services.some((x) => statusBucket(x) === 'failed');
     }
   },
   { immediate: true },
@@ -268,7 +268,7 @@ const servedBy = (s: StackEntry) => (known.value[s.id] ?? []).find((l) => l.owns
  */
 function laneRuns(s: StackEntry, l: LaneView): number {
   if (s.id !== stack.id || stack.lane !== l.name || !stack.live || !stack.services.length) return l.running;
-  return stack.services.filter((x) => statusBucket(x.status) !== 'idle').length;
+  return stack.services.filter((x) => statusBucket(x) !== 'idle').length;
 }
 /** How many of a lane's containers run, and of all: the shown lane's from its stream, as `laneRuns` does. */
 function laneContainers(s: StackEntry, l: LaneView): [number, number] {
@@ -282,7 +282,7 @@ function laneDot(s: StackEntry, l: LaneView): Dot {
   if (l.moving?.error) return 'err';
   // The shown lane's own services, from its stream.
   // (A lane not started has no stream: the one shown is the main tree's.)
-  if (started(l) && s.id === stack.id && stack.lane === l.name && stack.live && stack.services.some((x) => statusBucket(x.status) === 'failed')) return 'err';
+  if (started(l) && s.id === stack.id && stack.lane === l.name && stack.live && stack.services.some((x) => statusBucket(x) === 'failed')) return 'err';
   if (started(l) && (l.node_error || l.notices?.length)) return 'warn';
   if (!started(l)) return 'off';
   const [cr, c] = laneContainers(s, l);

@@ -14,7 +14,7 @@ const url = computed(() => {
   const s = props.service;
   return webUrl(s.link) || webUrl(s.url) || s.port ? serviceUrl(s) : null;
 });
-const bucket = computed(() => statusBucket(props.service.status));
+const bucket = computed(() => statusBucket(props.service));
 const tone: Record<ReturnType<typeof statusBucket>, string> = { healthy: 'ok', starting: 'accent', failed: 'danger', idle: 'neutral' };
 </script>
 

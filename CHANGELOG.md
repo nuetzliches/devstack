@@ -32,6 +32,10 @@ and listed with their assets on the
   them with `--exec` now, as written (#597). Until this release, a link
   helps: `ln -sf /root/.local/bin/devstack /usr/local/bin/devstack` in the
   distribution as root.
+- **A job that still runs is not counted as healthy in the dashboard.** The
+  overview's "healthy" count, its filter and a job's shortcut card put a
+  running job (a migration) there; it counts as starting now until it
+  completed, as the daemon and the hub's summary count it (#591).
 
 ## [0.51.0] - 2026-11-19
 

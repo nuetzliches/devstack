@@ -21,10 +21,20 @@ describe('statusLook', () => {
   });
 
   it('buckets for the summary', () => {
-    expect(statusBucket({ state: 'running' })).toBe('healthy');
-    expect(statusBucket({ state: 'unhealthy', reason: '' })).toBe('failed');
-    expect(statusBucket({ state: 'exited', exit_code: 0 })).toBe('idle');
-    expect(statusBucket({ state: 'exited', exit_code: 1 })).toBe('failed');
+    const b = (status: Status, kind = 'service') => statusBucket({ status, kind });
+    expect(b({ state: 'running' })).toBe('healthy');
+    expect(b({ state: 'unhealthy', reason: '' })).toBe('failed');
+    expect(b({ state: 'exited', exit_code: 0 })).toBe('idle');
+    expect(b({ state: 'exited', exit_code: 1 })).toBe('failed');
+  });
+
+  it('counts a running job as starting, not healthy (#591)', () => {
+    const b = (status: Status) => statusBucket({ status, kind: 'job' });
+    expect(b({ state: 'running' })).toBe('starting');
+    expect(b({ state: 'completed', exit_code: 0 })).toBe('idle');
+    expect(b({ state: 'failed', reason: 'exit 1' })).toBe('failed');
+    // A long-running kind stays healthy while it runs.
+    expect(statusBucket({ status: { state: 'running' }, kind: 'devserver' })).toBe('healthy');
   });
 });
 
