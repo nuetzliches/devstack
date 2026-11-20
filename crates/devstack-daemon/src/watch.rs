@@ -234,6 +234,53 @@ fn rels(repo: &Path, ev: notify::Event) -> Vec<String> {
     event_paths(repo, ev, &Disk, LIST_NEW_DIRS)
 }
 
+/// What the watcher does with the paths of a change that count.
+type Deliver = Arc<dyn Fn(Vec<String>) + Send + Sync>;
+
+/// How long after its event was handled a new directory is listed once more
+/// ([`LIST_NEW_DIRS`]). inotify watches the directory only after the
+/// handler of the batch returned (notify 8, `inotify.rs`): a file written in
+/// it between the first listing and that watch is in neither (#587).
+const RELIST_AFTER: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// The OS events of `repo`, as their paths that count, to `deliver`. A new
+/// directory is listed again [`RELIST_AFTER`] later, on a thread of its own
+/// that ends with the watcher; what it finds again is delivered again,
+/// which costs nothing (a candidate or a restart waits for its debounce).
+fn feed(repo: PathBuf, deliver: Deliver) -> impl FnMut(notify::Event) + Send + 'static {
+    let (tx, rx) = std::sync::mpsc::channel::<(Instant, Vec<PathBuf>)>();
+    if LIST_NEW_DIRS {
+        let (repo, deliver) = (repo.clone(), deliver.clone());
+        let _ = std::thread::Builder::new()
+            .name("watch-relist".into())
+            .spawn(move || {
+                while let Ok((due, dirs)) = rx.recv() {
+                    std::thread::sleep(due.saturating_duration_since(Instant::now()));
+                    let ev = dirs.into_iter().fold(
+                        notify::Event::new(EventKind::Create(notify::event::CreateKind::Folder)),
+                        notify::Event::add_path,
+                    );
+                    deliver(rels(&repo, ev));
+                }
+            });
+    }
+    move |ev| {
+        let new_dirs: Vec<PathBuf> = if LIST_NEW_DIRS && matches!(ev.kind, EventKind::Create(_)) {
+            ev.paths
+                .iter()
+                .filter(|p| counted(&repo, p).is_some() && Disk.is_dir(p))
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        deliver(rels(&repo, ev));
+        if !new_dirs.is_empty() {
+            let _ = tx.send((Instant::now() + RELIST_AFTER, new_dirs));
+        }
+    }
+}
+
 /// The paths an event is about that count, repository-relative. With
 /// `list_new_dirs`, a directory that was just created is reported with the
 /// files it already holds; generated directories are neither listed nor
@@ -369,6 +416,64 @@ fn watch(sup: Arc<Supervisor>) -> Result<Watcher, String> {
             }
         }
     };
+    let deliver: Deliver = {
+        let (me, rules) = (me.clone(), rules.clone());
+        Arc::new(move |rels: Vec<String>| {
+            let ignores = rules.read().unwrap().clone();
+            for rel in rels {
+                // An ignored file is not in a snapshot: no input of a build, no
+                // part of a lane's copy (module doc).
+                let in_snapshot = !ignores.ignored(&rel);
+                if lane_copy && in_snapshot {
+                    me.copy_changed();
+                }
+                if stack_rel.as_deref() == Some(rel.as_str()) {
+                    me.stack_file_touched();
+                    continue;
+                }
+                if in_snapshot {
+                    // A build file (`Directory.Build.targets`, a lockfile) may be
+                    // an input of any build; the build id decides (#13).
+                    let build_file = devstack_build::is_build_file(&rel);
+                    for (n, g) in &built {
+                        if g.is_match(&rel) || build_file {
+                            me.changed(n, &rel);
+                        }
+                    }
+                }
+                for (n, g) in &devservers {
+                    if covers(g, &rel) {
+                        let key = format!("devserver:{n}");
+                        pending.add(&key, &rel);
+                        let (n, p) = (n.clone(), pending.clone());
+                        me.debounce(key.clone(), move |s| restart_devserver(s, key, n, p));
+                    }
+                }
+                for (group, service, g) in &containers {
+                    if covers(g, &rel) {
+                        let key = format!("compose:{group}.{service}");
+                        pending.add(&key, &rel);
+                        let (group, service, p) = (group.clone(), service.clone(), pending.clone());
+                        me.debounce(key.clone(), move |s| {
+                            let Some(seen) = p.take(&key) else {
+                                return;
+                            };
+                            seen.log(
+                                "restart_on",
+                                serde_json::json!({
+                                    "lane": s.lane,
+                                    "group": group,
+                                    "service": service,
+                                }),
+                            );
+                            s.restart_container(&group, &service);
+                        });
+                    }
+                }
+            }
+        })
+    };
+    let mut feed = feed(repo.clone(), deliver);
     let mut inner = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         let mut ev = match res {
             Ok(ev) if ev.need_rescan() => return rescan("the OS asked for a rescan".into()),
@@ -390,58 +495,7 @@ fn watch(sup: Arc<Supervisor>) -> Result<Watcher, String> {
                 *rules.write().unwrap() = fresh;
             });
         }
-        let ignores = rules.read().unwrap().clone();
-        for rel in rels(&repo, ev) {
-            // An ignored file is not in a snapshot: no input of a build, no
-            // part of a lane's copy (module doc).
-            let in_snapshot = !ignores.ignored(&rel);
-            if lane_copy && in_snapshot {
-                me.copy_changed();
-            }
-            if stack_rel.as_deref() == Some(rel.as_str()) {
-                me.stack_file_touched();
-                continue;
-            }
-            if in_snapshot {
-                // A build file (`Directory.Build.targets`, a lockfile) may be
-                // an input of any build; the build id decides (#13).
-                let build_file = devstack_build::is_build_file(&rel);
-                for (n, g) in &built {
-                    if g.is_match(&rel) || build_file {
-                        me.changed(n, &rel);
-                    }
-                }
-            }
-            for (n, g) in &devservers {
-                if covers(g, &rel) {
-                    let key = format!("devserver:{n}");
-                    pending.add(&key, &rel);
-                    let (n, p) = (n.clone(), pending.clone());
-                    me.debounce(key.clone(), move |s| restart_devserver(s, key, n, p));
-                }
-            }
-            for (group, service, g) in &containers {
-                if covers(g, &rel) {
-                    let key = format!("compose:{group}.{service}");
-                    pending.add(&key, &rel);
-                    let (group, service, p) = (group.clone(), service.clone(), pending.clone());
-                    me.debounce(key.clone(), move |s| {
-                        let Some(seen) = p.take(&key) else {
-                            return;
-                        };
-                        seen.log(
-                            "restart_on",
-                            serde_json::json!({
-                                "lane": s.lane,
-                                "group": group,
-                                "service": service,
-                            }),
-                        );
-                        s.restart_container(&group, &service);
-                    });
-                }
-            }
-        }
+        feed(ev);
     })
     .map_err(|e| e.to_string())?;
     let mode = if only_stack_file {
@@ -1201,5 +1255,52 @@ mod tests {
         std::fs::remove_dir(&up)
             .or_else(|_| std::fs::remove_file(&up))
             .unwrap();
+    }
+
+    /// #587: inotify watches a new directory only after the handler of its
+    /// event returned; a file written in it between the handler's listing and
+    /// that watch was neither listed nor reported. The handler here takes a
+    /// while (as the daemon's, which builds and restarts), and the file comes
+    /// after the listing, before the watch.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_file_written_right_after_its_new_folder_is_reported() {
+        use notify::Watcher as _;
+        let dir = tempfile::tempdir().unwrap();
+        let repo = std::fs::canonicalize(dir.path()).unwrap();
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let deliver: Deliver = {
+            let seen = seen.clone();
+            Arc::new(move |rels| {
+                seen.lock().unwrap().extend(rels);
+                std::thread::sleep(std::time::Duration::from_millis(30));
+            })
+        };
+        let mut feed = feed(repo.clone(), deliver);
+        let mut w = notify::recommended_watcher(move |res: notify::Result<Event>| {
+            if let Ok(ev) = res {
+                feed(ev);
+            }
+        })
+        .unwrap();
+        w.watch(&repo, RecursiveMode::Recursive).unwrap();
+        for i in 0..5 {
+            let d = repo.join(format!("src{i}"));
+            std::fs::create_dir(&d).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            std::fs::write(d.join("v2.txt"), "x").unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let want: Vec<String> = (0..5).map(|i| format!("src{i}/v2.txt")).collect();
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        let missing = loop {
+            let got = seen.lock().unwrap().clone();
+            let missing: Vec<&String> = want.iter().filter(|w| !got.contains(w)).collect();
+            if missing.is_empty() || Instant::now() > deadline {
+                break missing.into_iter().cloned().collect::<Vec<_>>();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        assert!(missing.is_empty(), "never reported: {missing:?}");
     }
 }
