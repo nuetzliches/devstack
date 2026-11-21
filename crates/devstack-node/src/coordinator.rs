@@ -1457,17 +1457,24 @@ async fn join(
             "too many requests wait for an admin already".into(),
         ));
     }
-    let name: String = r
-        .name
-        .chars()
-        .filter(|c| !c.is_control())
-        .take(64)
-        .collect();
+    let name = member_name(&r.name);
     let m = s
         .store
         .request(&id, name.trim(), &r.csr, Some(&peer.addr.ip().to_string()))
         .map_err(internal)?;
     Ok(Json(answer(&m)))
+}
+
+/// The name a machine gives itself as the pool keeps it: no control
+/// characters, and none that change how a name looks without being seen
+/// (bidi overrides, zero-width marks; review before 0.52.0: a name could
+/// pass for another one in an admin's list); at most 64 characters.
+fn member_name(raw: &str) -> String {
+    let invisible = |c: char| matches!(c, '\u{00AD}' | '\u{061C}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{206F}' | '\u{FEFF}');
+    raw.chars()
+        .filter(|&c| !c.is_control() && !invisible(c))
+        .take(64)
+        .collect()
 }
 
 /// A few joins (and enrolments) a minute per address.
@@ -3406,12 +3413,7 @@ async fn enrol(
     if m.state != MachineState::Provisioning || store::now() > m.deadline {
         return Err((StatusCode::FORBIDDEN, "this enrolment has expired".into()));
     }
-    let name: String = r
-        .name
-        .chars()
-        .filter(|c| !c.is_control())
-        .take(64)
-        .collect();
+    let name = member_name(&r.name);
     let ca = ca(&s.dir).map_err(internal)?;
     let joined = s
         .store
@@ -4475,6 +4477,16 @@ mod placement_tests {
         let mut roomy = room(&[]);
         roomy.disk_room = Some(60 * GIB);
         assert!(order(&[("d", "roomy", &roomy)], need)[0].1);
+    }
+
+    #[test]
+    fn a_member_name_keeps_no_hidden_characters() {
+        // A name that would read "anna-wsl" right to left, and one with a
+        // zero-width space, as an admin would see them.
+        assert_eq!(member_name("lsw-\u{202E}anna"), "lsw-anna");
+        assert_eq!(member_name("an\u{200B}na\tbox\u{FEFF}"), "annabox");
+        assert_eq!(member_name("Büro-PC (Anna)"), "Büro-PC (Anna)");
+        assert_eq!(member_name(&"x".repeat(80)).len(), 64);
     }
 
     #[test]

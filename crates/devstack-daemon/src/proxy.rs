@@ -18,7 +18,7 @@
 //! request), and hop-by-hop headers stay on their hop (RFC 9110 §7.6.1).
 
 use bytes::Bytes;
-use devstack_node::connpool::Pool;
+use devstack_node::connpool::{Bound, Pool};
 use http_body_util::{BodyExt, Full, StreamBody, combinators::BoxBody};
 use hyper::body::{Frame, Incoming};
 use hyper::{Request, Response, StatusCode};
@@ -158,8 +158,12 @@ impl Proxy {
                         continue;
                     };
                     let sh = sh.clone();
+                    // The upstream connection a login binds to this client's (#569).
+                    let client = Arc::new(Bound::default());
                     tokio::spawn(async move {
-                        let service = hyper::service::service_fn(move |r| handle(sh.clone(), r));
+                        let service = hyper::service::service_fn(move |r| {
+                            handle(sh.clone(), client.clone(), r)
+                        });
                         let _ = hyper::server::conn::http1::Builder::new()
                             .serve_connection(TokioIo::new(stream), service)
                             .with_upgrades()
@@ -312,9 +316,13 @@ pub fn strip_hop_by_hop(h: &mut hyper::HeaderMap, upgrade: bool) {
             h.remove(n);
         }
     }
+    // The proxy login headers are this hop's too: a visitor's never reaches
+    // the service (review before 0.52.0).
     for n in [
         "keep-alive",
         "proxy-connection",
+        "proxy-authenticate",
+        "proxy-authorization",
         "te",
         "trailer",
         "transfer-encoding",
@@ -355,7 +363,11 @@ async fn connect(port: u16) -> std::io::Result<TcpStream> {
     Ok(s)
 }
 
-async fn handle(sh: Arc<Shared>, mut req: Request<Incoming>) -> Result<Response<Body>, Infallible> {
+async fn handle(
+    sh: Arc<Shared>,
+    client: Arc<Bound<u16, Body>>,
+    mut req: Request<Incoming>,
+) -> Result<Response<Body>, Infallible> {
     let up = match wait_upstream(&sh).await {
         Ok(u) => u,
         Err((state, reason)) => {
@@ -387,7 +399,9 @@ async fn handle(sh: Arc<Shared>, mut req: Request<Incoming>) -> Result<Response<
     // goes out once more on a new one where that is safe (`connpool`).
     let (sender, mut resp) = match sh
         .pool
-        .send(&up.port, req.map(BodyExt::boxed), || sender(up.port))
+        .send(&up.port, &client, req.map(BodyExt::boxed), || {
+            sender(up.port)
+        })
         .await
     {
         Ok(r) => r,
@@ -517,7 +531,17 @@ mod tests {
 
     /// One request on a kept-alive connection; returns (status, headers, body).
     fn get(conn: &mut std::net::TcpStream, path: &str) -> (u16, String, String) {
-        write!(conn, "GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+        get_as(conn, path, None)
+    }
+
+    /// The same, with an `Authorization` header.
+    fn get_as(
+        conn: &mut std::net::TcpStream,
+        path: &str,
+        auth: Option<&str>,
+    ) -> (u16, String, String) {
+        let auth = auth.map_or(String::new(), |a| format!("Authorization: {a}\r\n"));
+        write!(conn, "GET {path} HTTP/1.1\r\nHost: x\r\n{auth}\r\n").unwrap();
         let mut r = BufReader::new(conn.try_clone().unwrap());
         let mut head = String::new();
         loop {
@@ -584,6 +608,90 @@ mod tests {
             h.contains("x-devstack-build: b2") && h.contains("x-devstack-pending: building"),
             "{h}"
         );
+    }
+
+    /// An upstream that logs a connection in as Kestrel does with NTLM:
+    /// `NTLM t1` gets the challenge `NTLM t2`, `NTLM t3` on the same
+    /// connection after it logs the connection in, and a logged-in
+    /// connection answers 200 without credentials; anything else is 401.
+    fn ntlm_upstream(rt: &tokio::runtime::Runtime) -> u16 {
+        use std::sync::atomic::AtomicU8;
+        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = l.local_addr().unwrap().port();
+        l.set_nonblocking(true).unwrap();
+        rt.spawn(async move {
+            let l = tokio::net::TcpListener::from_std(l).unwrap();
+            loop {
+                let (s, _) = l.accept().await.unwrap();
+                let login = Arc::new(AtomicU8::new(0));
+                tokio::spawn(async move {
+                    let svc = hyper::service::service_fn(move |r: Request<Incoming>| {
+                        let login = login.clone();
+                        async move {
+                            let auth = r
+                                .headers()
+                                .get("authorization")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("")
+                                .to_string();
+                            let (status, challenge) = match auth.as_str() {
+                                "NTLM t1" => {
+                                    login.store(1, Ordering::SeqCst);
+                                    (401, Some("NTLM t2"))
+                                }
+                                "NTLM t3" if login.load(Ordering::SeqCst) == 1 => {
+                                    login.store(2, Ordering::SeqCst);
+                                    (200, None)
+                                }
+                                "" if login.load(Ordering::SeqCst) == 2 => (200, None),
+                                _ => (401, Some("NTLM")),
+                            };
+                            let mut resp = Response::new(Full::new(Bytes::from("ok")).boxed());
+                            *resp.status_mut() = StatusCode::from_u16(status).unwrap();
+                            if let Some(c) = challenge {
+                                resp.headers_mut()
+                                    .insert("www-authenticate", c.parse().unwrap());
+                            }
+                            Ok::<_, Infallible>(resp)
+                        }
+                    });
+                    let _ = hyper::server::conn::http1::Builder::new()
+                        .serve_connection(TokioIo::new(s), svc)
+                        .await;
+                });
+            }
+        });
+        port
+    }
+
+    /// #569 and the review before 0.52.0, through the proxy: a client
+    /// connection logs in over its handshake and stays logged in; another
+    /// client connection is not.
+    #[test]
+    fn a_windows_login_through_the_proxy_stays_with_its_client() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let up = ntlm_upstream(&rt);
+        let port = free_port();
+        let p = Proxy::bind("api", port, rt.handle()).unwrap();
+        p.set_upstream(Some(Upstream {
+            port: up,
+            build: None,
+        }));
+        let mut anna = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        assert_eq!(get_as(&mut anna, "/", Some("NTLM t1")).0, 401);
+        assert_eq!(
+            get_as(&mut anna, "/", Some("NTLM t3")).0,
+            200,
+            "the handshake did not stay on one connection"
+        );
+        assert_eq!(
+            get(&mut anna, "/").0,
+            200,
+            "anna's connection is not logged in"
+        );
+        let mut ben = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        assert_eq!(get(&mut ben, "/").0, 401, "ben got anna's login");
+        assert_eq!(get(&mut anna, "/").0, 200);
     }
 
     #[test]

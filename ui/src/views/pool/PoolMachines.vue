@@ -18,8 +18,8 @@ const isMe = (id: string) => o.value?.me?.id === id;
 const lanesOn = (id: string) => (o.value?.leases ?? []).filter((l) => l.node === id).length;
 const removed = computed(() => (o.value?.members ?? []).filter((m) => m.state === 'removed'));
 const showRemoved = ref(false);
-/** Machines that share and wait for their grant (#599). */
-const asks = computed(() => new Set(pool.asks.map((a) => a.member.id)));
+/** Machines that share and wait for their grant (#599): an admin's to act on, shown to admins. */
+const asks = computed(() => new Set(pool.isAdmin ? pool.asks.map((a) => a.member.id) : []));
 </script>
 
 <template>

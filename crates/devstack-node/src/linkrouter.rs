@@ -58,6 +58,8 @@ pub type Dial = Arc<dyn Fn(String) -> Result<Way, (u16, String)> + Send + Sync>;
 
 /// Idle connections to services, by [`Way::key`].
 type Kept = Arc<crate::connpool::Pool<String, Body>>;
+/// One visitor connection's service connection, once a login bound it.
+type Client = Arc<crate::connpool::Bound<String, Body>>;
 
 // ------------------------------------------------------- the connector
 
@@ -251,9 +253,12 @@ pub async fn serve(listener: tokio::net::TcpListener, dial: Dial) {
         let _ = stream.set_nodelay(true);
         let dial = dial.clone();
         let kept = kept.clone();
+        // The service connection a login binds to this visitor's (#569).
+        let client: Client = Arc::new(crate::connpool::Bound::default());
         tokio::spawn(async move {
-            let service =
-                hyper::service::service_fn(move |r| handle(dial.clone(), kept.clone(), r));
+            let service = hyper::service::service_fn(move |r| {
+                handle(dial.clone(), kept.clone(), client.clone(), r)
+            });
             let _ = hyper::server::conn::http1::Builder::new()
                 .serve_connection(TokioIo::new(stream), service)
                 .with_upgrades()
@@ -275,6 +280,7 @@ fn text(status: StatusCode, body: String) -> hyper::Response<Body> {
 async fn handle(
     dial: Dial,
     kept: Kept,
+    client: Client,
     req: Request<Incoming>,
 ) -> Result<hyper::Response<Body>, std::convert::Infallible> {
     let host = req
@@ -291,12 +297,14 @@ async fn handle(
             return Ok(text(status, format!("devstack: {why}\n")));
         }
     };
-    Ok(forward(req, &host, way, kept).await.unwrap_or_else(|e| {
-        text(
-            StatusCode::BAD_GATEWAY,
-            format!("devstack: the service does not answer: {e}\n"),
-        )
-    }))
+    Ok(forward(req, &host, way, kept, &client)
+        .await
+        .unwrap_or_else(|e| {
+            text(
+                StatusCode::BAD_GATEWAY,
+                format!("devstack: the service does not answer: {e}\n"),
+            )
+        }))
 }
 
 /// The way to `port` on this machine's loopback (IPv4, else IPv6: a dev
@@ -354,6 +362,7 @@ async fn forward(
     host: &str,
     way: Way,
     kept: Kept,
+    client: &Client,
 ) -> Result<hyper::Response<Body>, String> {
     let port = way.port;
     let client_upgrade = req
@@ -378,7 +387,7 @@ async fn forward(
     // goes out once more on a new one where that is safe (`connpool`).
     let Way { key, tls, open, .. } = way;
     let (sender, mut resp) = kept
-        .send(&key, req.map(BodyExt::boxed), || connect(open, tls))
+        .send(&key, client, req.map(BodyExt::boxed), || connect(open, tls))
         .await?;
     let upgraded = resp.status() == StatusCode::SWITCHING_PROTOCOLS && client_upgrade.is_some();
     strip_hop_by_hop(resp.headers_mut(), upgraded);
@@ -415,9 +424,13 @@ fn strip_hop_by_hop(h: &mut hyper::HeaderMap, upgrade: bool) {
             h.remove(n);
         }
     }
+    // The proxy login headers are this hop's too: a visitor's never reaches
+    // the service (review before 0.52.0).
     for n in [
         "keep-alive",
         "proxy-connection",
+        "proxy-authenticate",
+        "proxy-authorization",
         "te",
         "trailer",
         "transfer-encoding",

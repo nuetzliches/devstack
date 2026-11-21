@@ -9,6 +9,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import type { ShareHost, ShareSwitch } from '@/api/types';
 import { bytes } from '@/lib/format';
+import { parseCap } from '@/lib/gpus';
 import { usePool } from '@/stores/pool';
 import ShareChecks from './ShareChecks.vue';
 
@@ -46,11 +47,7 @@ function num(v: string): number | undefined {
   const n = Number(v.replace(',', '.'));
   return v.trim() && Number.isFinite(n) && n > 0 ? n : undefined;
 }
-/** A count, 0 included (no GPU for the pool). */
-function count(v: string): number | undefined {
-  const n = Number(v);
-  return v.trim() && Number.isInteger(n) && n >= 0 ? n : undefined;
-}
+const gpuParsed = computed(() => parseCap(gpuCap.value));
 /** The switch as the form says it, `enabled` as given. */
 function form(enabled: boolean): ShareSwitch {
   const m = num(memCap.value);
@@ -58,7 +55,7 @@ function form(enabled: boolean): ShareSwitch {
     enabled,
     max_cpus: num(cpuCap.value),
     max_memory: m === undefined ? undefined : Math.round(m * GIB),
-    max_gpus: count(gpuCap.value),
+    max_gpus: gpuParsed.value.cap,
     distro: distro.value || undefined,
     port: sw.value.port,
   };
@@ -178,9 +175,10 @@ const windows = computed(() => !!host.value?.distros?.length || !!sw.value.distr
         </label>
         <label v-if="gpus || sw.max_gpus !== undefined" title="How many of its GPUs lanes of others may hold; 0 keeps them for you. A GPU you use yourself is never offered.">
           <span>GPU cap</span>
-          <input v-model="gpuCap" class="input" type="text" inputmode="numeric" :placeholder="`no cap (of ${gpus})`" data-testid="share-cap-gpus" />
+          <input v-model="gpuCap" class="input" type="text" inputmode="numeric" :placeholder="`no cap (of ${gpus})`" :aria-invalid="gpuParsed.invalid" data-testid="share-cap-gpus" />
+          <span v-if="gpuParsed.invalid" class="warn" data-testid="share-cap-gpus-invalid">a whole number, 0 for none</span>
         </label>
-        <button type="button" class="btn btn-sm" :disabled="!changed || busy" data-testid="share-save" @click="save">Save</button>
+        <button type="button" class="btn btn-sm" :disabled="!changed || busy || gpuParsed.invalid" data-testid="share-save" @click="save">Save</button>
       </div>
       <p v-if="host?.detail && host.state !== 'unsupported'" class="small" :class="stateClass" data-testid="share-detail">{{ host.detail }}</p>
       <p v-if="stuck">

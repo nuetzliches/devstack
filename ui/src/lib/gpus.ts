@@ -49,6 +49,17 @@ export function gpuState(g: Gpu): string {
   return g.busy ? 'in use on the machine' : 'not offered';
 }
 
+/**
+ * The GPU cap as typed in the share switch's form: empty is no cap, a whole
+ * number from 0 up a cap (0: none for the pool); anything else is `invalid`,
+ * which the form says and does not save (it was taken for "no cap" before).
+ */
+export function parseCap(v: string): { cap?: number; invalid: boolean } {
+  if (!v.trim()) return { invalid: false };
+  const n = Number(v.trim());
+  return Number.isInteger(n) && n >= 0 ? { cap: n, invalid: false } : { invalid: true };
+}
+
 /** A shared machine's GPUs in its row: `1 GPU free`, `1 GPU held`, `2 GPUs (1 free)`; none offered: `GPU in use` or `GPU not offered`. */
 export function sharedText(gpus: Gpu[] | undefined): string | null {
   const s = summarise(gpus);

@@ -160,7 +160,7 @@ pub struct NodeLease {
 
 /// The machine's GPUs as a node reports them: one a lease holds names its
 /// lane (ADR-0112 point 5); what is offered of the rest says
-/// [`crate::share::offered_gpus`] with the owner's cap.
+/// [`crate::share::offered_gpus`] with the room the owner's cap leaves.
 fn held_gpus(
     gpus: Vec<crate::share::Gpu>,
     leases: &HashMap<String, NodeLease>,
@@ -174,8 +174,14 @@ fn held_gpus(
                 .find(|l| l.gpus.iter().any(|g| g == id))
                 .map(|l| format!("{}/{}", l.repo, l.lane))
         },
-        max,
+        gpu_room(leases, max),
     )
+}
+
+/// How many more GPUs the node's lanes may hold under the owner's cap:
+/// what the leases hold counts, listed by the vendor's tool now or not.
+fn gpu_room(leases: &HashMap<String, NodeLease>, max: Option<u32>) -> usize {
+    crate::share::gpu_room(max, leases.values().map(|l| l.gpus.len()).sum())
 }
 
 /// What a slot keeps about itself (`slots/<slot>/slot.json`).
@@ -1795,7 +1801,8 @@ async fn admit(
     let mut leases = s.leases.lock().unwrap();
     if let Some(g) = gpu_need {
         let offered = held_gpus(machine_gpus, &leases, s.share.max_gpus);
-        l.gpus = crate::share::assign_gpus(&offered, g).map_err(|fit| {
+        let room = gpu_room(&leases, s.share.max_gpus);
+        l.gpus = crate::share::assign_gpus(&offered, g, room).map_err(|fit| {
             err(
                 StatusCode::CONFLICT,
                 format!(

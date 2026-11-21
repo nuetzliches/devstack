@@ -13,8 +13,9 @@ and listed with their assets on the
 
 - **A shared machine keeps the GPUs its owner wants.** The share switch
   takes a GPU cap (`max_gpus`, the agent's `--max-gpus`): the most GPUs
-  other members' lanes hold here, `0` none. A GPU whose memory is more than
-  a quarter used by processes on the machine is not offered either; the
+  other members' lanes hold here, `0` none; a lane gets any free GPU that
+  fits, as long as the cap allows. A GPU whose memory is more than a
+  quarter used by processes on the machine is not offered either; the
   pool shows it as "in use on the machine" (ADR-0115).
 - **A lane shows its GPUs.** A lane on a node that holds GPUs gets a GPU
   tile on its card and usage page: load, its last ten minutes, and memory
@@ -25,9 +26,11 @@ and listed with their assets on the
   shows under Admin in the pool area now ("Asks to run lanes", with what it
   offers and a Grant button), counts in the pool's badge, is marked in
   Machines, and an admin's hub notifies the desktop when one starts asking
-  (`machine_asks`, on by default). A second member entry of the same machine
-  (the same address, or a name such as `<name>-wsl`) is pointed out
-  (ADR-0116, #599).
+  (`machine_asks`, on by default; at most once in half an hour per
+  machine). Another member entry with the same address, or a similar name
+  such as `<name>-wsl`, is pointed out with its id (a name is not checked).
+  A machine's name keeps no invisible characters (bidi overrides,
+  zero-width marks) (ADR-0116, #599).
 
 ### Fixed
 
@@ -63,8 +66,12 @@ and listed with their assets on the
   keep their connections to a service (#556, #559). A service that ties its
   login to the connection (Windows Negotiate or NTLM, Kestrel's and
   HTTP.sys's default) took the next visitor's request on such a connection
-  as the first visitor's. A connection whose request or answer carries
-  Negotiate or NTLM is closed after its answer now, as YARP does (#569).
+  as the first visitor's. A connection whose request or answer carries a
+  Windows login (Negotiate, NTLM, Kerberos, CredSSP) now stays with the
+  visitor's connection, for the handshake and what follows, and is never
+  given to anyone else, as YARP does; it closes with the visitor's
+  connection. A visitor's `Proxy-Authorization` no longer reaches the
+  service (#569).
 
 ## [0.51.0] - 2026-11-19
 

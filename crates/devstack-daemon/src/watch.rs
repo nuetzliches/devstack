@@ -247,6 +247,8 @@ const RELIST_AFTER: std::time::Duration = std::time::Duration::from_millis(200);
 /// directory is listed again [`RELIST_AFTER`] later, on a thread of its own
 /// that ends with the watcher; what it finds again is delivered again,
 /// which costs nothing (a candidate or a restart waits for its debounce).
+/// The directories that came while it waited are listed with it, each once
+/// (a burst of new directories is one more listing, not one per event).
 fn feed(repo: PathBuf, deliver: Deliver) -> impl FnMut(notify::Event) + Send + 'static {
     let (tx, rx) = std::sync::mpsc::channel::<(Instant, Vec<PathBuf>)>();
     if LIST_NEW_DIRS {
@@ -254,8 +256,17 @@ fn feed(repo: PathBuf, deliver: Deliver) -> impl FnMut(notify::Event) + Send + '
         let _ = std::thread::Builder::new()
             .name("watch-relist".into())
             .spawn(move || {
-                while let Ok((due, dirs)) = rx.recv() {
+                while let Ok((mut due, mut dirs)) = rx.recv() {
                     std::thread::sleep(due.saturating_duration_since(Instant::now()));
+                    // What came meanwhile, its own wait included (each one
+                    // only once its directory's watch is surely in place).
+                    while let Ok((d, more)) = rx.try_recv() {
+                        due = due.max(d);
+                        dirs.extend(more);
+                    }
+                    std::thread::sleep(due.saturating_duration_since(Instant::now()));
+                    dirs.sort();
+                    dirs.dedup();
                     let ev = dirs.into_iter().fold(
                         notify::Event::new(EventKind::Create(notify::event::CreateKind::Folder)),
                         notify::Event::add_path,

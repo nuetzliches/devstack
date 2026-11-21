@@ -7,7 +7,7 @@ import { computed, watchEffect } from 'vue';
 import { useRouter } from 'vue-router';
 import { ago, bytes, useNow } from '@/lib/format';
 import { actionText } from '@/lib/poolText';
-import { sameMachine } from '@/lib/asks';
+import { related, relatedText } from '@/lib/asks';
 import { sharedText } from '@/lib/gpus';
 import { usePool } from '@/stores/pool';
 import Icon from '@/components/icons/Icon.vue';
@@ -85,9 +85,7 @@ watchEffect(() => {
             <tr v-for="a in pool.asks" :key="a.member.id" :data-member="a.member.id">
               <td>
                 <RouterLink :to="machine(a.member.id)"><strong>{{ a.member.name }}</strong></RouterLink>
-                <div v-if="sameMachine(a.member, o)" class="faint small" data-testid="pool-asks-same">
-                  same machine as {{ sameMachine(a.member, o)!.name }}?<template v-if="sameMachine(a.member, o)!.node"> That one may run lanes already.</template>
-                </div>
+                <div v-if="related(a.member, o)" class="faint small" data-testid="pool-asks-same">{{ relatedText(related(a.member, o)!) }}</div>
               </td>
               <td class="tabular nowrap">
                 {{ a.node.report!.cpus.toFixed(1) }} CPU · {{ bytes(a.node.report!.memory) }}<template v-if="sharedText(a.node.report!.gpus)"> · {{ sharedText(a.node.report!.gpus) }}</template>

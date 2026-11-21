@@ -133,12 +133,17 @@ where
     /// ([`replay`]) and the error is that close ([`closed_unanswered`]).
     /// A new connection is never tried twice: its failure is the upstream's.
     ///
+    /// `client` is the client connection the request came on: a connection
+    /// a login bound to it ([`Bound`]) takes the request first, and a
+    /// connection whose request or answer binds a login becomes its.
+    ///
     /// The connection comes back with the answer, to give back once that is
-    /// read; `None` when it must serve no other request ([`binds_connection`]).
+    /// read; `None` when it is bound to `client` and serves no one else.
     pub async fn send<F, Fut>(
         &self,
         key: &K,
-        req: Request<B>,
+        client: &Bound<K, B>,
+        mut req: Request<B>,
         connect: F,
     ) -> Result<(Option<SendRequest<B>>, Response<Incoming>), String>
     where
@@ -146,9 +151,32 @@ where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<SendRequest<B>, String>>,
     {
+        // Every later request of a client connection a login bound goes
+        // over that connection, credentials or not: the login is the
+        // connection's. Closed meanwhile, the binding ends.
+        if let Some(mut s) = client.take(key)
+            && s.ready().await.is_ok()
+        {
+            let copy = replay(&req);
+            match s.try_send_request(req).await {
+                Ok(r) => {
+                    client.put(key.clone(), s);
+                    return Ok((None, r));
+                }
+                Err(e) => match again(e, copy) {
+                    Ok(back) => req = back,
+                    Err(e) => return Err(e.to_string()),
+                },
+            }
+        }
         let credentials = req.headers().clone();
         let reusable = |s: SendRequest<B>, r: &Response<Incoming>| {
-            (!binds_connection(&credentials, r.headers())).then_some(s)
+            if binds_connection(&credentials, r.headers()) {
+                client.put(key.clone(), s);
+                None
+            } else {
+                Some(s)
+            }
         };
         let req = match self.kept(key) {
             None => req,
@@ -169,19 +197,52 @@ where
     }
 }
 
+/// The connection to an upstream that one client connection is bound to,
+/// once a login tied to the connection went over it ([`binds_connection`],
+/// #569): every later request of that client connection goes over it, as
+/// Windows Negotiate/NTLM needs its handshake and what follows on one
+/// connection, and it never goes back to the pool, so no other client gets
+/// the login. It closes with the client connection (dropping this). One per
+/// client connection, which each proxy creates as it accepts one.
+pub struct Bound<K, B>(Mutex<Option<(K, SendRequest<B>)>>);
+
+impl<K, B> Default for Bound<K, B> {
+    fn default() -> Self {
+        Self(Mutex::new(None))
+    }
+}
+
+impl<K: PartialEq, B> Bound<K, B> {
+    /// The bound connection, if it is to `key`; one to another key (the
+    /// upstream changed) is dropped.
+    fn take(&self, key: &K) -> Option<SendRequest<B>> {
+        let (k, s) = self.0.lock().unwrap().take()?;
+        (k == *key).then_some(s)
+    }
+
+    fn put(&self, key: K, s: SendRequest<B>) {
+        *self.0.lock().unwrap() = Some((key, s));
+    }
+
+    /// Whether a connection is bound (for tests and views).
+    pub fn is_bound(&self) -> bool {
+        self.0.lock().unwrap().is_some()
+    }
+}
+
 /// Whether a request (`request`, its headers) or its answer (`answer`) ties
-/// a login to the connection: Windows Negotiate or NTLM, which Kestrel and
-/// HTTP.sys authenticate per connection. Such a connection serves no other
-/// request, whoever sends it (#569), as YARP does.
+/// a login to the connection: the Windows schemes (Negotiate, NTLM,
+/// Kerberos, CredSSP), which Kestrel and HTTP.sys authenticate per
+/// connection. Such a connection stays with its client connection
+/// ([`Bound`], #569), as YARP keeps it with the client's. A challenge may
+/// offer several schemes in one value (`Negotiate, NTLM`).
 pub fn binds_connection(request: &hyper::HeaderMap, answer: &hyper::HeaderMap) -> bool {
+    const SCHEMES: [&str; 4] = ["negotiate", "ntlm", "kerberos", "credssp"];
     let bound = |v: &hyper::header::HeaderValue| {
-        let scheme = v
-            .to_str()
-            .unwrap_or("")
-            .split_whitespace()
-            .next()
-            .unwrap_or("");
-        scheme.eq_ignore_ascii_case("negotiate") || scheme.eq_ignore_ascii_case("ntlm")
+        v.to_str().unwrap_or("").split(',').any(|part| {
+            let scheme = part.split_whitespace().next().unwrap_or("");
+            SCHEMES.iter().any(|s| scheme.eq_ignore_ascii_case(s))
+        })
     };
     request
         .get_all(hyper::header::AUTHORIZATION)
@@ -354,9 +415,12 @@ mod tests {
         ClosesKept,
         /// Closes on every request without an answer.
         ClosesAll,
-        /// Answers a request without credentials with a Negotiate challenge
-        /// (401), one with them with 200, and keeps the connection open.
-        Challenges,
+        /// Windows NTLM as Kestrel does it, per connection: a request without
+        /// credentials gets the challenge (401 `NTLM`), `NTLM t1` the second
+        /// leg (401 `NTLM t2`), `NTLM t3` on the same connection after it
+        /// 200, and from then on the connection is logged in: a request
+        /// without credentials on it gets 200 too. `Basic` gets 200.
+        Ntlm,
     }
 
     /// A raw HTTP/1.1 upstream; counts the connections it accepted.
@@ -373,6 +437,8 @@ mod tests {
                 c.fetch_add(1, Ordering::SeqCst);
                 tokio::spawn(async move {
                     let mut served = 0;
+                    // `Ntlm`: 0 nothing, 1 challenged (t2 sent), 2 logged in.
+                    let mut login = 0;
                     loop {
                         // One request head (the tests' bodies are tiny).
                         let mut head = Vec::new();
@@ -386,20 +452,32 @@ mod tests {
                         let close = match mode {
                             Upstream::ClosesKept => served > 0,
                             Upstream::ClosesAll => true,
-                            Upstream::Challenges => false,
+                            Upstream::Ntlm => false,
                         };
                         if close {
                             return; // dropped: closed, no answer
                         }
                         served += 1;
-                        let credentials = String::from_utf8_lossy(&head)
-                            .to_ascii_lowercase()
-                            .contains("\r\nauthorization:");
-                        let answer: &[u8] = if matches!(mode, Upstream::Challenges) && !credentials
-                        {
-                            b"HTTP/1.1 401 Unauthorized\r\nwww-authenticate: Negotiate\r\nwww-authenticate: NTLM\r\ncontent-length: 0\r\n\r\n"
-                        } else {
-                            b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok"
+                        let head = String::from_utf8_lossy(&head).to_ascii_lowercase();
+                        const OK: &[u8] = b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok";
+                        const CHALLENGE: &[u8] = b"HTTP/1.1 401 Unauthorized\r\nwww-authenticate: NTLM\r\ncontent-length: 0\r\n\r\n";
+                        let answer: &[u8] = match mode {
+                            Upstream::Ntlm if head.contains("\r\nauthorization: ntlm t1") => {
+                                login = 1;
+                                b"HTTP/1.1 401 Unauthorized\r\nwww-authenticate: NTLM t2\r\ncontent-length: 0\r\n\r\n"
+                            }
+                            Upstream::Ntlm if head.contains("\r\nauthorization: ntlm t3") => {
+                                if login == 1 {
+                                    login = 2;
+                                    OK
+                                } else {
+                                    CHALLENGE
+                                }
+                            }
+                            Upstream::Ntlm if head.contains("\r\nauthorization: basic") => OK,
+                            Upstream::Ntlm if login == 2 => OK,
+                            Upstream::Ntlm => CHALLENGE,
+                            _ => OK,
                         };
                         if s.write_all(answer).await.is_err() {
                             return;
@@ -434,7 +512,17 @@ mod tests {
     /// A request through `pool`, its answer read to its end; the status or
     /// the error the proxy would turn into a 502.
     async fn through(pool: &Arc<Pool<(), B>>, port: u16, req: Request<B>) -> Result<u16, String> {
-        let (sender, resp) = pool.send(&(), req, || connect(port)).await?;
+        through_on(pool, &Bound::default(), port, req).await
+    }
+
+    /// The same, as a request of the client connection `client`.
+    async fn through_on(
+        pool: &Arc<Pool<(), B>>,
+        client: &Bound<(), B>,
+        port: u16,
+        req: Request<B>,
+    ) -> Result<u16, String> {
+        let (sender, resp) = pool.send(&(), client, req, || connect(port)).await?;
         let status = resp.status().as_u16();
         let body = GiveBack::wrap(pool.clone(), (), sender, resp);
         body.into_body()
@@ -508,34 +596,82 @@ mod tests {
         assert_eq!(conns.load(Ordering::SeqCst), 2);
     }
 
-    /// #569: a service that ties its login to the connection (Windows
-    /// Negotiate/NTLM, Kestrel's and HTTP.sys's default) takes the next
-    /// request on it as the first visitor's. Neither the challenge's
-    /// connection nor the one that carried the credentials goes back.
+    fn with_auth(value: &'static str) -> Request<B> {
+        let mut r = request("GET", "");
+        r.headers_mut()
+            .insert("authorization", value.parse().unwrap());
+        r
+    }
+
+    /// #569 and the review before 0.52.0: a service that ties its login to
+    /// the connection (Windows NTLM, Kestrel's and HTTP.sys's default)
+    /// needs the whole handshake, and what follows, on one connection, and
+    /// must never take another client's request on it as the first one's.
     #[tokio::test]
-    async fn a_connection_bound_login_is_never_given_to_another_request() {
-        let (port, conns) = upstream(Upstream::Challenges).await;
+    async fn a_connection_bound_login_stays_with_its_client_and_no_other() {
+        let (port, conns) = upstream(Upstream::Ntlm).await;
         let pool = Pool::new(IDLE_MAX);
-        // The challenge: `WWW-Authenticate: Negotiate`.
-        assert_eq!(through(&pool, port, request("GET", "")).await, Ok(401));
-        // The credentials, on whatever connection.
-        let mut auth = request("GET", "");
-        auth.headers_mut()
-            .insert("authorization", "NTLM TlRMTVNTUAAB".parse().unwrap());
-        assert_eq!(through(&pool, port, auth).await, Ok(200));
+        let anna = Bound::default();
+        // The challenge, then the handshake's three legs, then a request
+        // without credentials on the logged-in connection.
+        assert_eq!(
+            through_on(&pool, &anna, port, request("GET", "")).await,
+            Ok(401)
+        );
+        assert_eq!(
+            through_on(&pool, &anna, port, with_auth("NTLM t1")).await,
+            Ok(401)
+        );
+        assert_eq!(
+            through_on(&pool, &anna, port, with_auth("NTLM t3")).await,
+            Ok(200),
+            "the handshake went over two connections"
+        );
+        assert_eq!(
+            through_on(&pool, &anna, port, request("GET", "")).await,
+            Ok(200)
+        );
+        assert!(anna.is_bound());
         tokio::time::sleep(Duration::from_millis(100)).await;
+        // Another client never gets anna's connection.
         assert_eq!(
             pool.idle(&()),
             0,
             "a connection with a bound login was kept"
         );
-        assert_eq!(conns.load(Ordering::SeqCst), 2);
+        let ben = Bound::default();
+        assert_eq!(
+            through_on(&pool, &ben, port, request("GET", "")).await,
+            Ok(401),
+            "ben got anna's login"
+        );
         // Any other answer keeps its connection, as before.
-        let mut basic = request("GET", "");
-        basic
-            .headers_mut()
-            .insert("authorization", "Basic dTpw".parse().unwrap());
-        assert_eq!(through(&pool, port, basic).await, Ok(200));
+        let before = conns.load(Ordering::SeqCst);
+        assert_eq!(through(&pool, port, with_auth("Basic dTpw")).await, Ok(200));
         kept_again(&pool).await;
+        assert!(conns.load(Ordering::SeqCst) <= before + 1);
+    }
+
+    #[test]
+    fn the_windows_schemes_bind_a_connection_however_they_are_written() {
+        let h = |name: &'static str, v: &'static str| {
+            let mut m = hyper::HeaderMap::new();
+            m.append(name, v.parse().unwrap());
+            m
+        };
+        let none = hyper::HeaderMap::new();
+        for v in [
+            "Negotiate, NTLM",
+            "Basic realm=\"x\", NTLM",
+            "kerberos",
+            "CredSSP abc",
+        ] {
+            assert!(binds_connection(&none, &h("www-authenticate", v)), "{v}");
+        }
+        assert!(binds_connection(&h("authorization", "ntlm TlRM"), &none));
+        assert!(!binds_connection(
+            &h("authorization", "Bearer x"),
+            &h("www-authenticate", "Basic realm=\"ntlm\"")
+        ));
     }
 }

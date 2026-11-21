@@ -287,9 +287,11 @@ pub fn agent_args(
             format!("{:.2}", m as f64 / f64::from(1u32 << 30)),
         ]);
     }
-    // Only when set: an agent of an earlier release in the distribution
-    // does not know it.
-    if let Some(g) = sw.max_gpus {
+    // Only when set, and only for an agent that takes new lanes: one of an
+    // earlier release in the distribution does not know it, and an agent
+    // that only lets the running lanes finish (whose release is not checked
+    // first) has no use for it (review before 0.52.0).
+    if let Some(g) = sw.max_gpus.filter(|_| new_lanes) {
         a.extend(["--max-gpus".into(), g.to_string()]);
     }
     if !new_lanes {
@@ -1510,8 +1512,12 @@ mod tests {
         let s = a.join(" ");
         assert_eq!(
             s,
-            "node agent --pool default --listen 0.0.0.0:4261 --api https://10.0.0.7:4261 --membership /var/lib/devstack-node/default --max-cpus 8 --max-memory-gib 8.00 --max-gpus 0 --no-new-lanes"
+            "node agent --pool default --listen 0.0.0.0:4261 --api https://10.0.0.7:4261 --membership /var/lib/devstack-node/default --max-cpus 8 --max-memory-gib 8.00 --no-new-lanes"
         );
+        // The GPU cap goes to an agent that takes new lanes only: one that
+        // lets running lanes finish may be of an earlier release.
+        let taking = agent_args("default", &sw, "https://x:4261", None, true).join(" ");
+        assert!(taking.contains("--max-gpus 0"), "{taking}");
         // Not set: not passed, for an agent that does not know it.
         assert!(
             !agent_args("default", &Switch::default(), "https://x:4261", None, true)
