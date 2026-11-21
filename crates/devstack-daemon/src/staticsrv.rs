@@ -91,7 +91,38 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-use devstack_node::connpool::{GiveBack, IDLE_MAX, Pool};
+use devstack_node::connpool::{Bound, GiveBack, IDLE_MAX, Pool};
+
+/// One client connection: where it comes from, and the connection to each
+/// forward's target a login bound to it (#569). axum makes one per
+/// connection it accepts and hands a copy to each of its requests.
+#[derive(Clone)]
+struct Client {
+    peer: SocketAddr,
+    bound: Arc<std::sync::Mutex<Bindings>>,
+}
+
+/// A client connection's bindings, by the port of the forward's target.
+type Bindings = std::collections::HashMap<u16, Arc<Bound<(), Body>>>;
+
+impl Client {
+    /// Its binding to the target on `port` (one per forward).
+    fn to(&self, port: u16) -> Arc<Bound<(), Body>> {
+        self.bound.lock().unwrap().entry(port).or_default().clone()
+    }
+}
+
+impl
+    axum::extract::connect_info::Connected<axum::serve::IncomingStream<'_, tokio::net::TcpListener>>
+    for Client
+{
+    fn connect_info(stream: axum::serve::IncomingStream<'_, tokio::net::TcpListener>) -> Self {
+        Client {
+            peer: *stream.remote_addr(),
+            bound: Arc::default(),
+        }
+    }
+}
 
 /// Where a forward sends its requests: `http://host:port`, with the
 /// connections to it that are idle now. They are reused, as a reverse proxy
@@ -156,7 +187,7 @@ pub fn serve(root: PathBuf, port: u16, spa: bool, forward: &[String]) -> Result<
             .map_err(|e| format!("port {port}: {e}"))?;
         axum::serve(
             listener,
-            app(root, spa, forwards).into_make_service_with_connect_info::<SocketAddr>(),
+            app(root, spa, forwards).into_make_service_with_connect_info::<Client>(),
         )
         .await
         .map_err(|e| e.to_string())
@@ -166,13 +197,13 @@ pub fn serve(root: PathBuf, port: u16, spa: bool, forward: &[String]) -> Result<
 fn app(root: PathBuf, spa: bool, forwards: Vec<(String, Target)>) -> axum::Router {
     let forwards = Arc::new(forwards);
     axum::Router::new().fallback(
-        move |ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request| {
+        move |ConnectInfo(client): ConnectInfo<Client>, req: Request| {
             let root = root.clone();
             let forwards = forwards.clone();
             async move {
                 // A forwarded prefix never falls back to a file.
                 if let Some((_, to)) = devstack_config::forward::pick(&forwards, req.uri().path()) {
-                    return pass(to, peer, req).await;
+                    return pass(to, &client, req).await;
                 }
                 let tag = req
                     .headers()
@@ -191,7 +222,8 @@ fn app(root: PathBuf, spa: bool, forwards: Vec<(String, Target)>) -> axum::Route
 /// their hop, the answer streamed (SSE, a download) and an upgrade
 /// (WebSocket) joined. An unreachable target is a 502 at once: nothing here
 /// knows whether it is starting.
-async fn pass(to: &Target, peer: SocketAddr, mut req: Request) -> Response<Body> {
+async fn pass(to: &Target, client: &Client, mut req: Request) -> Response<Body> {
+    let peer = client.peer;
     let fail = |e: String| {
         Response::builder()
             .status(StatusCode::BAD_GATEWAY)
@@ -238,7 +270,8 @@ async fn pass(to: &Target, peer: SocketAddr, mut req: Request) -> Response<Body>
     *req.uri_mut() = path.parse().unwrap_or_else(|_| Uri::from_static("/"));
     *req.version_mut() = Version::HTTP_11;
 
-    let (sender, mut resp) = match to.pool.send(&(), req, || to.connect()).await {
+    let bound = client.to(to.port);
+    let (sender, mut resp) = match to.pool.send(&(), &bound, req, || to.connect()).await {
         Ok(r) => r,
         Err(e) => return fail(e),
     };
@@ -454,7 +487,7 @@ mod tests {
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = l.local_addr().unwrap().port();
         tokio::spawn(async move {
-            axum::serve(l, app.into_make_service_with_connect_info::<SocketAddr>()).await
+            axum::serve(l, app.into_make_service_with_connect_info::<Client>()).await
         });
         port
     }

@@ -192,25 +192,26 @@ pub(crate) fn guests(pool: &str) -> Option<Vec<crate::guests::Guest>> {
     Some(crate::guests::of(pool, &m.id, &leases, &nodes))
 }
 
-/// The machines that ask an admin of `pool` to run its lanes (#599); none
-/// where this machine is no admin. `None` when the coordinator could not be
-/// asked. Read when the pool's stream says its members or nodes changed.
+/// The machines that ask an admin of `pool` to run its lanes (#599).
+/// `None` where this machine is no admin, or the coordinator could not be
+/// asked: no reading then (`asks::seen`). Read when the pool's stream says
+/// its members or nodes changed.
 pub(crate) fn asks(pool: &str) -> Option<Vec<crate::asks::Ask>> {
     let local = devstack_node::member::Local::new(&dir(pool));
-    let m = match local.membership() {
-        Ok(Some(m)) if m.state == State::Approved => m,
-        Ok(_) => return Some(Vec::new()),
-        Err(_) => return None,
-    };
+    let m = local
+        .membership()
+        .ok()
+        .flatten()
+        .filter(|m| m.state == State::Approved)?;
     let members = local.members().ok()?;
     if !members
         .iter()
         .any(|x| x.id == m.id && x.role == devstack_node::store::Role::Admin)
     {
-        return Some(Vec::new());
+        return None;
     }
     let nodes = local.nodes().ok()?;
-    Some(crate::asks::of(pool, &m.id, &members, &nodes))
+    crate::asks::of(pool, &m.id, &members, &nodes)
 }
 
 /// What one round did for a pool.

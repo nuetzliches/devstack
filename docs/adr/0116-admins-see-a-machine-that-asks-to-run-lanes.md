@@ -42,17 +42,29 @@ As built:
    The offer is the report's CPU, memory and GPUs (`sharedText`).
 3. **Badges and Machines** (`stores/pool.ts` `due`, `PoolMachines.vue`):
    asking machines add to `admin`, which the pool tab and the sidebar's
-   "Pools" count; the row's Role column shows "asks to run lanes" (warn)
-   where "runs lanes" would stand.
+   "Pools" count; for an admin, the row's Role column shows "asks to run
+   lanes" (warn) where "runs lanes" would stand.
 4. **The notification** (`asks.rs`, `share::asks`, `poolfeed.rs`,
    `notify` `machine_asks`): read when the pool's stream says its members
-   or nodes changed, as the guest lanes are; a pool's first reading is the
-   baseline; a machine is told once each time it starts asking (granted or
-   switched off, then asking again, is told again). A click opens the pool
-   area.
-5. **Same machine** (`asks.ts`, `sameMachine`): another approved member with
-   the same `address` (admins see it), or the same name once a suffix such
-   as `-wsl`, `-ubuntu…`, `-linux` is taken off.
+   or nodes changed, as the guest lanes are; a pool's first reading as its
+   admin is the baseline (a member who becomes admin gets no burst); a
+   machine is told when it starts asking, again after it stopped, but at
+   most once in 30 minutes; an admin's own machine is never told about. A
+   click opens the pool area.
+5. **Same machine** (`asks.ts`, `related`): another approved member with
+   the same `address` (admins see it), else one with the same name once a
+   suffix such as `-wsl`, `-ubuntu…`, `-linux` is taken off. The Admin tab
+   says which it is and names the other's id: "asked from the same address
+   as X (id)", or "a similar name to X (id), not checked". A member picks
+   its own name, so a name alone is no evidence; the coordinator keeps no
+   invisible characters (bidi overrides, zero-width marks) in a name a
+   machine gives itself (`member_name`).
+
+The points 3 to 5 got their last form after the reviews before 0.52.0,
+which found the first build told an admin about their own machine, a
+member who became admin about every machine asking already, and every
+switch on and off again; and called a name match "same machine as X?",
+which a member could use to pass for a known machine.
 
 Decided while building, not on the card:
 

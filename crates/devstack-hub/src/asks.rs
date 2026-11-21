@@ -8,8 +8,14 @@
 
 use devstack_node::coordinator::{MemberView, NodeView};
 use devstack_node::store::{Role, State};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+/// A machine that asks again within this time after it was told is not
+/// told again: switching sharing on and off, or going on- and offline,
+/// would otherwise notify every admin each time (review before 0.52.0).
+const TELL_AGAIN_AFTER: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ask {
@@ -22,9 +28,11 @@ pub struct Ask {
 type Started = Box<dyn Fn(&Ask) + Send + Sync>;
 
 struct Asks {
-    /// Per pool, the machines already told (or asking when the hub first
-    /// read the pool).
+    /// Per pool, the machines asking now, told or there when the hub first
+    /// read the pool as its admin.
     told: Mutex<BTreeMap<String, HashSet<String>>>,
+    /// When each machine (`pool`, member) was told last.
+    last: Mutex<HashMap<(String, String), Instant>>,
     started: OnceLock<Started>,
 }
 
@@ -32,6 +40,7 @@ fn asks() -> &'static Asks {
     static ASKS: OnceLock<Asks> = OnceLock::new();
     ASKS.get_or_init(|| Asks {
         told: Mutex::new(BTreeMap::new()),
+        last: Mutex::new(HashMap::new()),
         started: OnceLock::new(),
     })
 }
@@ -41,19 +50,21 @@ pub fn on_started(f: impl Fn(&Ask) + Send + Sync + 'static) {
     let _ = asks().started.set(Box::new(f));
 }
 
-/// The machines of `pool` that ask, as the member `me` sees them: none
-/// unless `me` is an admin there. A machine asks while its agent reports
-/// sharing, online, and the member has no grant to run lanes.
-pub fn of(pool: &str, me: &str, members: &[MemberView], nodes: &[NodeView]) -> Vec<Ask> {
+/// The machines of `pool` that ask, as the member `me` sees them; `None`
+/// unless `me` is an admin there (no baseline then: what asks when it
+/// becomes one is its baseline, not a burst of notices). A machine asks
+/// while its agent reports sharing, online, and the member has no grant to
+/// run lanes; `me` itself is never told about.
+pub fn of(pool: &str, me: &str, members: &[MemberView], nodes: &[NodeView]) -> Option<Vec<Ask>> {
     let admin = members
         .iter()
         .any(|m| m.id == me && m.role == Role::Admin && m.state == State::Approved);
     if !admin {
-        return Vec::new();
+        return None;
     }
-    members
+    let asking = members
         .iter()
-        .filter(|m| m.state == State::Approved && !m.node)
+        .filter(|m| m.id != me && m.state == State::Approved && !m.node)
         .filter(|m| {
             nodes
                 .iter()
@@ -64,13 +75,20 @@ pub fn of(pool: &str, me: &str, members: &[MemberView], nodes: &[NodeView]) -> V
             id: m.id.clone(),
             name: m.name.clone(),
         })
-        .collect()
+        .collect();
+    Some(asking)
 }
 
 /// The machines of `pool` that ask, as just read (`None`: it could not be
-/// asked, nothing changes). A pool's first reading is its baseline: what
-/// asked then is not told; a machine that stops asking and asks again is.
+/// asked, or this machine is no admin there; nothing changes). A pool's
+/// first reading is its baseline: what asked then is not told; a machine
+/// that stops asking and asks again is, unless it was told within
+/// [`TELL_AGAIN_AFTER`].
 pub fn seen(pool: &str, now: Option<Vec<Ask>>) {
+    seen_at(pool, now, Instant::now());
+}
+
+fn seen_at(pool: &str, now: Option<Vec<Ask>>, at: Instant) {
     let a = asks();
     let Some(list) = now else { return };
     let fresh: Vec<Ask> = {
@@ -85,8 +103,19 @@ pub fn seen(pool: &str, now: Option<Vec<Ask>>) {
             }
             Some(set) => {
                 set.retain(|id| list.iter().any(|x| &x.id == id));
+                let mut last = a.last.lock().unwrap();
                 list.iter()
                     .filter(|x| set.insert(x.id.clone()))
+                    .filter(|x| {
+                        let key = (pool.to_string(), x.id.clone());
+                        let due = last
+                            .get(&key)
+                            .is_none_or(|t| at.saturating_duration_since(*t) >= TELL_AGAIN_AFTER);
+                        if due {
+                            last.insert(key, at);
+                        }
+                        due
+                    })
                     .cloned()
                     .collect()
             }
@@ -134,14 +163,19 @@ mod tests {
             node("carl", true, false), // not sharing
             node("dora", false, true), // offline
         ];
-        let a = of("default", "me", &members, &nodes);
+        let a = of("default", "me", &members, &nodes).unwrap();
         assert_eq!(
             a.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(),
             ["anna"]
         );
         assert_eq!(a[0].name, "ANNA");
-        // A member who is no admin is told nothing.
-        assert!(of("default", "anna", &members, &nodes).is_empty());
+        // A member who is no admin has no reading at all (no baseline).
+        assert!(of("default", "anna", &members, &nodes).is_none());
+        // An admin's own machine that asks is not told about.
+        let mut mine = members.to_vec();
+        mine.push(member("boss", "admin", false));
+        let nodes2 = [node("boss", true, true)];
+        assert!(of("default", "boss", &mine, &nodes2).unwrap().is_empty());
     }
 
     #[test]
@@ -153,14 +187,24 @@ mod tests {
             id: id.into(),
             name: id.into(),
         };
-        seen("t", Some(vec![ask("anna")]));
+        let t0 = Instant::now();
+        let at = |m: u64| t0 + Duration::from_secs(m * 60);
+        seen_at("t", Some(vec![ask("anna")]), at(0));
         assert!(TOLD.lock().unwrap().is_empty(), "the baseline is not told");
-        seen("t", Some(vec![ask("anna"), ask("ben")]));
-        seen("t", Some(vec![ask("anna"), ask("ben")]));
-        seen("t", None);
-        // Granted (or switched off), then asking again: told again.
-        seen("t", Some(vec![ask("ben")]));
-        seen("t", Some(vec![ask("anna"), ask("ben")]));
-        assert_eq!(*TOLD.lock().unwrap(), ["ben", "anna"]);
+        seen_at("t", Some(vec![ask("anna"), ask("ben")]), at(1));
+        seen_at("t", Some(vec![ask("anna"), ask("ben")]), at(2));
+        seen_at("t", None, at(3));
+        // Switched off and on again soon after: not told again.
+        seen_at("t", Some(vec![ask("anna")]), at(4));
+        seen_at("t", Some(vec![ask("anna"), ask("ben")]), at(5));
+        assert_eq!(*TOLD.lock().unwrap(), ["ben"]);
+        // Granted (or switched off), then asking again much later: told again.
+        seen_at("t", Some(vec![ask("anna")]), at(40));
+        seen_at("t", Some(vec![ask("anna"), ask("ben")]), at(41));
+        assert_eq!(*TOLD.lock().unwrap(), ["ben", "ben"]);
+        // anna was part of the baseline: told once she asks anew.
+        seen_at("t", Some(vec![ask("ben")]), at(42));
+        seen_at("t", Some(vec![ask("anna"), ask("ben")]), at(43));
+        assert_eq!(*TOLD.lock().unwrap(), ["ben", "ben", "anna"]);
     }
 }

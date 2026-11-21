@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { sharedText, summarise } from './gpus';
+import { parseCap, sharedText, summarise } from './gpus';
+
+describe('the GPU cap as typed', () => {
+  it('is no cap when empty, a cap from 0 up, and invalid otherwise', () => {
+    expect(parseCap('')).toEqual({ invalid: false });
+    expect(parseCap(' 0 ')).toEqual({ cap: 0, invalid: false });
+    expect(parseCap('2')).toEqual({ cap: 2, invalid: false });
+    // Taken for "no cap" before (review before 0.52.0).
+    for (const v of ['zwei', '1.5', '-1']) expect(parseCap(v)).toEqual({ invalid: true });
+  });
+});
 
 const GIB = 2 ** 30;
 const gpu = (offered: boolean, lane?: string) => ({ name: 'NVIDIA L4', memory: 24 * GIB, memory_used: 2 * GIB, load: 10, offered, lane });

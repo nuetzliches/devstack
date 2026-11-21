@@ -31,18 +31,28 @@ As built:
 1. **The offer** (`share::offered_gpus`, `node.rs` `held_gpus`): a GPU a
    lease holds names its lane; of the others, one with more than a quarter
    of its memory used (`IN_USE`) is `busy` and not offered, and of the rest
-   only as many are offered as `max_gpus` leaves beside the held ones, in
-   the vendor tool's order. The admission assigns from this view
-   (`assign_gpus` takes offered GPUs only), so the cap and a busy GPU hold
-   there too, and the coordinator, which counts offered GPUs only, places
-   by it without a change.
+   only as many are offered as the cap leaves (`gpu_room`: `max_gpus` less
+   the GPUs the leases hold, counted from the leases, not from what
+   `nvidia-smi` lists now), the ones with the most memory first. The
+   coordinator, which counts offered GPUs only, places by it without a
+   change. The cap is a number of GPUs: the admission (`assign_gpus`) gives
+   any free GPU that is not busy and has the memory asked for, as long as
+   the room allows (amended after the reviews before 0.52.0: the first
+   build offered and gave the first GPUs in the tool's order, so a lane
+   that needed the second, larger one was refused, and a GPU missing from
+   the tool's list did not count against the cap).
 2. **The cap:** `share::Settings::max_gpus`, the agent's `--max-gpus`, the
    switch's `max_gpus` in `node-host.json` (`PUT /hub/pool/share`). The hub
-   passes `--max-gpus` only when it is set, so an agent of an earlier
-   release in a WSL distribution starts as before. The dashboard's switch
-   and setup dialog show a "GPU cap" where the machine has a GPU.
+   passes `--max-gpus` only when it is set and the agent takes new lanes,
+   so an agent of an earlier release in a WSL distribution starts as
+   before, also one that only lets running lanes finish. The dashboard's
+   switch and setup dialog show a "GPU cap" where the machine has a GPU,
+   and say when what is typed is no whole number instead of saving it as
+   no cap.
 3. **A lane's GPUs** (`laneinfra::refresh`, `node.rs` `lane-infra` thread):
-   once a round, where a lease holds GPUs, the node asks `nvidia-smi` and
+   once a round, where a lease holds GPUs, the node asks `nvidia-smi` (at
+   most 5 s: it hangs at times, and the same thread reports every lane's
+   containers) and
    writes the lease's GPUs (name, memory, used, load; no id) into the lane's
    file beside its containers' load. The lane's daemon (`usage.rs`
    `sample_external`) keeps them as a series of its own and reports them as

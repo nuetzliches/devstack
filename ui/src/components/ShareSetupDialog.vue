@@ -7,6 +7,7 @@
 import { computed, ref, watch } from 'vue';
 import type { SharePreflight, ShareSwitch } from '@/api/types';
 import { bytes } from '@/lib/format';
+import { parseCap } from '@/lib/gpus';
 import { usePool } from '@/stores/pool';
 import Modal from './Modal.vue';
 import ShareChecks from './ShareChecks.vue';
@@ -43,11 +44,7 @@ function num(v: string): number | undefined {
   const n = Number(v.replace(',', '.'));
   return v.trim() && Number.isFinite(n) && n > 0 ? n : undefined;
 }
-/** A count, 0 included (no GPU for the pool). */
-function count(v: string): number | undefined {
-  const n = Number(v);
-  return v.trim() && Number.isInteger(n) && n >= 0 ? n : undefined;
-}
+const gpuParsed = computed(() => parseCap(gpuCap.value));
 /** The machine's GPUs. */
 const gpus = computed(() => s.value?.gpus?.length ?? 0);
 function form(enabled: boolean): ShareSwitch {
@@ -56,7 +53,7 @@ function form(enabled: boolean): ShareSwitch {
     enabled,
     max_cpus: num(cpuCap.value),
     max_memory: m === undefined ? undefined : Math.round(m * GIB),
-    max_gpus: count(gpuCap.value),
+    max_gpus: gpuParsed.value.cap,
     distro: distro.value || undefined,
     port: sw.value.port,
   };
@@ -187,7 +184,8 @@ function close() {
         </label>
         <label v-if="gpus" title="How many of its GPUs lanes of others may hold; 0 keeps them for you. A GPU you use yourself is never offered.">
           <span>GPU cap</span>
-          <input v-model="gpuCap" class="input" type="text" inputmode="numeric" :placeholder="`no cap (of ${gpus})`" data-testid="share-setup-cap-gpus" />
+          <input v-model="gpuCap" class="input" type="text" inputmode="numeric" :placeholder="`no cap (of ${gpus})`" :aria-invalid="gpuParsed.invalid" data-testid="share-setup-cap-gpus" />
+          <span v-if="gpuParsed.invalid" class="warn small">a whole number, 0 for none</span>
         </label>
       </div>
       <p v-if="checking && !pre" class="muted small"><span class="spinner" /> Checking what the node agent needs…</p>
@@ -213,7 +211,7 @@ function close() {
           <template v-if="gpus">
             <dt>GPU</dt>
             <dd>
-              {{ count(gpuCap) === 0 ? 'none, kept for you' : count(gpuCap) !== undefined ? `at most ${Math.min(count(gpuCap)!, gpus)} of ${gpus}` : `all ${gpus}` }}, not
+              {{ gpuParsed.cap === 0 ? 'none, kept for you' : gpuParsed.cap !== undefined ? `at most ${Math.min(gpuParsed.cap, gpus)} of ${gpus}` : `all ${gpus}` }}, not
               while you use one
             </dd>
           </template>
@@ -233,7 +231,7 @@ function close() {
       <button v-if="step === 'about'" type="button" class="btn btn-primary" data-testid="share-setup-next" @click="step = 'setup'">Next</button>
       <template v-else-if="step === 'setup'">
         <button type="button" class="btn" :disabled="checking" data-testid="share-setup-recheck" @click="check"><span v-if="checking" class="spinner" /> Check again</button>
-        <button type="button" class="btn btn-primary" :disabled="!ready || checking" data-testid="share-setup-next" @click="step = 'start'">Next</button>
+        <button type="button" class="btn btn-primary" :disabled="!ready || checking || gpuParsed.invalid" data-testid="share-setup-next" @click="step = 'start'">Next</button>
       </template>
       <button v-else-if="!started" type="button" class="btn btn-primary" :disabled="busy" data-testid="share-setup-go" @click="start">Start sharing</button>
       <button v-else type="button" class="btn btn-primary" data-testid="share-setup-done" @click="close">Done</button>
