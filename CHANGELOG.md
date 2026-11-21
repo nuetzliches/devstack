@@ -9,6 +9,21 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.52.0] - 2026-11-21
+
+A shared machine keeps the GPUs its owner wants: the share switch takes a
+GPU cap, and a GPU the owner is using is not offered. A lane on a node
+shows its GPUs on its card and usage page, and the machines table says
+what GPUs a machine offers. Admins see a machine that switched sharing on
+and waits for their grant, in the Admin tab with a Grant button and on the
+desktop. Fixed: a Windows login (NTLM, Negotiate) through the service
+proxy, a static forward or a public link stays with its visitor, for the
+handshake and after it, and never reaches another visitor; on Linux a
+file written right after its new folder makes its candidate; installing
+devstack in WSL leaves the Windows hub alone; a job that still runs is not
+counted as healthy in the dashboard; the hub's scripts in a WSL
+distribution find devstack where `install.sh` puts it.
+
 ### Added
 
 - **A shared machine keeps the GPUs its owner wants.** The share switch
@@ -3904,7 +3919,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.51.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.52.0...HEAD
+[0.52.0]: https://github.com/nuetzliches/devstack/compare/v0.51.0...v0.52.0
 [0.51.0]: https://github.com/nuetzliches/devstack/compare/v0.50.0...v0.51.0
 [0.50.0]: https://github.com/nuetzliches/devstack/compare/v0.49.4...v0.50.0
 [0.49.4]: https://github.com/nuetzliches/devstack/compare/v0.49.3...v0.49.4
