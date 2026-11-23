@@ -635,6 +635,8 @@ export type CommandView = { name: string; description: string; confirm: string |
 
 export type StackView = {
   name: string;
+  /** A lane on a node: its ports something else holds on this machine, as `port` here and why (#615). Older daemons omit it. */
+  not_forwarded_here?: { port: number; error: string }[];
   /** The domain of the user's named tunnel (ADR-0090): public links answer below it, at stable addresses. Absent: Quick Tunnels. */
   public_link_domain?: string;
   repo: string;

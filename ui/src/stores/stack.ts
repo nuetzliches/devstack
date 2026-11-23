@@ -938,6 +938,10 @@ export const useStack = defineStore('stack', () => {
         live.value = true;
         viewAt.value = Date.now();
         save();
+        // A lane's stream is its daemon's, passed through: what this machine
+        // knows of it (a port held here, `not_forwarded_here`, #615) only
+        // `GET stack` carries (code review before 0.53.0, finding 1).
+        if (apiLane.value) scheduleRefetch();
         if (!usageFetched) void fetchUsage();
         if (!runsFetched) {
           runsFetched = true;

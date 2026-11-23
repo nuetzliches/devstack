@@ -17,6 +17,10 @@ pub enum OnBase {
     Squashed(String),
     /// It has commits whose changes the base does not hold.
     Open,
+    /// Its HEAD is on the base, but it never made a commit of its own: a
+    /// lane made and not yet worked in, not one that is done (code review
+    /// before 0.53.0, finding 2).
+    New,
 }
 
 /// What `devstack lane list` says of one lane.
@@ -29,8 +33,24 @@ pub enum Done {
     /// On the base, but the lane runs or a process is in its worktree.
     Busy(OnBase, String),
     Open,
+    /// No commit of its own yet ([`OnBase::New`]).
+    New,
     /// No base branch, or git could not say.
     Unknown,
+}
+
+/// Whether `s` can go into a command line as it is: no character a shell
+/// reads (`;`, `$`, a quote, a backtick, ...). A branch name may hold them
+/// (`git check-ref-format` allows them), and agents run the hint's commands
+/// (security review before 0.53.0, finding 2).
+fn plain(s: &str) -> bool {
+    s.chars().all(|c| {
+        c.is_alphanumeric()
+            || matches!(
+                c,
+                '.' | '_' | '-' | '/' | '\\' | ':' | ' ' | '+' | '@' | ',' | '='
+            )
+    })
 }
 
 impl Done {
@@ -40,6 +60,7 @@ impl Done {
             Done::Finished(OnBase::Merged) => "merged".into(),
             Done::Finished(OnBase::Squashed(c)) => format!("squashed {c}"),
             Done::Finished(OnBase::Open) | Done::Open => "open".into(),
+            Done::Finished(OnBase::New) | Done::New => "new".into(),
             Done::Dirty(_) => "dirty".into(),
             Done::Busy(..) => "busy".into(),
             Done::Unknown => "?".into(),
@@ -52,8 +73,15 @@ impl Done {
             OnBase::Merged => "merged into the base".to_string(),
             OnBase::Squashed(c) => format!("squashed into the base ({c})"),
             OnBase::Open => "open".to_string(),
+            OnBase::New => "new".to_string(),
         };
         match self {
+            Done::Finished(b) if !plain(path) || branch.is_some_and(|br| !plain(br)) => {
+                Some(format!(
+                    "{lane}: done, {}; its folder or branch name has characters a shell reads: remove it by hand",
+                    how(b)
+                ))
+            }
             Done::Finished(b) => {
                 let mut steps = vec![format!("git worktree remove \"{path}\"")];
                 if let Some(br) = branch {
@@ -97,11 +125,14 @@ impl Done {
 
 /// Run git in `dir`; its output when it succeeded.
 fn git(dir: &Path, args: &[&str]) -> Option<String> {
+    // Only reading: no index refresh written into the worktree, no prompt
+    // (security review before 0.53.0, finding 7).
     let o = Command::new("git")
         .arg("-C")
         .arg(dir)
-        .args(["-c", "core.quotePath=false"])
+        .args(["--no-optional-locks", "-c", "core.quotePath=false"])
         .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
         .output()
         .ok()?;
     o.status
@@ -129,10 +160,31 @@ pub fn base(repo: &Path) -> Option<String> {
     .map(str::to_string)
 }
 
+/// Whether a commit was ever made in the worktree, by its HEAD's reflog
+/// (`commit`, `merge`, `rebase`, `cherry-pick`, `pull`, `revert`); `None`
+/// without one.
+fn made_commits(wt: &Path) -> Option<bool> {
+    let log = git(wt, &["reflog", "show", "--format=%gs", "HEAD"])?;
+    if log.trim().is_empty() {
+        return None;
+    }
+    Some(log.lines().any(|l| {
+        ["commit", "merge", "rebase", "cherry-pick", "pull", "revert"]
+            .iter()
+            .any(|w| l.starts_with(w))
+    }))
+}
+
 /// Where the worktree's HEAD stands against `base`.
 pub fn on_base(wt: &Path, base: &str) -> Option<OnBase> {
     if git(wt, &["merge-base", "--is-ancestor", "HEAD", base]).is_some() {
-        return Some(OnBase::Merged);
+        // A HEAD on the base with no commit made here was never worked in;
+        // a reflog that does not read says nothing either way.
+        return Some(if made_commits(wt) == Some(false) {
+            OnBase::New
+        } else {
+            OnBase::Merged
+        });
     }
     let mb = git(wt, &["merge-base", "HEAD", base])?;
     let mb = mb.trim();
@@ -277,12 +329,18 @@ const RUNS: &str = "the lane runs";
 
 /// What `devstack lane list` says of the lane in `wt`: git first, and only
 /// for a lane on the base whether something keeps it.
-pub fn of(wt: &Path, base: Option<&str>, active: bool, procs: &Procs) -> Done {
+///
+/// `procs` is read the first time a lane needs it: the process table costs
+/// a read of each process's memory on Windows (code review before 0.53.0,
+/// finding 7).
+pub fn of(wt: &Path, base: Option<&str>, active: bool, procs: &std::cell::OnceCell<Procs>) -> Done {
     let Some(on) = base.and_then(|b| on_base(wt, b)) else {
         return Done::Unknown;
     };
-    if on == OnBase::Open {
-        return Done::Open;
+    match on {
+        OnBase::Open => return Done::Open,
+        OnBase::New => return Done::New,
+        _ => {}
     }
     if active {
         return Done::Busy(on, RUNS.into());
@@ -290,7 +348,7 @@ pub fn of(wt: &Path, base: Option<&str>, active: bool, procs: &Procs) -> Done {
     if dirty(wt) {
         return Done::Dirty(on);
     }
-    if let Some(who) = procs.in_worktree(wt) {
+    if let Some(who) = procs.get_or_init(Procs::read).in_worktree(wt) {
         return Done::Busy(on, format!("{who} runs in its worktree"));
     }
     Done::Finished(on)
@@ -373,9 +431,48 @@ mod tests {
         run(&main, &["merge", "-q", "--ff-only", "feat"]);
         assert_eq!(on_base(&wt, "main"), Some(OnBase::Merged));
         assert_eq!(
-            of(&wt, Some("main"), false, &Procs(Vec::new())),
+            of(&wt, Some("main"), false, &procs(Vec::new())),
             Done::Finished(OnBase::Merged)
         );
+    }
+
+    fn procs(list: Vec<(String, Vec<String>)>) -> std::cell::OnceCell<Procs> {
+        std::cell::OnceCell::from(Procs(list))
+    }
+
+    /// Code review before 0.53.0, finding 2: a lane made and not worked in
+    /// has its HEAD on the base too; it is new, not done, and no command
+    /// to remove it is offered.
+    #[test]
+    fn a_lane_without_a_commit_of_its_own_is_new_not_done() {
+        let (_d, _main, wt) = repo();
+        assert_eq!(on_base(&wt, "main"), Some(OnBase::New));
+        let d = of(&wt, Some("main"), false, &procs(Vec::new()));
+        assert_eq!(d, Done::New);
+        assert_eq!(d.label(), "new");
+        assert_eq!(d.hint("feat", "/w/feat", Some("feat")), None);
+    }
+
+    /// Security review before 0.53.0, finding 2: a branch name may hold
+    /// what a shell reads, and agents run the hint's commands: such a name
+    /// gets no command.
+    #[test]
+    fn a_name_a_shell_would_read_gets_no_command() {
+        let d = Done::Finished(OnBase::Merged);
+        for (path, branch) in [
+            ("/w/x", "fix;curl${IFS}x|sh"),
+            ("/w/x", "a`id`"),
+            ("/w/$(id)", "x"),
+            ("/w/it's", "x"),
+        ] {
+            let h = d.hint("x", path, Some(branch)).unwrap();
+            assert!(h.contains("remove it by hand"), "{h}");
+            assert!(!h.contains("git branch"), "{h}");
+        }
+        let ok = d
+            .hint("x", r"C:\work\_wt\fix-1", Some("fix/login-1.2"))
+            .unwrap();
+        assert!(ok.contains("git branch -d fix/login-1.2"), "{ok}");
     }
 
     /// The case `git branch --merged` and `git cherry` miss: the branch's
@@ -414,8 +511,10 @@ mod tests {
 
     #[test]
     fn a_lane_on_the_base_is_kept_by_changes_a_run_or_a_process() {
-        let (_d, _main, wt) = repo();
-        let none = Procs(Vec::new());
+        let (_d, main, wt) = repo();
+        commit(&wt, "b.txt", "b\n", "b");
+        run(&main, &["merge", "-q", "--ff-only", "feat"]);
+        let none = procs(Vec::new());
         assert_eq!(
             of(&wt, Some("main"), false, &none),
             Done::Finished(OnBase::Merged)
@@ -424,7 +523,7 @@ mod tests {
             of(&wt, Some("main"), true, &none),
             Done::Busy(OnBase::Merged, "the lane runs".into())
         );
-        let vite = Procs(vec![(
+        let vite = procs(vec![(
             "node (pid 7)".into(),
             vec![
                 norm(Path::new("/usr/bin/node")),

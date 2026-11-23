@@ -1053,7 +1053,23 @@ pub fn status_text(stack: &Value) -> String {
             }
         }
     }
-    out
+    printable(&out)
+}
+
+/// `text` without control characters but line breaks and tabs: names,
+/// states and reasons in a stack's state may come from a lane on a node,
+/// whose code shapes them, and an escape sequence would act on the user's
+/// terminal (security review before 0.53.0, finding 4).
+pub fn printable(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_control() && c != '\n' && c != '\t' {
+                '\u{FFFD}'
+            } else {
+                c
+            }
+        })
+        .collect()
 }
 
 fn truncate(s: &str, n: usize) -> String {
@@ -1885,7 +1901,7 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
     // Whether a lane's work is on the base and nothing keeps it (#606).
     let repo = stack_file.parent().unwrap_or(Path::new("."));
     let base = crate::lanedone::base(repo);
-    let procs = crate::lanedone::Procs::read();
+    let procs = std::cell::OnceCell::new();
     println!(
         "{:<24} {:<24} {:>8} {:>9}  {:<5}  {:<16} {:<16} PATH",
         "LANE", "BRANCH", "PORTS +", "RUNNING", "MAIN", "RUNS ON", "DONE"
@@ -3259,6 +3275,22 @@ data: {\"type\":\"line\",\"text\":\"c\"}\n\n";
     /// #615: a lane on a node whose port is held here by something else
     /// answers here with that something else. The member it serves is not
     /// "healthy" for this machine, and `status` says why.
+    #[test]
+    fn a_lanes_text_reaches_the_terminal_without_escapes() {
+        // Security review before 0.53.0, finding 4: a lane on a node shapes
+        // what its state says; no escape sequence of it reaches the terminal.
+        let text = status_text(&serde_json::json!({
+            "services": [{ "name": "api\u{1b}[2J", "status": { "state": "failed", "reason": "boom\u{1b}]0;title\u{7}" } }],
+            "not_forwarded_here": [{ "port": 1, "error": "x\u{1b}[31my" }]
+        }));
+        assert!(
+            !text.contains('\u{1b}') && !text.contains('\u{7}'),
+            "{text:?}"
+        );
+        assert!(text.contains("api\u{FFFD}[2J"), "{text:?}");
+        assert_eq!(printable("a\tb\nc\u{0}"), "a\tb\nc\u{FFFD}");
+    }
+
     #[test]
     fn a_port_not_forwarded_here_is_said_with_its_member() {
         let held = "port 5700 here: address in use (os error 10048) (something else holds it; tried again until it is free)";

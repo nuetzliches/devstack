@@ -1326,6 +1326,10 @@ async fn lanes_take_main(State(s): State<AppState>, Path(lane): Path<String>) ->
     }
 }
 
+/// The most of a lane-on-a-node's `/v1/stack` read to mark what is not
+/// forwarded here (#615).
+const LANE_STACK_MAX: usize = 8 << 20;
+
 /// `/v1/lanes/{lane}/v1/...`: the lane's own API, the same as the main one.
 async fn lane_forward(
     State(s): State<AppState>,
@@ -1401,10 +1405,13 @@ async fn lane_forward(
             return resp;
         }
         let (parts, body) = resp.into_parts();
-        let Ok(bytes) = axum::body::to_bytes(body, usize::MAX).await else {
+        // The node's answer is the lane's to shape: read so far and no
+        // further (security review before 0.53.0); a stack's state is a few
+        // KiB, a large one with every container's ports some hundred.
+        let Ok(bytes) = axum::body::to_bytes(body, LANE_STACK_MAX).await else {
             return err(
                 StatusCode::BAD_GATEWAY,
-                "the lane's state did not arrive whole",
+                "the lane's state did not arrive whole, or was larger than a stack's state can be",
             );
         };
         let Ok(mut stack) = serde_json::from_slice::<serde_json::Value>(&bytes) else {

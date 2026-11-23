@@ -42,15 +42,32 @@ fn remove_slot_dir(dir: &Path, as_root: impl Fn(&Path) -> bool) -> std::result::
     }
     let _ = std::fs::remove_file(dir.join("slot.json"));
     let left: Vec<String> = walk_left(dir, dir);
+    // Out of the way under a name no sweep takes up again, and that the
+    // lane's next slot of the same name does not start in (code review
+    // before 0.53.0, findings 3 and 11).
+    let name = dir.file_name().map(|n| n.to_string_lossy().into_owned());
+    let moved = name
+        .map(|n| dir.with_file_name(format!("{LEFT_PREFIX}{n}")))
+        .filter(|to| std::fs::rename(dir, to).is_ok());
     Err(format!(
         "{} left in {} ({first}): {}",
         left.len(),
-        dir.display(),
+        moved.as_deref().unwrap_or(dir).display(),
         left.join(", ")
     ))
 }
 
-/// The folders under `dir` that are still there, at most five, relative.
+/// The prefix of a folder [`remove_slot_dir`] could not remove: left for
+/// someone with the rights to, never swept again.
+pub(crate) const LEFT_PREFIX: &str = ".left-";
+
+/// Remove a lane's or a slot's folder, as [`LaneRun::purge`] does.
+pub(crate) fn remove_lane_dir(dir: &Path) -> std::result::Result<(), String> {
+    remove_slot_dir(dir, remove_as_root)
+}
+
+/// What is still under `dir`, at most five, relative: the deepest folders
+/// and the files (code review before 0.53.0, finding 4).
 fn walk_left(root: &Path, dir: &Path) -> Vec<String> {
     let mut out = Vec::new();
     let Ok(rd) = std::fs::read_dir(dir) else {
@@ -58,13 +75,16 @@ fn walk_left(root: &Path, dir: &Path) -> Vec<String> {
     };
     for e in rd.flatten() {
         let p = e.path();
+        let rel = || p.strip_prefix(root).unwrap_or(&p).display().to_string();
         if e.file_type().is_ok_and(|t| t.is_dir()) {
             let below = walk_left(root, &p);
             if below.is_empty() {
-                out.push(p.strip_prefix(root).unwrap_or(&p).display().to_string());
+                out.push(rel());
             } else {
                 out.extend(below);
             }
+        } else {
+            out.push(rel());
         }
         if out.len() >= 5 {
             out.truncate(5);
@@ -86,6 +106,19 @@ fn remove_as_root(dir: &Path) -> bool {
         "none",
         "--security-opt",
         "no-new-privileges",
+        // Root, with no more than removing others' files takes (security
+        // review before 0.53.0, finding 5); `docker` gives it a time limit.
+        "--cap-drop",
+        "ALL",
+        "--cap-add",
+        "DAC_OVERRIDE",
+        "--cap-add",
+        "FOWNER",
+        "--read-only",
+        "--pids-limit",
+        "16",
+        "--memory",
+        "128m",
         "--user",
         "0",
         "-v",
@@ -1540,8 +1573,26 @@ mod tests {
         slot(&d);
         let e = remove_slot_dir(&d, |_| false).unwrap_err();
         assert!(e.contains("src/data"), "{e}");
-        assert!(!d.join("slot.json").exists());
-        unlock(&d);
+        // Moved aside, without its `slot.json`: no sweep takes it up again,
+        // and the lane's next slot of that name starts fresh (code review
+        // before 0.53.0, findings 3 and 11).
+        assert!(!d.exists());
+        let aside = t.path().join(format!("{LEFT_PREFIX}slot2"));
+        assert!(aside.is_dir(), "{e}");
+        assert!(!aside.join("slot.json").exists());
+        assert!(e.contains(&*aside.to_string_lossy()), "{e}");
+        unlock(&aside);
+        // Only a file left: it is named (finding 4).
+        let d = t.path().join("slot3");
+        std::fs::create_dir_all(d.join("src")).unwrap();
+        std::fs::write(d.join("src/held"), "x").unwrap();
+        std::fs::set_permissions(d.join("src"), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let e = remove_slot_dir(&d, |_| false).unwrap_err();
+        assert!(e.starts_with("1 left in"), "{e}");
+        assert!(e.contains("src/held"), "{e}");
+        let aside = t.path().join(format!("{LEFT_PREFIX}slot3"));
+        std::fs::set_permissions(aside.join("src"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
     }
 
     /// #619: the lane's daemon listened on 7600 in its container whatever

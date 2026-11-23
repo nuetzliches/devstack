@@ -390,6 +390,11 @@ async fn handle(
         ))
     };
 
+    // A public link's tunnel carries many visitors on one connection: it
+    // binds no login (review before 0.53.0).
+    if devstack_node::connpool::through_cloudflare(req.headers()) {
+        client.shared();
+    }
     let client_upgrade = req
         .headers()
         .contains_key(hyper::header::UPGRADE)

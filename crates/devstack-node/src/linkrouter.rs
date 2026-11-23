@@ -253,8 +253,11 @@ pub async fn serve(listener: tokio::net::TcpListener, dial: Dial) {
         let _ = stream.set_nodelay(true);
         let dial = dial.clone();
         let kept = kept.clone();
-        // The service connection a login binds to this visitor's (#569).
-        let client: Client = Arc::new(crate::connpool::Bound::default());
+        // Its client is `cloudflared`, whose connections carry many
+        // visitors: a login tied to a connection would answer the next
+        // visitor as the first, so none is bound here, and a connection a
+        // login ties serves no one again (review before 0.53.0).
+        let client: Client = Arc::new(crate::connpool::Bound::never());
         tokio::spawn(async move {
             let service = hyper::service::service_fn(move |r| {
                 handle(dial.clone(), kept.clone(), client.clone(), r)

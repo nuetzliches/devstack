@@ -840,18 +840,32 @@ impl Inner {
     /// own (ADR-0034).
     fn sweep_orphans(&self) {
         let leases: HashSet<String> = self.leases.lock().unwrap().keys().cloned().collect();
+        // What a lane's containers wrote as root goes too, and what cannot
+        // is moved aside once, not tried again every sweep (code review
+        // before 0.53.0, finding 3).
+        let left = |e: &std::fs::DirEntry| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with(crate::lanerun::LEFT_PREFIX)
+        };
         if let Ok(rd) = std::fs::read_dir(self.lanes()) {
             for e in rd.flatten() {
                 let id = e.file_name().to_string_lossy().into_owned();
-                if !leases.contains(&id) {
-                    let _ = std::fs::remove_dir_all(e.path());
+                if !leases.contains(&id)
+                    && !left(&e)
+                    && let Err(why) = crate::lanerun::remove_lane_dir(&e.path())
+                {
+                    eprintln!("a lane's folder did not all go: {why}");
                 }
             }
         }
         if let Ok(rd) = std::fs::read_dir(self.slots()) {
             for e in rd.flatten() {
-                if !e.path().join("slot.json").is_file() {
-                    let _ = std::fs::remove_dir_all(e.path());
+                if !e.path().join("slot.json").is_file()
+                    && !left(&e)
+                    && let Err(why) = crate::lanerun::remove_lane_dir(&e.path())
+                {
+                    eprintln!("a kept lane's folder did not all go: {why}");
                 }
             }
         }

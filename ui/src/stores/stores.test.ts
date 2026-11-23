@@ -173,6 +173,28 @@ describe('stack store', () => {
     expect(lane.closed).toBe(true);
   });
 
+  // Code review before 0.53.0, finding 1: a lane's stream is its daemon's,
+  // passed through; a port held on this machine (#615) only `GET stack`
+  // carries, so a lane's snapshot is followed by one.
+  it("reads a lane's state once more after its snapshot, for what this machine adds", async () => {
+    vi.useFakeTimers();
+    try {
+      const stack = await shownStack();
+      fake.stream('/hub/stacks/shop/api/v1/events');
+      stack.selectLane('feat');
+      const api = { name: 'api', kind: 'service', groups: [], port: 6000, autostart: true, status: { state: 'healthy' }, build_id: null, pid: 1, since: 0, log: null, instance_port: null, proxy: null, candidate: null };
+      const held = 'port 6000 here: in use';
+      fake.on('/hub/stacks/shop/api/v1/lanes/feat/v1/stack', ok({ services: [{ ...api, not_forwarded_here: held }], infra: [], groups: [], commands: [] }));
+      const lane = fake.stream('/hub/stacks/shop/api/v1/lanes/feat/v1/events');
+      lane.handlers.onState?.('open');
+      lane.handlers.onMessage({ type: 'snapshot', seq: 0, at: 0, stack: { services: [api], infra: [], groups: [], commands: [] } } as never);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(stack.view?.services[0]?.not_forwarded_here).toBe(held);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("follows a service's public link from its events, and says when it opens", async () => {
     const stack = await shownStack();
     const events = fake.stream('/hub/stacks/shop/api/v1/events');

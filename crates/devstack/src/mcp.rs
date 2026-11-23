@@ -1104,7 +1104,7 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             // Whether a lane's work is on the base and nothing keeps it, as
             // `devstack lane list` says it (#606).
             let base = crate::lanedone::base(file.parent().unwrap_or(Path::new(".")));
-            let procs = crate::lanedone::Procs::read();
+            let procs = std::cell::OnceCell::new();
             for l in lanes {
                 let done = match crate::lanedone::path_of(&l) {
                     Some(p) if l["removing"] != true => {
@@ -1141,7 +1141,8 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                     out.push_str(&format!("  {h}\n"));
                 }
             }
-            Ok(out)
+            // A lane on a node names itself, its branch and its errors.
+            Ok(client::printable(&out))
         }
         "builds" => {
             let svc = name_arg(args, "service")?;

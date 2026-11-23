@@ -104,14 +104,20 @@ fn seen_at(pool: &str, now: Option<Vec<Ask>>, at: Instant) {
             Some(set) => {
                 set.retain(|id| list.iter().any(|x| &x.id == id));
                 let mut last = a.last.lock().unwrap();
+                // An ask too soon after the last told is not counted as
+                // told: it is told once the pause is over, if it still
+                // asks (code review before 0.53.0, finding 9).
                 list.iter()
-                    .filter(|x| set.insert(x.id.clone()))
                     .filter(|x| {
+                        if set.contains(&x.id) {
+                            return false;
+                        }
                         let key = (pool.to_string(), x.id.clone());
                         let due = last
                             .get(&key)
                             .is_none_or(|t| at.saturating_duration_since(*t) >= TELL_AGAIN_AFTER);
                         if due {
+                            set.insert(x.id.clone());
                             last.insert(key, at);
                         }
                         due
@@ -206,5 +212,12 @@ mod tests {
         seen_at("t", Some(vec![ask("ben")]), at(42));
         seen_at("t", Some(vec![ask("anna"), ask("ben")]), at(43));
         assert_eq!(*TOLD.lock().unwrap(), ["ben", "ben", "anna"]);
+        // Code review before 0.53.0, finding 9: asking again too soon is
+        // not told then, but once the pause is over while it still asks.
+        seen_at("t", Some(vec![ask("anna")]), at(44));
+        seen_at("t", Some(vec![ask("anna"), ask("ben")]), at(45));
+        assert_eq!(*TOLD.lock().unwrap(), ["ben", "ben", "anna"]);
+        seen_at("t", Some(vec![ask("anna"), ask("ben")]), at(72));
+        assert_eq!(*TOLD.lock().unwrap(), ["ben", "ben", "anna", "ben"]);
     }
 }

@@ -56,6 +56,16 @@ As built:
    open, dirty, busy by a run and by a process, folder matching by whole
    components, the hint's order.
 
+**Amendment 2026-11-23 (reviews before 0.53.0, approved by the owner with
+the findings).** A sixth value, `new`: a lane whose HEAD is on the base but
+whose worktree never made a commit (its HEAD's reflog) is not done and gets
+no hint; a worktree made and not yet worked in was offered for removal
+before. A folder or branch name with characters a shell reads gets no
+command, only "remove it by hand": agents run the hint's commands, and a
+branch name may hold `;`, `$` or a backtick. The process table is read
+only when a lane on the base needs it, and git runs there with
+`--no-optional-locks`.
+
 ## Consequences
 
 - `lane list` and the MCP's `lanes` run git a few times per lane and read the

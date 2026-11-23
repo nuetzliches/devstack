@@ -48,6 +48,31 @@ and listed with their assets on the
 
 ### Fixed
 
+- **Findings of the reviews before 0.53.0.**
+  - A public link no longer lets one visitor inherit another's Windows
+    login (Negotiate/NTLM): `cloudflared` carries many visitors on one
+    connection, so a connection that came through Cloudflare binds no
+    login in the link router, the service proxy and a static forward.
+    Such a login over a public link fails, as before 0.52.0.
+  - `lane list` and the MCP's `lanes`: a lane without a commit of its own
+    is `new`, not done; a folder or branch name with characters a shell
+    reads gets no command to remove it; the process table is read only
+    when a lane needs it; git runs there without writing the index.
+  - The dashboard shows a lane-on-a-node's port held on this machine
+    (#615) from the start, not only after a later change; a lane's state
+    is read at most 8 MiB.
+  - `status` and the MCP's `lanes` print no control characters a lane's
+    names, states or reasons carry.
+  - A pool node removes a lane's leftovers as root in the folders no
+    lease or kept slot uses too, moves what it cannot remove aside once
+    (`.left-<name>`), names files left as well as folders, and runs its
+    helper container with only the capabilities removing takes.
+  - Member names stored before 0.52.0 are filtered as they are read.
+  - The dashboard's push says why the remote refused, and a tag named
+    like the branch no longer hides the branch's state.
+  - The start page keeps the main tree's figures while it starts; an
+    admin is told of a machine that asked again too soon once the pause
+    is over.
 - **A pool node frees the disk of a lane's expired data** (#621). What a
   lane's containers wrote into its folder as root (Docker makes a missing
   bind mount's folder that way) the node agent could not delete: the slot
