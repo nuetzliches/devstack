@@ -13,6 +13,7 @@ mod envcmd;
 mod hubcmd;
 mod init;
 mod integration;
+mod lanedone;
 mod mcp;
 mod poolcmd;
 mod selfcmd;

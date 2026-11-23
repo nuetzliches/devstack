@@ -1860,12 +1860,23 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
         println!("no lanes: this repository has no other worktree (`git worktree add` makes one)");
         return Ok(());
     }
+    // Whether a lane's work is on the base and nothing keeps it (#606).
+    let repo = stack_file.parent().unwrap_or(Path::new("."));
+    let base = crate::lanedone::base(repo);
+    let procs = crate::lanedone::Procs::read();
     println!(
-        "{:<24} {:<24} {:>8} {:>9}  {:<5}  {:<16} PATH",
-        "LANE", "BRANCH", "PORTS +", "RUNNING", "MAIN", "RUNS ON"
+        "{:<24} {:<24} {:>8} {:>9}  {:<5}  {:<16} {:<16} PATH",
+        "LANE", "BRANCH", "PORTS +", "RUNNING", "MAIN", "RUNS ON", "DONE"
     );
     let mut troubles = Vec::new();
+    let mut hints = Vec::new();
     for l in lanes {
+        let done = match crate::lanedone::path_of(&l) {
+            Some(p) if l["removing"] != true => {
+                crate::lanedone::of(&p, base.as_deref(), l["active"] != false, &procs)
+            }
+            _ => crate::lanedone::Done::Unknown,
+        };
         let running = if l["removing"] == true {
             "removing".to_string()
         } else if l["active"] == false {
@@ -1921,8 +1932,9 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
                     .unwrap_or_default()
             ));
         }
+        hints.extend(done.hint(name, l["path"].as_str().unwrap_or(""), l["branch"].as_str()));
         println!(
-            "{:<24} {:<24} {:>8} {:>9}  {:<5}  {:<16} {}",
+            "{:<24} {:<24} {:>8} {:>9}  {:<5}  {:<16} {:<16} {}",
             name,
             l["branch"].as_str().unwrap_or("(detached)"),
             l["port_offset"],
@@ -1933,11 +1945,18 @@ pub fn lane_list(stack_file: &Path) -> Result<()> {
                 (_, Some(n)) => n.to_string(),
                 _ => "local".into(),
             },
+            done.label(),
             l["path"].as_str().unwrap_or("")
         );
     }
     for t in troubles {
         println!("  ! {t}");
+    }
+    for h in hints {
+        println!("  - {h}");
+    }
+    if base.is_none() {
+        println!("  (DONE: no base branch, neither origin/HEAD nor main or master)");
     }
     Ok(())
 }
@@ -2455,7 +2474,9 @@ pub fn lane_prune(stack_file: &Path, older_than: Option<&str>, dry_run: bool) ->
     }
     let list: Vec<Value> = serde_json::from_str(&body)?;
     if list.is_empty() {
-        println!("nothing to prune: every lane's data belongs to a worktree");
+        println!(
+            "nothing to prune: every lane's data belongs to a worktree (`devstack lane list` says which lanes are done)"
+        );
         return Ok(());
     }
     print_pruned(&list, dry_run);

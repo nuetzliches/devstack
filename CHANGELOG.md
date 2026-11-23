@@ -11,6 +11,16 @@ and listed with their assets on the
 
 ### Added
 
+- **`devstack lane list` says which lanes are done** (#606, ADR-0118). A
+  column `DONE` per lane: `merged` or `squashed <sha>` when its work is on
+  the base branch (`origin/HEAD` as last fetched; squash merges are found by
+  the content of the files the lane changed) and nothing keeps it, with the
+  commands that remove it in their order; `dirty` (uncommitted changes),
+  `busy` (the lane runs, or a process has its folder or command line in the
+  worktree, which on Windows stops `git worktree remove` half way) or
+  `open`. The MCP tool `lanes` says the same. devstack removes nothing
+  itself.
+
 - **The dashboard pushes a branch that is ahead of its upstream.** The
   `↑n` in a lane's header is now a button: a click asks, then the hub runs
   `git push` to the branch's own upstream. It pushes only a branch that is
