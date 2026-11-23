@@ -9,6 +9,20 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.53.0] - 2026-11-23
+
+The dashboard pushes a branch that is ahead of its upstream, and the start
+page shows how far each stack is. `devstack lane list` (and the MCP's
+`lanes`) says which lanes are done, merged or squashed into the base with
+nothing keeping them, with the commands that remove them. The path menu's
+programs show their own icons, and the stacks list says when its order has
+gone stale. Fixed: a long-running job no longer reads as "starting"; a
+lane's copy is visible to tools such as Tailwind's scanner again; a lane on
+a node whose port is held on this machine says so in `status` and the
+dashboard; a service of a node lane on port 7600 starts; a node frees the
+disk of a lane's expired data; a Windows login over a public link stays
+with its visitor; `doctor` names a port shift.
+
 ### Added
 
 - **`devstack lane list` says which lanes are done** (#606, ADR-0118). A
@@ -4038,7 +4052,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.52.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.53.0...HEAD
+[0.53.0]: https://github.com/nuetzliches/devstack/compare/v0.52.0...v0.53.0
 [0.52.0]: https://github.com/nuetzliches/devstack/compare/v0.51.0...v0.52.0
 [0.51.0]: https://github.com/nuetzliches/devstack/compare/v0.50.0...v0.51.0
 [0.50.0]: https://github.com/nuetzliches/devstack/compare/v0.49.4...v0.50.0
