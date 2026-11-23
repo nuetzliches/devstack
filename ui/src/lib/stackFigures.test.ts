@@ -64,6 +64,9 @@ describe('stackFigures', () => {
     // A main tree with a service up keeps its own figures; an older hub has no lane figures.
     glances.ab12.ready = 1;
     expect(stackFigures(stack({ running: true }), hubOf({ glances })).services).toEqual({ ready: 1, total: 4, share: 0.25, inLanes: false });
+    // While the main tree starts, its own figures stay (code review before 0.53.0, finding 5).
+    const starting = { ab12: { id: 'ab12', state: 'starting' as const, ready: 0, total: 4, lanes: 1, lane_ready: 1, lane_total: 4 } };
+    expect(stackFigures(stack({ running: true }), hubOf({ glances: starting })).services).toMatchObject({ ready: 0, total: 4, inLanes: false });
     const old = { ab12: { id: 'ab12', state: 'ok' as const, ready: 0, total: 4, lanes: 1 } };
     expect(stackFigures(stack({ running: true }), hubOf({ glances: old })).services).toMatchObject({ ready: 0, total: 4, inLanes: false });
   });

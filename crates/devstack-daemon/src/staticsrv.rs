@@ -271,6 +271,11 @@ async fn pass(to: &Target, client: &Client, mut req: Request) -> Response<Body> 
     *req.version_mut() = Version::HTTP_11;
 
     let bound = client.to(to.port);
+    // A public link's tunnel carries many visitors on one connection: it
+    // binds no login (review before 0.53.0).
+    if devstack_node::connpool::through_cloudflare(req.headers()) {
+        bound.shared();
+    }
     let (sender, mut resp) = match to.pool.send(&(), &bound, req, || to.connect()).await {
         Ok(r) => r,
         Err(e) => return fail(e),

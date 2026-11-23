@@ -204,12 +204,39 @@ where
 /// connection, and it never goes back to the pool, so no other client gets
 /// the login. It closes with the client connection (dropping this). One per
 /// client connection, which each proxy creates as it accepts one.
-pub struct Bound<K, B>(Mutex<Option<(K, SendRequest<B>)>>);
+pub struct Bound<K, B>(
+    Mutex<Option<(K, SendRequest<B>)>>,
+    std::sync::atomic::AtomicBool,
+);
 
 impl<K, B> Default for Bound<K, B> {
     fn default() -> Self {
-        Self(Mutex::new(None))
+        Self(Mutex::new(None), true.into())
     }
+}
+
+impl<K, B> Bound<K, B> {
+    /// A client connection that carries more than one visitor (the public
+    /// link router's, from `cloudflared`): it binds no login, and a
+    /// connection a login ties is dropped after its answer, never reused.
+    pub fn never() -> Self {
+        Self(Mutex::new(None), false.into())
+    }
+
+    /// This client connection turned out to carry more than one visitor (a
+    /// request came through Cloudflare, [`through_cloudflare`]): it binds
+    /// nothing from now on, and what it bound goes.
+    pub fn shared(&self) {
+        self.1.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.0.lock().unwrap().take();
+    }
+}
+
+/// Whether a request came through Cloudflare (a public link's tunnel):
+/// Cloudflare sets `cf-ray` on every request it passes, and `cloudflared`
+/// carries many visitors on one connection (review before 0.53.0).
+pub fn through_cloudflare(headers: &hyper::HeaderMap) -> bool {
+    headers.contains_key("cf-ray") || headers.contains_key("cf-connecting-ip")
 }
 
 impl<K: PartialEq, B> Bound<K, B> {
@@ -220,8 +247,12 @@ impl<K: PartialEq, B> Bound<K, B> {
         (k == *key).then_some(s)
     }
 
+    /// Bind `s` to this client connection; one that binds nothing ([`Self::never`])
+    /// drops it instead, and it serves no one again.
     fn put(&self, key: K, s: SendRequest<B>) {
-        *self.0.lock().unwrap() = Some((key, s));
+        if self.1.load(std::sync::atomic::Ordering::SeqCst) {
+            *self.0.lock().unwrap() = Some((key, s));
+        }
     }
 
     /// Whether a connection is bound (for tests and views).
@@ -601,6 +632,52 @@ mod tests {
         r.headers_mut()
             .insert("authorization", value.parse().unwrap());
         r
+    }
+
+    /// Security review before 0.53.0, finding 1: the public link router's
+    /// client connections are `cloudflared`'s, which carry many visitors. A
+    /// login bound there would answer the next visitor as the first one, so
+    /// such a client binds nothing and a connection a login ties is never
+    /// used again: the handshake fails, as before #569, and nobody inherits.
+    #[tokio::test]
+    async fn a_shared_client_connection_binds_no_login() {
+        let (port, _) = upstream(Upstream::Ntlm).await;
+        let pool = Pool::new(IDLE_MAX);
+        let shared = Bound::never();
+        assert_eq!(
+            through_on(&pool, &shared, port, with_auth("NTLM t1")).await,
+            Ok(401)
+        );
+        assert_eq!(
+            through_on(&pool, &shared, port, with_auth("NTLM t3")).await,
+            Ok(401)
+        );
+        assert!(!shared.is_bound());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(pool.idle(&()), 0, "a connection a login tied was kept");
+        // The next visitor on the same client connection: no one's login.
+        assert_eq!(
+            through_on(&pool, &shared, port, request("GET", "")).await,
+            Ok(401)
+        );
+        // A client connection found to come through Cloudflare midway
+        // (the service proxy, a static forward) lets its binding go.
+        let anna = Bound::default();
+        through_on(&pool, &anna, port, with_auth("NTLM t1"))
+            .await
+            .unwrap();
+        through_on(&pool, &anna, port, with_auth("NTLM t3"))
+            .await
+            .unwrap();
+        assert!(anna.is_bound());
+        let mut via = request("GET", "");
+        via.headers_mut()
+            .insert("cf-ray", "8f1-FRA".parse().unwrap());
+        assert!(through_cloudflare(via.headers()));
+        anna.shared();
+        assert!(!anna.is_bound());
+        assert_eq!(through_on(&pool, &anna, port, via).await, Ok(401));
+        assert!(!through_cloudflare(request("GET", "").headers()));
     }
 
     /// #569 and the review before 0.52.0: a service that ties its login to

@@ -965,7 +965,8 @@ stop the lane first: see `prepare`). Ignored files are not in the snapshot:
   (`origin/HEAD` as last fetched, else `origin/main`, `main` or `master`)
   and nothing keeps it, with the commands that remove it in their order;
   `dirty`, `busy` (the lane runs, or a process has its folder or command
-  line in the worktree) or `open`. devstack removes nothing itself.
+  line in the worktree), `open`, or `new` (no commit of its own yet).
+  devstack removes nothing itself.
   `devstack lane start <name>` starts a lane from
   anywhere in the repository, as `devstack up` in its worktree does;
   `devstack lane stop <name>` stops a lane (its builds stay, the worktree

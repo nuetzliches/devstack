@@ -1465,16 +1465,10 @@ async fn join(
     Ok(Json(answer(&m)))
 }
 
-/// The name a machine gives itself as the pool keeps it: no control
-/// characters, and none that change how a name looks without being seen
-/// (bidi overrides, zero-width marks; review before 0.52.0: a name could
-/// pass for another one in an admin's list); at most 64 characters.
+/// The name a machine gives itself as the pool keeps it
+/// ([`crate::store::member_name`]).
 fn member_name(raw: &str) -> String {
-    let invisible = |c: char| matches!(c, '\u{00AD}' | '\u{061C}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{206F}' | '\u{FEFF}');
-    raw.chars()
-        .filter(|&c| !c.is_control() && !invisible(c))
-        .take(64)
-        .collect()
+    crate::store::member_name(raw)
 }
 
 /// A few joins (and enrolments) a minute per address.

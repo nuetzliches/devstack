@@ -61,7 +61,9 @@ function lookOf(s: StackEntry, hub: Hub, items: readonly AttentionItem[]): Stack
 
 /** The main tree's figures, or the lanes' while nothing of the main tree is up and a lane is (older hubs: the main tree's). */
 function servicesOf(g: StackGlance): StackFigures['services'] {
-  const inLanes = g.ready === 0 && !!g.lane_ready;
+  // Not while something starts: the main tree's services may be on their
+  // way up (code review before 0.53.0, finding 5).
+  const inLanes = g.ready === 0 && !!g.lane_ready && g.state !== 'starting';
   const [ready, total] = inLanes ? [g.lane_ready ?? 0, g.lane_total ?? 0] : [g.ready, g.total];
   return total ? { ready, total, share: ready / total, inLanes } : null;
 }

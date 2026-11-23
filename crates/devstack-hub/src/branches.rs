@@ -499,8 +499,10 @@ pub struct TreeSync {
 /// upstream; none for a detached `HEAD`, a branch without an upstream or one
 /// whose upstream is gone.
 fn tree_state(tree: &Path) -> Option<TreeSync> {
-    let branch = git(tree, &["symbolic-ref", "--short", "-q", "HEAD"], LOCAL).ok()?;
-    let branch = branch.trim().to_string();
+    // Not `--short`: a tag of the same name makes it `heads/<branch>`
+    // (code review before 0.53.0, finding 8).
+    let head = git(tree, &["symbolic-ref", "-q", "HEAD"], LOCAL).ok()?;
+    let branch = head.trim().strip_prefix("refs/heads/")?.to_string();
     if branch.is_empty() {
         return None;
     }
@@ -580,7 +582,11 @@ pub fn push(repo: &Path, path: &Path) -> Result<(), Error> {
         )));
     }
     let spec = format!("refs/heads/{}:{merge}", s.branch);
-    git(&tree, &["push", "--porcelain", "--", &remote, &spec], FETCH).map_err(Error::Git)?;
+    // Without `--porcelain`: its line per ref, with why one was refused
+    // (`[rejected] (fetch first)`, a hook's `[remote rejected]`), goes to
+    // stderr, which is what a refusal shows (code review before 0.53.0,
+    // finding 6).
+    git(&tree, &["push", "--", &remote, &spec], FETCH).map_err(Error::Git)?;
     Ok(())
 }
 
@@ -748,6 +754,31 @@ mod tests {
         assert_eq!(sync_of(&clone), None);
         // Nothing left to push.
         assert!(matches!(push(&clone, &clone), Err(Error::Bad(_))));
+    }
+
+    /// Code review before 0.53.0, findings 6 and 8: a tag named like the
+    /// branch does not hide it, and a push the remote refuses says why.
+    #[test]
+    fn a_tag_of_the_branchs_name_hides_nothing_and_a_refusal_says_why() {
+        let (_tmp, bare, clone) = clone_of_bare();
+        git_ok(&clone, &["tag", "main"]);
+        commit(&clone, "b.txt");
+        assert_eq!(sync_of(&clone).map(|s| s.branch), Some("main".into()));
+        let hook = bare.join("hooks").join("pre-receive");
+        std::fs::write(&hook, "#!/bin/sh\necho 'declined by policy' >&2\nexit 1\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let Err(Error::Git(why)) = push(&clone, &clone) else {
+            panic!("the remote refused, the push did not fail");
+        };
+        assert!(
+            why.contains("remote rejected") || why.contains("declined by policy"),
+            "{why}"
+        );
+        assert!(why.contains("main"), "{why}");
     }
 
     #[test]

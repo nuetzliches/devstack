@@ -63,11 +63,30 @@ impl std::str::FromStr for Role {
     }
 }
 
+/// A member's name as the pool shows it: no control characters, and none
+/// that change how a name looks without being seen (bidi overrides,
+/// zero-width marks; review before 0.52.0: a name could pass for another
+/// one in an admin's list); at most 64 characters.
+pub fn member_name(raw: &str) -> String {
+    let invisible = |c: char| matches!(c, '\u{00AD}' | '\u{061C}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{206F}' | '\u{FEFF}');
+    raw.chars()
+        .filter(|&c| !c.is_control() && !invisible(c))
+        .take(64)
+        .collect()
+}
+
+fn filtered_name<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Ok(member_name(&String::deserialize(d)?))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Member {
     /// A short hash of the member's public key (`pki::member_id`).
     pub id: String,
-    /// The machine's name, as it introduced itself.
+    /// The machine's name, as it introduced itself; filtered as it is read,
+    /// so a name stored before the filter (0.52.0) passes it too (security
+    /// review before 0.53.0, finding 6).
+    #[serde(deserialize_with = "filtered_name")]
     pub name: String,
     pub state: State,
     #[serde(default)]
@@ -741,6 +760,18 @@ mod tests {
         let id = pki::member_id(&csr).unwrap();
         s.request(&id, name, &csr, Some("10.0.0.7")).unwrap();
         id
+    }
+
+    /// Security review before 0.53.0, finding 6: a name stored before the
+    /// filter (0.52.0) is filtered as it is read.
+    #[test]
+    fn a_name_stored_before_the_filter_is_filtered_as_it_is_read() {
+        let m: Member = serde_json::from_value(serde_json::json!({
+            "id": "ab12", "name": "lsw-\u{202E}anna\u{200B}", "state": "approved",
+            "requested_at": 1, "csr": ""
+        }))
+        .unwrap();
+        assert_eq!(m.name, "lsw-anna");
     }
 
     #[test]
