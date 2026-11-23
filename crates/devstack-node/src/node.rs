@@ -3328,10 +3328,7 @@ async fn pass(
     let mut out = hyper::Request::builder()
         .method(parts.method)
         .uri(path)
-        .header(
-            hyper::header::HOST,
-            format!("127.0.0.1:{}", crate::lanerun::DAEMON_PORT),
-        )
+        .header(hyper::header::HOST, d.host())
         .header(hyper::header::AUTHORIZATION, format!("Bearer {}", d.token));
     for (k, v) in &parts.headers {
         if k != hyper::header::HOST

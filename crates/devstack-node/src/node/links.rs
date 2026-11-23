@@ -200,10 +200,7 @@ fn stack_of(d: &crate::lanerun::DaemonAddr) -> Result<Value, String> {
         .new_agent();
     let mut r = agent
         .get(&format!("http://{}/v1/stack", d.addr))
-        .header(
-            "Host",
-            &format!("127.0.0.1:{}", crate::lanerun::DAEMON_PORT),
-        )
+        .header("Host", &d.host())
         .header("Authorization", &format!("Bearer {}", d.token))
         .call()
         .map_err(|e| e.to_string())?;
@@ -267,10 +264,7 @@ async fn tunnel_to(
     let req = hyper::Request::builder()
         .method("GET")
         .uri(format!("/v1/tunnel/{port}"))
-        .header(
-            hyper::header::HOST,
-            format!("127.0.0.1:{}", crate::lanerun::DAEMON_PORT),
-        )
+        .header(hyper::header::HOST, d.host())
         .header(hyper::header::AUTHORIZATION, format!("Bearer {}", d.token))
         .header(hyper::header::CONNECTION, "upgrade")
         .header(hyper::header::UPGRADE, TUNNEL_PROTOCOL)

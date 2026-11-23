@@ -26,8 +26,44 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-/// The port the lane's daemon listens on inside its container.
+/// The port the lane's daemon listens on inside its container, unless the
+/// lane uses it itself (#619, [`daemon_port`]); a container started before
+/// that has no [`PORT_LABEL`] and listens here.
 pub const DAEMON_PORT: u16 = 7600;
+/// The container's label with the port its daemon listens on.
+const PORT_LABEL: &str = "devstack.daemon-port";
+
+/// The ports the lane itself listens on in its container: its services'
+/// (moved by its offset) and its containers' forwarded ones.
+fn lane_ports(
+    stack: &devstack_config::Stack,
+    offset: u16,
+    infra: &[u16],
+    infra_udp: &[u16],
+) -> BTreeSet<u16> {
+    stack
+        .services
+        .values()
+        .filter_map(|s| s.port?.checked_add(offset))
+        .chain(infra.iter().chain(infra_udp).copied())
+        .collect()
+}
+
+/// A port for the lane's daemon that `taken` does not hold: [`DAEMON_PORT`]
+/// or the next one up, else from 1024 up.
+fn daemon_port(taken: &BTreeSet<u16>) -> u16 {
+    (DAEMON_PORT..=u16::MAX)
+        .chain(1024..DAEMON_PORT)
+        .find(|p| !taken.contains(p))
+        .unwrap_or(DAEMON_PORT)
+}
+
+/// The daemon's port from the container's label; none: [`DAEMON_PORT`].
+fn port_of_label(label: Option<&str>) -> u16 {
+    label
+        .and_then(|l| l.trim().parse().ok())
+        .unwrap_or(DAEMON_PORT)
+}
 /// The most processes one container of a lane may run.
 pub const PIDS_LIMIT: u32 = 4096;
 
@@ -133,6 +169,18 @@ pub struct DaemonAddr {
     pub infra_ports: Vec<u16>,
     /// Those published as UDP, when the requester relays them (ADR-0056).
     pub infra_udp_ports: Vec<u16>,
+}
+
+impl DaemonAddr {
+    /// The `Host` the daemon accepts (ADR-0019): loopback at its own port.
+    pub fn host(&self) -> String {
+        let port = self
+            .addr
+            .rsplit_once(':')
+            .and_then(|(_, p)| p.parse().ok())
+            .unwrap_or(DAEMON_PORT);
+        format!("127.0.0.1:{port}")
+    }
 }
 
 /// A lane whose daemon answers: where it is, and what is left of its start.
@@ -958,7 +1006,15 @@ impl LaneRun {
         let mount_src = format!("{src_s}:/src");
         let mount_bin = format!("{}:/opt/devstack/devstack:ro", bin.display());
         let stack_in = format!("/src/{}", self.stack_file);
-        let listen = format!("DEVSTACK_LISTEN=0.0.0.0:{DAEMON_PORT}");
+        // A port none of the lane's own: its services listen here too (#619).
+        let port = daemon_port(&lane_ports(
+            &stack,
+            self.port_offset,
+            &infra_ports,
+            &infra_udp_ports,
+        ));
+        let listen = format!("DEVSTACK_LISTEN=0.0.0.0:{port}");
+        let port_label = format!("{PORT_LABEL}={port}");
         let lane_env = format!("DEVSTACK_REMOTE_LANE={}", self.lane);
         let offset = format!("DEVSTACK_PORT_OFFSET={}", self.port_offset);
         let display = format!(
@@ -988,6 +1044,8 @@ impl LaneRun {
             &label,
             "--label",
             &owner,
+            "--label",
+            &port_label,
             // No privilege it could gain (ADR-0027 point 5).
             "--cap-drop",
             "ALL",
@@ -1117,6 +1175,15 @@ impl LaneRun {
     /// network), else at the container's address.
     fn address(&self, networks: &[String], agent: Option<&str>) -> Result<String> {
         let name = self.container();
+        // The port it was started with (#619); a container from before
+        // has no label and listens on the old one.
+        let label = docker(&[
+            "inspect",
+            "--format",
+            &format!("{{{{index .Config.Labels \"{PORT_LABEL}\"}}}}"),
+            &name,
+        ])?;
+        let port = port_of_label(Some(label.as_str()));
         match agent {
             Some(me) => {
                 for n in networks {
@@ -1126,7 +1193,7 @@ impl LaneRun {
                         return Err(e);
                     }
                 }
-                Ok(format!("{name}:{DAEMON_PORT}"))
+                Ok(format!("{name}:{port}"))
             }
             None => {
                 let ip = docker(&[
@@ -1139,7 +1206,7 @@ impl LaneRun {
                 if ip.is_empty() {
                     return Err(RunError::Docker(format!("{name} has no address")));
                 }
-                Ok(format!("{ip}:{DAEMON_PORT}"))
+                Ok(format!("{ip}:{port}"))
             }
         }
     }
@@ -1361,6 +1428,51 @@ fn project_networks(project: &str, own: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #619: the lane's daemon listened on 7600 in its container whatever
+    /// the lane's own ports were; a service on 7600 (4200 at offset 3400)
+    /// then found its port taken. The daemon's port is one the lane does
+    /// not use, 7600 while it is free.
+    #[test]
+    fn the_daemons_port_is_none_of_the_lanes_own() {
+        let stack = devstack_config::from_str(
+            "version = 1\n[stack]\nname = \"t\"\n[services.web]\nkind = \"devserver\"\nrun = \"x\"\nport = 4200\n[services.api]\nrun = \"x\"\nport = 4201\n[services.worker]\nrun = \"x\"\n",
+            Path::new("t.toml"),
+        )
+        .unwrap();
+        assert_eq!(daemon_port(&lane_ports(&stack, 100, &[], &[])), DAEMON_PORT);
+        let taken = lane_ports(&stack, 3400, &[], &[]);
+        assert_eq!(taken, [7600, 7601].into());
+        assert_eq!(daemon_port(&taken), 7602);
+        // A container's forwarded port counts the same.
+        let taken = lane_ports(&stack, 100, &[7600], &[7602]);
+        assert_eq!(daemon_port(&taken), 7601);
+        // Every port from 7600 up taken: one below.
+        let all: BTreeSet<u16> = (DAEMON_PORT..=u16::MAX).collect();
+        assert_eq!(daemon_port(&all), 1024);
+    }
+
+    /// The agent reaches the daemon at the port its container was started
+    /// with, and names it in `Host` (ADR-0019); a container started before
+    /// the port was chosen has none and runs on 7600.
+    #[test]
+    fn the_daemon_is_asked_at_its_own_port() {
+        assert_eq!(port_of_label(Some("7602")), 7602);
+        assert_eq!(port_of_label(Some("")), DAEMON_PORT);
+        assert_eq!(port_of_label(None), DAEMON_PORT);
+        let d = DaemonAddr {
+            addr: "devstack-lane-l1:7602".into(),
+            token: "t".into(),
+            infra_ports: Vec::new(),
+            infra_udp_ports: Vec::new(),
+        };
+        assert_eq!(d.host(), "127.0.0.1:7602");
+        let old = DaemonAddr {
+            addr: "10.0.0.2:7600".into(),
+            ..d
+        };
+        assert_eq!(old.host(), "127.0.0.1:7600");
+    }
 
     #[test]
     fn a_lane_container_gets_exactly_its_gpus() {

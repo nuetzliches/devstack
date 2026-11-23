@@ -48,6 +48,13 @@ and listed with their assets on the
 
 ### Fixed
 
+- **A service of a lane on a node whose port is 7600 starts** (#619). The
+  lane's daemon listened on 7600 in its container, so a service the lane's
+  offset moved onto 7600 (a dev server on 4200 at offset 3400) failed with
+  "port 7600 is already in use", though nothing on the node held it. The
+  node agent now gives the daemon a port none of the lane's own; a lane
+  started before keeps 7600 until it starts again. Needs the node's
+  devstack updated.
 - **`devstack status` says when a lane on a node is not reachable on one of
   its ports here** (#615). When something else on this machine holds a
   port the lane forwards (a container of another stack), requests to it
