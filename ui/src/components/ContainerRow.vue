@@ -66,6 +66,7 @@ const extraUrls = computed(() => webUrls.value.filter((u) => !props.container!.p
           <a v-for="u in extraUrls" :key="u" class="tag port-link" :href="u" @click="stack.followLink($event, u)" @auxclick="stack.followLink($event, u)" target="_blank" rel="noopener" data-testid="container-url">{{ u.replace(/^https?:\/\//, '') }}</a>
           <span v-if="!container.ports.length" class="faint">no published ports</span>
           <span v-if="refuses" class="tag" :title="refuses" data-testid="container-unmanaged">not in the stack file</span>
+          <span v-if="container.not_forwarded_here" class="tag held-here" :title="container.not_forwarded_here" data-testid="container-held-here">not reachable from here</span>
           <span v-if="container.not_forwarded?.length" class="tag" :title="notForwardedText(container.not_forwarded)" data-testid="container-not-forwarded">{{ container.not_forwarded.map((p) => p.toUpperCase()).join(', ') }} not forwarded</span>
           <button
             v-if="container.unreachable?.length && !refuses && !stack.readOnly"
@@ -140,7 +141,8 @@ const extraUrls = computed(() => webUrls.value.filter((u) => !props.container!.p
 </template>
 
 <style scoped>
-.lost {
+.lost,
+.held-here {
   color: var(--danger);
   border-color: var(--danger);
 }

@@ -918,6 +918,13 @@ pub fn status_text(stack: &Value) -> String {
             let _ = writeln!(out, "! {t}\n");
         }
     }
+    // A lane on a node: a port something else holds here answers with that,
+    // whatever the node says of the member behind it (#615).
+    for h in stack["not_forwarded_here"].as_array().into_iter().flatten() {
+        if let Some(e) = h["error"].as_str() {
+            let _ = writeln!(out, "! {e}\n");
+        }
+    }
     let services = stack["services"].as_array().filter(|s| !s.is_empty());
     let groups = stack["infra"].as_array().filter(|g| !g.is_empty());
     // A stack of containers only has no service table.
@@ -933,7 +940,14 @@ pub fn status_text(stack: &Value) -> String {
             out,
             "{:<22} {:<38} {:<17} {:>6} {:>7}",
             s["name"].as_str().unwrap_or(""),
-            truncate(&state_of(s), 38),
+            truncate(
+                &if s["not_forwarded_here"].is_string() {
+                    format!("{}, not forwarded here", state_of(s))
+                } else {
+                    state_of(s)
+                },
+                38
+            ),
             if s["hot_reload"] == true {
                 "hot reload"
             } else {
@@ -998,11 +1012,19 @@ pub fn status_text(stack: &Value) -> String {
             let _ = writeln!(out, "  error: {e}");
         }
         for c in g["containers"].as_array().into_iter().flatten() {
-            let health = c["health"]
+            let mut notes: Vec<&str> = c["health"]
                 .as_str()
                 .filter(|h| !h.is_empty())
-                .map(|h| format!(" ({h})"))
-                .unwrap_or_default();
+                .into_iter()
+                .collect();
+            if c["not_forwarded_here"].is_string() {
+                notes.push("not forwarded here");
+            }
+            let health = if notes.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", notes.join(", "))
+            };
             let ports: Vec<&str> = c["ports"]
                 .as_array()
                 .into_iter()
@@ -3232,6 +3254,35 @@ data: {\"type\":\"line\",\"text\":\"c\"}\n\n";
         // Neither: the empty service table.
         assert!(status_text(&serde_json::json!({ "services": [] })).starts_with("SERVICE "));
         assert!(!both.contains("LINK"), "{both}");
+    }
+
+    /// #615: a lane on a node whose port is held here by something else
+    /// answers here with that something else. The member it serves is not
+    /// "healthy" for this machine, and `status` says why.
+    #[test]
+    fn a_port_not_forwarded_here_is_said_with_its_member() {
+        let held = "port 5700 here: address in use (os error 10048) (something else holds it; tried again until it is free)";
+        let text = status_text(&serde_json::json!({
+            "services": [{ "name": "api", "port": 6000, "status": { "state": "healthy" },
+                           "not_forwarded_here": "port 6000 here: in use" }],
+            "infra": [{ "group": "app", "project": "p", "containers": [
+                { "service": "web", "state": "running", "health": "healthy", "ports": ["5700->web:80"],
+                  "not_forwarded_here": held }
+            ] }],
+            "not_forwarded_here": [
+                { "port": 6000, "error": "port 6000 here: in use" },
+                { "port": 5700, "error": held }
+            ]
+        }));
+        assert!(
+            text.starts_with(&format!("! {held}\n")) || text.contains(&format!("! {held}\n")),
+            "{text}"
+        );
+        assert!(text.contains("healthy, not forwarded here"), "{text}");
+        assert!(
+            text.contains("running (healthy, not forwarded here)"),
+            "{text}"
+        );
     }
 
     #[test]

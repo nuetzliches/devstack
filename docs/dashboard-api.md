@@ -285,6 +285,7 @@ type ServiceView = {
   singleton?: boolean;                   // it runs once per machine, in the main working tree only (`singleton = true`, or the deprecated `lanes = false`, ADR-0080); the dashboard's stack page lists it (ADR-0081). Since 0.33.0; older daemons omit it
   prepare?: PrepareView;                 // where its last `prepare` outputs came from (ADR-0062), since the daemon started; absent before its first `prepare` (and from older daemons)
   last_action?: { via: Client; at: number; action: string };  // the last `/v1/services/<it>/<action>` that succeeded, and its client (ADR-0067), from the journal
+  not_forwarded_here?: string;           // a lane on a node: its port is held here by something else, so this machine reaches that instead (#615); why, as the lane says it. Since 0.53.0
 };
 type PrepareView = {
   source: "store" | "run";               // copied out of the store, or `prepare` ran
@@ -311,6 +312,7 @@ type ContainerView = { service: string; name: string; state: string; health: str
   urls: string[];                        // see below
   unreachable: string[];                 // published ports Docker no longer forwards
   not_forwarded?: string[];              // a lane on a node: its published ports not forwarded to the developer's machine (`5353/udp`): another protocol than TCP and UDP (#192), UDP too unless the requester relays it (ADR-0056)
+  not_forwarded_here?: string;           // a lane on a node: a published TCP port something else holds here (#615), as on services; `StackView.not_forwarded_here: [{port, error}]` lists every such port (`port` this machine's)
   held?: { port: number; upstream: number | null; active: number; served: number }[];
                                          // its fixed ports devstack holds (`main_ports`, ADR-0048): `upstream` the container's instance port, or the lane's port while a lane serves the main ports; `ports` then names the fixed port
   managed: boolean };                    // the group starts it (in its `services`); false: another container of the project

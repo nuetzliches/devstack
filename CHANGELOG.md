@@ -48,6 +48,14 @@ and listed with their assets on the
 
 ### Fixed
 
+- **`devstack status` says when a lane on a node is not reachable on one of
+  its ports here** (#615). When something else on this machine holds a
+  port the lane forwards (a container of another stack), requests to it
+  reach that instead; `lane list` warned, but `status` (CLI and MCP) and
+  the dashboard showed
+  the service or container behind it as healthy. It now names the port
+  and why above the table, and marks the member `not forwarded here`; the
+  lane's `/v1/stack` carries `not_forwarded_here` for it.
 - **`devstack doctor` names a stack's port shift and checks the ports
   `devstack up` would check.** It said "ports: free" for a stack shifted
   +2000 while another stack ran on one of its Compose host ports. It then

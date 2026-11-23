@@ -453,6 +453,8 @@ export type ServiceView = {
   kind: ServiceKind;
   groups: string[];
   port: number | null;
+  /** Of a lane on a node, why its port does not reach it from here: something else holds the port here (#615). Older daemons omit it. */
+  not_forwarded_here?: string;
   /** Where a browser opens it (`https://localhost:4200`); null without a port. Older daemons omit it. */
   url?: string | null;
   autostart: boolean;
@@ -563,6 +565,8 @@ export type ContainerView = {
   unreachable?: string[];
   /** Of a lane on a node, its published ports the developer's machine does not reach (`5353/udp`): another protocol than TCP, UDP too unless the requester relays it (ADR-0056). Older daemons omit it. */
   not_forwarded?: string[];
+  /** Of a lane on a node, why a published TCP port of it does not reach it from here: something else holds the port here (#615). Older daemons omit it. */
+  not_forwarded_here?: string;
   service: string;
   name: string;
   state: string;

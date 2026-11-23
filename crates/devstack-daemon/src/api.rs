@@ -1389,7 +1389,31 @@ async fn lane_forward(
         if let Some(v) = carried.and_then(|c| axum::http::HeaderValue::from_str(&c).ok()) {
             out.headers_mut().insert(CARRIED, v);
         }
-        return r.forward(out).await;
+        // What the node calls healthy may not reach this machine: a port
+        // something else holds here answers with that (#615).
+        let held = if out.method() == axum::http::Method::GET && rest == "stack" {
+            r.held_here()
+        } else {
+            Vec::new()
+        };
+        let resp = r.forward(out).await;
+        if held.is_empty() || resp.status() != StatusCode::OK {
+            return resp;
+        }
+        let (parts, body) = resp.into_parts();
+        let Ok(bytes) = axum::body::to_bytes(body, usize::MAX).await else {
+            return err(
+                StatusCode::BAD_GATEWAY,
+                "the lane's state did not arrive whole",
+            );
+        };
+        let Ok(mut stack) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            return Response::from_parts(parts, axum::body::Body::from(bytes));
+        };
+        crate::remote::mark_not_forwarded(&mut stack, &held);
+        let mut out = Json(stack).into_response();
+        *out.status_mut() = parts.status;
+        return out;
     }
     // `up` in a lane stopped by `down`: its stack file as it is now (#487).
     let up = req.method() == axum::http::Method::POST && rest == "up";

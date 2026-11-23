@@ -1877,6 +1877,12 @@ impl RemoteLane {
         }
     }
 
+    /// The TCP ports this machine cannot listen on for the lane now (#615):
+    /// `(on the node, here, why)`.
+    pub fn held_here(&self) -> Vec<(u16, u16, String)> {
+        held_here(&self.state.lock().unwrap().errors, &self.ports)
+    }
+
     /// The ports it forwards (TCP) and relays (UDP) here, each `(on the
     /// node, here)`, and whether this machine listens on them now
     /// (ADR-0082).
@@ -2290,6 +2296,64 @@ fn not_forwarded(containers: &[serde_json::Value]) -> Vec<String> {
 /// The release from which a node relays a lane's UDP ports (ADR-0056).
 const RELAYS_UDP: &str = "0.20.0";
 
+/// The TCP ports this machine cannot listen on for the lane, as `(on the
+/// node, here, why)`, from the lane's errors (`port <here>`, as
+/// `forward_port` files them) and its `(on the node, here)` pairs (#615).
+pub(crate) fn held_here(
+    errors: &std::collections::BTreeMap<String, String>,
+    ports: &[(u16, u16)],
+) -> Vec<(u16, u16, String)> {
+    ports
+        .iter()
+        .filter_map(|&(there, here)| {
+            let why = errors.get(&format!("port {here}"))?;
+            Some((there, here, why.clone()))
+        })
+        .collect()
+}
+
+/// Mark in a lane's `/v1/stack`, as its node sent it, the services and
+/// containers whose port is `held` here (`not_forwarded_here`: why), and
+/// list the ports (`not_forwarded_here: [{port, error}]`, `port` here).
+pub(crate) fn mark_not_forwarded(stack: &mut serde_json::Value, held: &[(u16, u16, String)]) {
+    if held.is_empty() {
+        return;
+    }
+    let why = |there: u16| held.iter().find(|h| h.0 == there).map(|h| h.2.clone());
+    for svc in stack["services"].as_array_mut().into_iter().flatten() {
+        let port = svc["port"].as_u64().and_then(|p| u16::try_from(p).ok());
+        if let Some(w) = port.and_then(why) {
+            svc["not_forwarded_here"] = w.into();
+        }
+    }
+    for g in stack["infra"].as_array_mut().into_iter().flatten() {
+        for c in g["containers"].as_array_mut().into_iter().flatten() {
+            // `5500->web:80`: published on the node, then the container's.
+            let w = c["ports"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|p| {
+                    p.as_str()?
+                        .split_once("->")?
+                        .0
+                        .rsplit(':')
+                        .next()?
+                        .parse()
+                        .ok()
+                })
+                .find_map(why);
+            if let Some(w) = w {
+                c["not_forwarded_here"] = w.into();
+            }
+        }
+    }
+    stack["not_forwarded_here"] = held
+        .iter()
+        .map(|(_, here, w)| serde_json::json!({ "port": here, "error": w }))
+        .collect();
+}
+
 /// Why a lane's ports `not_forwarded` (`5353/udp`) are not: `None` when
 /// there are none. A UDP port is relayed unless the node is older than
 /// [`RELAYS_UDP`], or the lane was started by a daemon that was.
@@ -2462,6 +2526,50 @@ pub fn readiness(view: &serde_json::Value, expected: &[String]) -> Option<Result
 #[cfg(test)]
 mod tests {
     use super::{NodeRef, Release, RemoteState, release_warning, tunnel_error, version};
+
+    /// #615: a port the lane forwards but this machine cannot listen on
+    /// (something else holds it) marks the member it serves in the lane's
+    /// `/v1/stack`, by its port on the node; the rest stays as the node said.
+    #[test]
+    fn a_port_held_here_marks_the_member_it_serves() {
+        let mut errors = std::collections::BTreeMap::new();
+        errors.insert(
+            "port 5700".to_string(),
+            "port 5700 here: in use".to_string(),
+        );
+        errors.insert("port 6000/udp".to_string(), "udp".to_string());
+        errors.insert("sync".to_string(), "sync: refused".to_string());
+        // Shifted here (ADR-0082): 5700 here is 5500 on the node.
+        let held = super::held_here(&errors, &[(5500, 5700), (6000, 6000)]);
+        assert_eq!(held, [(5500, 5700, "port 5700 here: in use".to_string())]);
+        let mut stack = serde_json::json!({
+            "services": [
+                { "name": "api", "port": 6000, "status": { "state": "healthy" } },
+                { "name": "ui", "port": 5500, "status": { "state": "healthy" } }
+            ],
+            "infra": [{ "group": "app", "containers": [
+                { "service": "web", "ports": ["5500->web:80"] },
+                { "service": "db", "ports": ["15500->db:5432"] }
+            ] }]
+        });
+        super::mark_not_forwarded(&mut stack, &held);
+        assert_eq!(stack["services"][0].get("not_forwarded_here"), None);
+        assert_eq!(
+            stack["services"][1]["not_forwarded_here"],
+            "port 5700 here: in use"
+        );
+        let c = &stack["infra"][0]["containers"];
+        assert_eq!(c[0]["not_forwarded_here"], "port 5700 here: in use");
+        assert_eq!(c[1].get("not_forwarded_here"), None);
+        assert_eq!(
+            stack["not_forwarded_here"],
+            serde_json::json!([{ "port": 5700, "error": "port 5700 here: in use" }])
+        );
+        // Nothing held: the stack as the node sent it.
+        let mut same = serde_json::json!({ "services": [] });
+        super::mark_not_forwarded(&mut same, &[]);
+        assert_eq!(same, serde_json::json!({ "services": [] }));
+    }
 
     #[test]
     fn gpus_asked_for_at_a_start_raise_the_floor_and_never_lower_it() {
