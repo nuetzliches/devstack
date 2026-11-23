@@ -366,6 +366,29 @@ describe('stack store', () => {
     await vi.waitFor(() => expect(stack.branches?.branches[0].behind).toBe(3));
   });
 
+  it("says how far the shown tree's branch is from its upstream, for the main tree and for a lane", async () => {
+    fake.on('/hub/stacks/shop/branches', ok({
+      branches: [
+        { name: 'main', main: true, worktree: '/src/shop', upstream: 'origin/main', ahead: 1, behind: 0, date: 1 },
+        { name: 'feat', main: false, worktree: '/src/feat', upstream: 'origin/feat', ahead: 0, behind: 0, date: 1 },
+        { name: 'fix', main: false, worktree: '/src/fix', upstream: 'origin/fix', ahead: 2, behind: 1, date: 1 },
+        { name: 'local', main: false, worktree: '/src/local', date: 1 },
+      ],
+    }));
+    const stack = await shownStack();
+    await stack.loadBranches();
+    expect(stack.shownSync).toEqual({ path: '/src/shop', branch: 'main', upstream: 'origin/main', ahead: 1, behind: 0 });
+    const lane = (name: string) => ({ name, path: `/src/${name}`, branch: name, number: 1, active: true, port_offset: 100, owns_main: false, running: 1, services: 1 });
+    fake.stream('/hub/stacks/shop/api/v1/events').handlers.onMessage({ type: 'lanes', lanes: [lane('feat'), lane('fix'), lane('local')] });
+    // Level, ahead and behind, and without an upstream: only the one that differs shows.
+    stack.selectLane('feat');
+    expect(stack.shownSync).toBeNull();
+    stack.selectLane('fix');
+    expect(stack.shownSync).toEqual({ path: '/src/fix', branch: 'fix', upstream: 'origin/fix', ahead: 2, behind: 1 });
+    stack.selectLane('local');
+    expect(stack.shownSync).toBeNull();
+  });
+
   it("someone else's lane gets no branches and makes none", async () => {
     fake.on('/hub/session', ok({ version: '0.9.8' }));
     fake.on('/hub/pools', ok([{ name: 'default', joined: true, state: 'approved', coordinator: 'https://c' }]));

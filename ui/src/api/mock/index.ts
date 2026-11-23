@@ -385,9 +385,13 @@ class MockHub {
   addWorktree(id: string, repo: string, name: string, branch: string): string {
     const path = `${repo}.worktrees/${name}`;
     (this.worktreesMade[id] ??= []).push({ name, path, branch, number: 0, active: false, port_offset: 0, owns_main: false, running: 0, services: 0, main_stack_file: false });
+    this.bumpWorktrees(id);
+    return path;
+  }
+  /** `id`'s worktrees or refs moved (a commit, a fetch, a push): the hub tells, and the dashboard reads again (ADR-0078, ADR-0088). */
+  bumpWorktrees(id: string): void {
     this.worktreeVersions = { ...this.worktreeVersions, [id]: String(Date.now()) };
     for (const l of this.hubSubs) l.send({ type: 'worktrees', worktrees: this.worktreeVersions });
-    return path;
   }
 
   stack(id: string): MockStack | undefined {
@@ -1068,12 +1072,12 @@ export class MockTransport implements Transport {
     // mock makes and removes no worktree; it answers as the hub would.
     if (rest === '/branches' && method === 'GET') {
       const day = Math.floor(Date.now() / 1000) - 86_400;
-      // How far ahead and behind (ADR-0088): `main` behind, one lane both.
+      // How far ahead and behind (ADR-0088): `main` as the stack's entry says (the start page's figure), one lane both.
       const tree = (b: string, path: string) => ({ name: b, main: false, worktree: path, upstream: `origin/${b}`, ahead: 0, behind: 0, stack_file: !stack.noStackFile.has(path) });
       return json(200, {
         fetched: day + 80_000,
         branches: [
-          { name: 'main', main: true, worktree: stack.view.repo, upstream: 'origin/main', ahead: 0, behind: 3, date: day + 70_000 },
+          { name: 'main', main: true, worktree: stack.view.repo, upstream: 'origin/main', ahead: stack.entry.sync?.ahead ?? 0, behind: stack.entry.sync?.behind ?? 0, date: day + 70_000 },
           { name: 'feat/coupons', main: false, upstream: 'origin/feat/coupons', ahead: 0, behind: 0, date: day + 65_000 },
           { ...tree('agent/login-fix', 'C:\\work\\shop-agent-login-fix'), ahead: 2, behind: 1, date: day + 60_000 },
           { ...tree('review-cart', 'C:\\work\\shop-review-cart'), date: day + 50_000 },
@@ -1087,6 +1091,18 @@ export class MockTransport implements Transport {
     }
     if (rest === '/fetch' && method === 'POST') {
       await sleep(900);
+      return json(200, {});
+    }
+    // Push (ADR-0117): the main tree's branch, when it is ahead and not behind; the hub's
+    // other answers are its `400`s. The push moves `origin/main` itself: level at once.
+    if (rest === '/push' && method === 'POST') {
+      await sleep(900);
+      const s = stack.entry.sync;
+      if (body?.path !== stack.view.repo || !s) return json(400, { error: 'the folder has no branch with an upstream checked out' });
+      if (s.behind) return json(400, { error: `\`${s.branch}\` is ${s.behind} behind \`${s.upstream}\`: bring it up to date in a git client first` });
+      delete stack.entry.sync;
+      hub.publish();
+      hub.bumpWorktrees(stack.entry.id);
       return json(200, {});
     }
     if (rest === '/worktrees' && method === 'POST') {

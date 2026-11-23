@@ -73,3 +73,12 @@ As built:
 - The branches are read on every change of a stack's refs: one
   `for-each-ref` and one `cat-file --batch-check` per change, not per
   second.
+
+## Amendment 2026-11-23
+
+The badge is no longer "in the lane's header only": the start page shows it
+for each stack's main tree, and a click on `↑n` (ahead, not behind) pushes
+after a confirmation; its menu of git clients stays for a branch behind its
+upstream ([ADR-0117](0117-the-dashboard-pushes-a-branch-that-is-ahead-of-its-upstream.md)).
+The sidebar and the stack's page still show none, the count is still from the
+local refs only, and there is still no fetch of devstack's own accord.

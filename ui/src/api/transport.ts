@@ -72,6 +72,7 @@ export const paths = {
   worktreeRemove: (stack: string) => `/hub/stacks/${enc(stack)}/worktrees/remove`,
   laneStart: (stack: string) => `/hub/stacks/${enc(stack)}/lanes/start`,
   fetch: (stack: string) => `/hub/stacks/${enc(stack)}/fetch`,
+  push: (stack: string) => `/hub/stacks/${enc(stack)}/push`,
   upgrade: (stack: string) => `/hub/stacks/${enc(stack)}/upgrade`,
   mcp: (stack: string) => `/hub/stacks/${enc(stack)}/mcp`,
   /** Where devstack's MCP server is registered for each coding agent. */

@@ -761,6 +761,21 @@ export const useStack = defineStore('stack', () => {
     }
   }
 
+  /**
+   * How far the shown tree's branch is ahead of and behind its upstream, as the
+   * local refs say (ADR-0088), with the folder it is the branch of; `null` when
+   * they are level, without an upstream, or for a lane that is not ours.
+   */
+  const shownSync = computed(() => {
+    if (foreign.value || sharedLane.value) return null;
+    const lane = shownLane.value;
+    const main = lane?.name === MAIN;
+    const path = lane?.path ?? view.value?.repo ?? entry.value?.repo ?? '';
+    const b = branches.value?.branches.find((x) => (main ? x.main : !!x.worktree && samePath(x.worktree, path)));
+    if (!b?.upstream || (!b.ahead && !b.behind)) return null;
+    return { path, branch: b.name, upstream: b.upstream, ahead: b.ahead ?? 0, behind: b.behind ?? 0 };
+  });
+
   /** `git fetch --all --prune` (ADR-0047 point 7): only when asked. */
   async function fetchBranches() {
     if (refuseReadOnly() || !id.value) return;
@@ -1661,6 +1676,7 @@ export const useStack = defineStore('stack', () => {
     branches,
     loadBranches,
     fetchBranches,
+    shownSync,
     newLane,
     removeWorktree,
     restartLane,

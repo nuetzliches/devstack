@@ -9,6 +9,16 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **The dashboard pushes a branch that is ahead of its upstream.** The
+  `↑n` in a lane's header is now a button: a click asks, then the hub runs
+  `git push` to the branch's own upstream. It pushes only a branch that is
+  ahead and not behind, never forces, and never asks for credentials; git's
+  message (a refused push, a hook) shows in a dialog. The start page shows the
+  same `↑n ↓m` for each stack's main working tree, on the tile and in the
+  list, and the command palette has "Push <branch>".
+
 ### Changed
 
 - **The dashboard says when the order of the stacks has gone stale.** "Last

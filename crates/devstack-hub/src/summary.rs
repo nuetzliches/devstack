@@ -327,6 +327,7 @@ mod tests {
             daemon: None,
             last_seen: None,
             last_commit: None,
+            sync: None,
             start_error: None,
             shift: 0,
             no_file: false,

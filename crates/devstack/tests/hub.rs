@@ -1625,3 +1625,147 @@ fn a_silent_upstream_does_not_hold_up_initialize() {
     let _ = mcp.kill();
     let _ = mcp.wait();
 }
+
+/// A push is the hub's own page's doing, and goes only for a branch that is
+/// ahead of its upstream and not behind it: the stack's list says how far,
+/// the push reaches the remote, and the list is level again.
+#[test]
+fn a_push_needs_the_hubs_own_page_and_reaches_the_remote() {
+    let h = start();
+    let p = h.port;
+    let with = format!(
+        "Cookie: {}\r\nSec-Fetch-Site: same-origin\r\n",
+        paired_cookie(&h)
+    );
+    let post = |path: &str, body: &str, origin: bool| {
+        let o = if origin {
+            format!("Origin: http://127.0.0.1:{p}\r\n")
+        } else {
+            String::new()
+        };
+        http(
+            p,
+            &format!(
+                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{p}\r\n{with}{o}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ),
+        )
+    };
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    // A bare remote, and the stack's folder cloned from it with `main` tracking it.
+    let home = h.home.path();
+    let bare = home.join("remote.git");
+    git(
+        home,
+        &["init", "-q", "--bare", "-b", "main", bare.to_str().unwrap()],
+    );
+    let shop = home.join("shop");
+    git(
+        home,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            shop.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(
+        shop.join("devstack.toml"),
+        "version = 1\n[stack]\nname = \"shop\"\n",
+    )
+    .unwrap();
+    git(&shop, &["add", "."]);
+    git(&shop, &["commit", "-qm", "first"]);
+    git(&shop, &["push", "-q", "-u", "origin", "main"]);
+    let dir = shop.to_string_lossy().to_string();
+    let js = serde_json::to_string(&dir).unwrap();
+    let (s, _, body) = post("/hub/stacks/add", &format!("{{\"path\":{js}}}"), true);
+    assert_eq!(s, 200, "{body}");
+    let id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let sync = || {
+        let (s, _, body) = get(p, "/hub/stacks", &with);
+        assert_eq!(s, 200, "{body}");
+        let list: serde_json::Value = serde_json::from_str(&body).unwrap();
+        list.as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["id"] == id.as_str())
+            .map(|e| e["sync"].clone())
+    };
+    let until = |what: &str, ok: &dyn Fn() -> bool| {
+        for _ in 0..100 {
+            if ok() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        panic!("{what}: {:?}", sync());
+    };
+
+    // Level: listed, with nothing to show. One commit on top: ahead 1.
+    until("the stack is listed", &|| sync().is_some());
+    assert!(sync().unwrap().is_null(), "{:?}", sync());
+    std::fs::write(shop.join("b.txt"), "b").unwrap();
+    git(&shop, &["add", "."]);
+    git(&shop, &["commit", "-qm", "second"]);
+    until("the list says ahead 1", &|| {
+        sync().is_some_and(|v| v["ahead"] == 1)
+    });
+    let now = sync().unwrap();
+    assert_eq!(now["branch"], "main");
+    assert_eq!(now["upstream"], "origin/main");
+    assert_eq!(now["behind"], 0);
+
+    // Only the hub's own page: no pairing, another origin, no Origin at all.
+    let body = format!("{{\"path\":{js}}}");
+    let push = format!("/hub/stacks/{id}/push");
+    let (s, _, _) = http(
+        p,
+        &format!(
+            "POST {push} HTTP/1.1\r\nHost: 127.0.0.1:{p}\r\nOrigin: http://127.0.0.1:{p}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        ),
+    );
+    assert!(s == 401 || s == 403, "no pairing: {s}");
+    let (s, _, _) = post(&push, &body, false);
+    assert!(s == 401 || s == 403, "no Origin: {s}");
+    assert_ne!(
+        git(&bare, &["rev-parse", "main"]),
+        git(&shop, &["rev-parse", "HEAD"])
+    );
+
+    // A folder that is no worktree of the stack is refused; its own is pushed.
+    let (s, _, _) = post(
+        &push,
+        &format!(
+            "{{\"path\":{}}}",
+            serde_json::to_string(&home.to_string_lossy()).unwrap()
+        ),
+        true,
+    );
+    assert_eq!(s, 400);
+    let (s, _, b) = post(&push, &body, true);
+    assert_eq!(s, 200, "{b}");
+    assert_eq!(
+        git(&bare, &["rev-parse", "main"]),
+        git(&shop, &["rev-parse", "HEAD"])
+    );
+    until("the list is level again", &|| {
+        sync().is_some_and(|v| v.is_null())
+    });
+    // Nothing left to push.
+    let (s, _, _) = post(&push, &body, true);
+    assert_eq!(s, 400);
+}
