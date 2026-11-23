@@ -13,6 +13,8 @@ tokio.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 devstack-proc.workspace = true
+# A program's icon as a PNG (ADR-0046).
+flate2.workspace = true
 raw-window-handle.workspace = true
 rfd.workspace = true
 windows.workspace = true

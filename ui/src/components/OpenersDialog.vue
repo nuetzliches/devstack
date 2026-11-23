@@ -6,6 +6,7 @@ import type { Opener } from '@/api/types';
 import { arrange, useOpenerPrefs } from '@/lib/openers';
 import Icon from './icons/Icon.vue';
 import Modal from './Modal.vue';
+import OpenerIcon from './OpenerIcon.vue';
 
 const props = defineProps<{ open: boolean; openers: Opener[] }>();
 defineEmits<{ close: [] }>();
@@ -13,7 +14,6 @@ defineEmits<{ close: [] }>();
 const { prefs, save } = useOpenerPrefs();
 const list = computed(() => arrange(props.openers, prefs.value));
 const kindLabel = { files: 'files', terminal: 'terminal', editor: 'editor', git: 'Git client', agent: 'agent' } as const;
-const kindIcon = { files: 'folder', terminal: 'terminal', editor: 'file', git: 'gitBranch', agent: 'zap' } as const;
 
 function move(from: number, to: number) {
   if (to < 0 || to >= list.value.length || from === to) return;
@@ -52,7 +52,7 @@ function reset() {
       >
         <label class="grow pick">
           <input type="checkbox" :checked="!prefs.hidden.includes(o.id)" data-testid="opener-shown" @change="toggle(o)" />
-          <Icon :name="kindIcon[o.kind] ?? 'external'" :size="14" class="muted" />
+          <OpenerIcon :opener="o" class="muted" />
           <span class="grow truncate">{{ o.label }}</span>
           <span class="faint small">{{ kindLabel[o.kind] ?? o.kind }}</span>
         </label>

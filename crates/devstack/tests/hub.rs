@@ -1769,3 +1769,25 @@ fn a_push_needs_the_hubs_own_page_and_reaches_the_remote() {
     let (s, _, _) = post(&push, &body, true);
     assert_eq!(s, 400);
 }
+
+/// A program's icon (ADR-0046, addendum 2026-11-23): a PNG for a program
+/// found here, cached by the browser; 404 for one that is not, which the
+/// page answers with the kind's icon. Explorer is on every Windows desktop;
+/// elsewhere the hub has no icons yet.
+#[test]
+fn a_programs_icon_is_its_own_or_none() {
+    let h = start();
+    let bearer = format!("Authorization: Bearer {}\r\n", token(&h));
+    let (s, _, body) = get(h.port, "/hub/openers/nosuch/icon", &bearer);
+    assert_eq!(s, 404, "{body}");
+    let (s, head, body) = get(h.port, "/hub/openers/files/icon", &bearer);
+    if cfg!(windows) {
+        assert_eq!(s, 200, "{body}");
+        assert!(head.contains("content-type: image/png"), "{head}");
+        assert!(head.contains("max-age=86400"), "{head}");
+        // The signature's first byte is not UTF-8; the rest is.
+        assert!(body.contains("PNG\r\n\u{1a}\n"), "not a PNG");
+    } else {
+        assert_eq!(s, 404, "{body}");
+    }
+}

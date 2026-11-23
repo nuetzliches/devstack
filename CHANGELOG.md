@@ -18,6 +18,12 @@ and listed with their assets on the
   message (a refused push, a hook) shows in a dialog. The start page shows the
   same `↑n ↓m` for each stack's main working tree, on the tile and in the
   list, and the command palette has "Push <branch>".
+- **The programs in the path menu show their own icons.** VS Code, Zed,
+  GitHub Desktop, Claude, Windows Terminal and the others are shown with the
+  icon Windows shows for them, in the menu, in "Manage programs…" and on the
+  favourites' buttons, instead of one icon per kind. The hub reads the icon
+  from the program installed on the machine; devstack ships no logos. On
+  macOS and Linux, and for a program without an icon, the kind's icon stays.
 
 ### Changed
 

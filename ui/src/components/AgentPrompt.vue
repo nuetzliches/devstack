@@ -13,6 +13,7 @@ import { usePopover } from '@/lib/popover';
 import { useHub } from '@/stores/hub';
 import { useUi } from '@/stores/ui';
 import Icon from './icons/Icon.vue';
+import OpenerIcon from './OpenerIcon.vue';
 import Modal from './Modal.vue';
 
 const props = defineProps<{ kind: PromptKind; target: PromptTarget; compact?: boolean; label?: string }>();
@@ -103,7 +104,7 @@ async function start(o: Opener) {
     <Transition name="drop">
       <div v-if="menu.open.value" class="menu" role="menu" data-testid="agent-prompt-menu">
         <button v-for="o in agents.slice(1)" :key="o.id" type="button" class="item" role="menuitem" :data-testid="`agent-start-${o.id}`" @click="start(o)">
-          <Icon name="zap" :size="14" /> {{ o.label }}
+          <OpenerIcon :opener="o" /> {{ o.label }}
         </button>
         <button v-if="agents.length" type="button" class="item" role="menuitem" data-testid="agent-copy-prompt" @click="copy">
           <Icon name="copy" :size="14" /> Copy prompt

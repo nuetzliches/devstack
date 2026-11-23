@@ -1,6 +1,7 @@
 //! Opening a stack's tree in the user's own programs (ADR-0046):
 //! `GET /hub/openers`, `POST /hub/open`, and an agent started with a prompt
-//! the hub wrote (`POST /hub/agent`, amendment 2026-10-22).
+//! the hub wrote (`POST /hub/agent`, amendment 2026-10-22); each program's
+//! own icon (`GET /hub/openers/{id}/icon`, addendum 2026-11-23).
 //!
 //! A fixed list. Each program is found the way it makes itself known: an
 //! editor or agent by the URL scheme it registered (`vscode`, `claude`, ...),
@@ -9,9 +10,11 @@
 //! command line, only one of the ids found here. How each is found and
 //! started on this operating system is `devstack_desktop`'s.
 
-use devstack_desktop::LocalKind;
+use devstack_desktop::{IconOf, LocalKind};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// What a program is for, to group the menu, in menu order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -149,6 +152,30 @@ pub fn found() -> Vec<Found> {
     // Stable: within a kind, the order above.
     out.sort_by_key(|f| f.opener.kind);
     out
+}
+
+/// The icon of the program `id`, as a PNG (`GET /hub/openers/{id}/icon`,
+/// addendum 2026-11-23): read from the program installed here, once per hub.
+/// `None` for an id not found here, or a program the system shows no icon
+/// for.
+pub fn icon(id: &str) -> Option<Arc<Vec<u8>>> {
+    type Png = Option<Arc<Vec<u8>>>;
+    static READ: OnceLock<Mutex<HashMap<String, Png>>> = OnceLock::new();
+    let read = READ.get_or_init(Default::default);
+    if let Some(png) = read.lock().unwrap().get(id) {
+        return png.clone();
+    }
+    // Not kept: a program installed later is found by a later page.
+    let f = found().into_iter().find(|f| f.opener.id == id)?;
+    let png = devstack_desktop::icon(match &f.how {
+        How::Local(l) => IconOf::Local(l),
+        How::Link(scheme) => IconOf::Scheme(scheme),
+        How::Orca(cli) => IconOf::Orca(cli),
+        How::GitHubDesktop(exe) => IconOf::File(exe),
+    })
+    .map(Arc::new);
+    read.lock().unwrap().insert(id.to_string(), png.clone());
+    png
 }
 
 /// Why opening failed: the program is not (or no longer) here, or it

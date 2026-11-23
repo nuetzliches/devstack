@@ -20,6 +20,8 @@ pub mod channel;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod mac;
 pub mod notify;
+#[cfg(windows)]
+mod png;
 pub mod tray;
 pub mod webapp;
 
@@ -243,6 +245,27 @@ pub fn github_desktop_open(exe: &Path, path: &str) -> Result<(), String> {
 /// Orca's CLI: on `PATH`, or in its install folder.
 pub fn orca() -> Option<PathBuf> {
     os::orca()
+}
+
+/// Which program's icon [`icon`] reads.
+#[derive(Debug, Clone, Copy)]
+pub enum IconOf<'a> {
+    /// The program that opens links of this scheme.
+    Scheme(&'a str),
+    /// A program file or application bundle (GitHub Desktop).
+    File(&'a Path),
+    /// Orca, by its CLI from [`orca`].
+    Orca(&'a Path),
+    /// The file manager or a terminal of this desktop.
+    Local(&'a Local),
+}
+
+/// A program's icon as this machine shows it, as a PNG (ADR-0046, addendum
+/// 2026-11-23): read from the installed program, so devstack ships no
+/// vendor's artwork. `None` where the system has none for it; not on macOS
+/// or Linux yet.
+pub fn icon(of: IconOf<'_>) -> Option<Vec<u8>> {
+    os::icon(of)
 }
 
 /// Where `name` is on `PATH`, as a program (`.exe` added on Windows).

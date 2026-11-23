@@ -843,6 +843,7 @@ name = "devstack-desktop"
 version = "0.52.0"
 dependencies = [
  "devstack-proc",
+ "flate2",
  "libc",
  "objc2",
  "objc2-app-kit",

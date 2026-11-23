@@ -674,6 +674,7 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/inspect", get(inspect))
         .route("/hub/pick-folder", post(pick_folder))
         .route("/hub/openers", get(openers))
+        .route("/hub/openers/{id}/icon", get(opener_icon))
         .route("/hub/open", post(open_tree))
         .route("/hub/prompt", get(prompt))
         .route("/hub/agent", post(agent))
@@ -1893,6 +1894,24 @@ async fn pick_folder() -> Response {
 async fn openers() -> Response {
     match tokio::task::spawn_blocking(open::found).await {
         Ok(found) => Json(found.into_iter().map(|f| f.opener).collect::<Vec<_>>()).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// `GET /hub/openers/{id}/icon`: the program's own icon as this machine
+/// shows it, a PNG (ADR-0046, addendum 2026-11-23); `404` when there is none
+/// (the page then shows the kind's icon).
+async fn opener_icon(Path(id): Path<String>) -> Response {
+    match tokio::task::spawn_blocking(move || open::icon(&id)).await {
+        Ok(Some(png)) => (
+            [
+                (header::CONTENT_TYPE, "image/png"),
+                (header::CACHE_CONTROL, "private, max-age=86400"),
+            ],
+            png.as_ref().clone(),
+        )
+            .into_response(),
+        Ok(None) => err(StatusCode::NOT_FOUND, "no icon for this program"),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
