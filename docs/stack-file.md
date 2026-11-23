@@ -960,7 +960,13 @@ stop the lane first: see `prepare`). Ignored files are not in the snapshot:
   published port is Docker's and stays with the main tree's container, so a
   stack with nothing of either has nothing to move, and `promote --lane`
   refuses it.
-- `devstack lane list`; `devstack lane start <name>` starts a lane from
+- `devstack lane list`, with a column `DONE` per lane ([ADR-0118](adr/0118-lane-list-says-which-lanes-are-done.md)):
+  `merged` or `squashed <sha>` when its work is on the base branch
+  (`origin/HEAD` as last fetched, else `origin/main`, `main` or `master`)
+  and nothing keeps it, with the commands that remove it in their order;
+  `dirty`, `busy` (the lane runs, or a process has its folder or command
+  line in the worktree) or `open`. devstack removes nothing itself.
+  `devstack lane start <name>` starts a lane from
   anywhere in the repository, as `devstack up` in its worktree does;
   `devstack lane stop <name>` stops a lane (its builds stay, the worktree
   too); `devstack lane reset <name>` throws a stopped lane's data away (its

@@ -576,7 +576,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "lanes",
-            "The lanes of this repository (plan §3.5): its other git worktrees, each a lane that runs the stack beside the main one once started, with its ports moved by an offset and its own containers, without background workers, on this machine or a node of the pool (`node`). Shows branch, whether it is started and which lane serves the main ports. When this MCP server was started in a worktree, every other tool acts on its lane, and `up` starts it; started in the main working tree, they act on the main stack, also after the client entered a worktree: `lane_start <lane>` starts that worktree's lane. GET /v1/lanes.",
+            "The lanes of this repository (plan §3.5): its other git worktrees, each a lane that runs the stack beside the main one once started, with its ports moved by an offset and its own containers, without background workers, on this machine or a node of the pool (`node`). Shows branch, whether it is started, which lane serves the main ports, and whether it is done (`done`: `merged` or `squashed` into the base branch with nothing keeping it, then with the commands that remove it in their order; `dirty` or `busy` when uncommitted changes, the lane or a process keep it; `open` while its work is not on the base). devstack removes no worktree or branch itself. When this MCP server was started in a worktree, every other tool acts on its lane, and `up` starts it; started in the main working tree, they act on the main stack, also after the client entered a worktree: `lane_start <lane>` starts that worktree's lane. GET /v1/lanes.",
             json!({}),
             &[],
             true,
@@ -1101,7 +1101,17 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
             if lanes.is_empty() {
                 out.push_str("no lanes: the repository has no other worktree");
             }
+            // Whether a lane's work is on the base and nothing keeps it, as
+            // `devstack lane list` says it (#606).
+            let base = crate::lanedone::base(file.parent().unwrap_or(Path::new(".")));
+            let procs = crate::lanedone::Procs::read();
             for l in lanes {
+                let done = match crate::lanedone::path_of(&l) {
+                    Some(p) if l["removing"] != true => {
+                        crate::lanedone::of(&p, base.as_deref(), l["active"] != false, &procs)
+                    }
+                    _ => crate::lanedone::Done::Unknown,
+                };
                 // As `devstack lane list` says it: the lane stops and its
                 // data goes, which takes a while.
                 let running = if l["removing"] == true {
@@ -1113,7 +1123,7 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                 };
                 let name = l["name"].as_str().unwrap_or("");
                 out.push_str(&format!(
-                    "{name} (branch {}): ports +{}, {running}, {}{}; dashboard {}\n",
+                    "{name} (branch {}): ports +{}, {running}, {}{}; done: {}; dashboard {}\n",
                     l["branch"].as_str().unwrap_or("detached"),
                     l["port_offset"],
                     l["path"].as_str().unwrap_or(""),
@@ -1122,8 +1132,14 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
                     } else {
                         ""
                     },
+                    done.text(),
                     crate::hubcmd::dashboard_links(&client::daemon_file(file), Some(name)).page
                 ));
+                if let Some(h) =
+                    done.hint(name, l["path"].as_str().unwrap_or(""), l["branch"].as_str())
+                {
+                    out.push_str(&format!("  {h}\n"));
+                }
             }
             Ok(out)
         }

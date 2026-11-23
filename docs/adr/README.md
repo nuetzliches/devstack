@@ -200,3 +200,4 @@ stay.
 | [0115](0115-a-machine-keeps-its-gpus-and-a-lane-shows-its-own.md) | A machine keeps the GPUs its owner wants, and a lane shows its own | Accepted (card in the pull request); built |
 | [0116](0116-admins-see-a-machine-that-asks-to-run-lanes.md) | Admins see a machine that asks to run lanes, and are told when one starts | Accepted (card in the pull request); built |
 | [0117](0117-the-dashboard-pushes-a-branch-that-is-ahead-of-its-upstream.md) | The dashboard pushes a branch that is ahead of its upstream, and the start page shows how far each stack is | Accepted (card in the pull request); built |
+| [0118](0118-lane-list-says-which-lanes-are-done.md) | `lane list` says which lanes are done, and devstack removes none of them | Accepted (card in the pull request); built |
