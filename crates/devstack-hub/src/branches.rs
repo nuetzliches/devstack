@@ -10,6 +10,8 @@
 //! - `POST /hub/stacks/{id}/worktrees/remove {path}`: `git worktree remove`,
 //!   without `--force`.
 //! - `POST /hub/stacks/{id}/fetch`: `git fetch --all --prune`.
+//! - `POST /hub/stacks/{id}/push {path}`: `git push` of the branch a worktree
+//!   has checked out to its own upstream, when it is ahead and not behind.
 //!
 //! None of them writes a file of a repository (ADR-0071).
 //!
@@ -482,6 +484,106 @@ pub fn fetch(repo: &Path) -> Result<(), Error> {
     Ok(())
 }
 
+/// How far the branch a working tree has checked out is from its upstream,
+/// as of the last fetch (ADR-0088).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct TreeSync {
+    pub branch: String,
+    /// `origin/main`.
+    pub upstream: String,
+    pub ahead: u32,
+    pub behind: u32,
+}
+
+/// The branch `tree` has checked out and where it stands against its
+/// upstream; none for a detached `HEAD`, a branch without an upstream or one
+/// whose upstream is gone.
+fn tree_state(tree: &Path) -> Option<TreeSync> {
+    let branch = git(tree, &["symbolic-ref", "--short", "-q", "HEAD"], LOCAL).ok()?;
+    let branch = branch.trim().to_string();
+    if branch.is_empty() {
+        return None;
+    }
+    // `for-each-ref` matches a pattern as a folder prefix: the exact line.
+    let full = format!("refs/heads/{branch}");
+    let out = git(
+        tree,
+        &[
+            "for-each-ref",
+            "--format=%(refname)%00%(upstream:short)%00%(upstream:track)",
+            &full,
+        ],
+        LOCAL,
+    )
+    .ok()?;
+    let line = out
+        .lines()
+        .find(|l| l.split('\0').next() == Some(full.as_str()))?;
+    let mut f = line.split('\0').skip(1);
+    let upstream = f.next().filter(|u| !u.is_empty())?.to_string();
+    let (Some(ahead), Some(behind)) = track(f.next().unwrap_or("")) else {
+        return None;
+    };
+    Some(TreeSync {
+        branch,
+        upstream,
+        ahead,
+        behind,
+    })
+}
+
+/// [`tree_state`] when the branch differs from its upstream: what the start
+/// page shows of a stack's main working tree.
+pub(crate) fn sync_of(tree: &Path) -> Option<TreeSync> {
+    tree_state(tree).filter(|s| s.ahead > 0 || s.behind > 0)
+}
+
+/// Push the branch the worktree `path` of `repo` has checked out to its own
+/// upstream: `git push <remote> refs/heads/<branch>:<the upstream's branch>`.
+/// Only when the local refs say it is ahead and not behind; never forced,
+/// never without an upstream. Hooks of the user's run as for any push.
+pub fn push(repo: &Path, path: &Path) -> Result<(), Error> {
+    let Some(tree) = devstack_daemon::lanes::worktree_of(repo, path) else {
+        return Err(Error::Bad("not a worktree of this stack".into()));
+    };
+    let Some(s) = tree_state(&tree) else {
+        return Err(Error::Bad(
+            "the folder has no branch with an upstream checked out".into(),
+        ));
+    };
+    if s.behind > 0 {
+        return Err(Error::Bad(format!(
+            "`{}` is {} behind `{}`: bring it up to date in a git client first",
+            s.branch, s.behind, s.upstream
+        )));
+    }
+    if s.ahead == 0 {
+        return Err(Error::Bad(format!(
+            "`{}` has nothing that `{}` has not",
+            s.branch, s.upstream
+        )));
+    }
+    let config = |key: &str| {
+        git(
+            &tree,
+            &["config", "--get", &format!("branch.{}.{key}", s.branch)],
+            LOCAL,
+        )
+        .map(|v| v.trim().to_string())
+        .unwrap_or_default()
+    };
+    let (remote, merge) = (config("remote"), config("merge"));
+    if remote.is_empty() || remote == "." || !merge.starts_with("refs/heads/") {
+        return Err(Error::Bad(format!(
+            "`{}` tracks no branch of a remote",
+            s.branch
+        )));
+    }
+    let spec = format!("refs/heads/{}:{merge}", s.branch);
+    git(&tree, &["push", "--porcelain", "--", &remote, &spec], FETCH).map_err(Error::Git)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -581,6 +683,119 @@ mod tests {
         fetch(&clone).unwrap();
         let m = main(&clone);
         assert_eq!((m.ahead, m.behind), (Some(1), Some(2)));
+    }
+
+    fn rev(dir: &Path, r: &str) -> String {
+        let out = Command::new("git")
+            .args(["rev-parse", r])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// A bare remote and a clone of it with `main` tracking `origin/main`.
+    fn clone_of_bare() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let (tmp, origin) = repo();
+        let bare = tmp.path().join("remote.git");
+        git_ok(
+            tmp.path(),
+            &[
+                "clone",
+                "-q",
+                "--bare",
+                origin.to_str().unwrap(),
+                bare.to_str().unwrap(),
+            ],
+        );
+        let clone = tmp.path().join("clone");
+        git_ok(
+            tmp.path(),
+            &[
+                "clone",
+                "-q",
+                bare.to_str().unwrap(),
+                clone.to_str().unwrap(),
+            ],
+        );
+        (tmp, bare, clone)
+    }
+
+    fn commit(dir: &Path, file: &str) {
+        std::fs::write(dir.join(file), file).unwrap();
+        git_ok(dir, &["add", "."]);
+        git_ok(dir, &["commit", "-q", "-m", file]);
+    }
+
+    #[test]
+    fn a_branch_ahead_of_its_upstream_is_pushed_to_it() {
+        let (_tmp, bare, clone) = clone_of_bare();
+        assert_eq!(sync_of(&clone), None, "level: nothing to show");
+        commit(&clone, "b.txt");
+        let s = sync_of(&clone).unwrap();
+        assert_eq!(
+            s,
+            TreeSync {
+                branch: "main".into(),
+                upstream: "origin/main".into(),
+                ahead: 1,
+                behind: 0
+            }
+        );
+        push(&clone, &clone).unwrap();
+        assert_eq!(rev(&bare, "main"), rev(&clone, "HEAD"));
+        // The push moved `origin/main` itself: level again, no fetch needed.
+        assert_eq!(sync_of(&clone), None);
+        // Nothing left to push.
+        assert!(matches!(push(&clone, &clone), Err(Error::Bad(_))));
+    }
+
+    #[test]
+    fn a_branch_behind_or_without_an_upstream_is_not_pushed() {
+        let (tmp, bare, clone) = clone_of_bare();
+        // Someone else pushed; this clone fetched and has a commit of its own.
+        let other = tmp.path().join("other");
+        git_ok(
+            tmp.path(),
+            &[
+                "clone",
+                "-q",
+                bare.to_str().unwrap(),
+                other.to_str().unwrap(),
+            ],
+        );
+        commit(&other, "c.txt");
+        git_ok(&other, &["push", "-q"]);
+        commit(&clone, "b.txt");
+        fetch(&clone).unwrap();
+        let s = sync_of(&clone).unwrap();
+        assert_eq!((s.ahead, s.behind), (1, 1));
+        let before = rev(&bare, "main");
+        assert!(matches!(push(&clone, &clone), Err(Error::Bad(_))));
+        assert_eq!(rev(&bare, "main"), before, "nothing was pushed");
+
+        // A branch without an upstream.
+        git_ok(&clone, &["checkout", "-q", "-b", "local-only"]);
+        assert_eq!(sync_of(&clone), None);
+        assert!(matches!(push(&clone, &clone), Err(Error::Bad(_))));
+    }
+
+    #[test]
+    fn only_a_worktree_of_the_stack_is_pushed() {
+        let (tmp, _bare, clone) = clone_of_bare();
+        commit(&clone, "b.txt");
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        assert!(matches!(push(&clone, &elsewhere), Err(Error::Bad(_))));
+
+        // A lane's branch goes to its own upstream, whatever the main tree has.
+        git_ok(&clone, &["branch", "--track", "feat", "origin/main"]);
+        let lane = add(&clone, "feat", None).unwrap();
+        commit(&lane, "f.txt");
+        let s = sync_of(&lane).unwrap();
+        assert_eq!((s.branch.as_str(), s.ahead), ("feat", 1));
+        push(&clone, &lane).unwrap();
+        assert_eq!(sync_of(&lane), None);
     }
 
     #[test]

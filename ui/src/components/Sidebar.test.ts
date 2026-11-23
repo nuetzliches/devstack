@@ -281,12 +281,28 @@ describe('the sidebar', () => {
     await settle();
     expect(names()).toEqual(['zoo', 'shop']);
 
-    // Choosing the order again takes a fresh snapshot.
+    // The order would change now, so the header offers to update it; a click takes a fresh snapshot.
+    expect(el.querySelector('[data-testid="sidebar-order-refresh"]')).not.toBeNull();
+    q(el, '[data-testid="sidebar-order-refresh"]').click();
+    await settle();
+    expect(names()).toEqual(['shop', 'zoo']);
+    expect(el.querySelector('[data-testid="sidebar-order-refresh"]')).toBeNull();
+
+    // A newer commit that keeps the order offers nothing.
+    fake.stream('/hub/events').handlers.onMessage({ type: 'stacks', stacks: [zoo, { ...entry, last_commit: 950 }] });
+    await settle();
+    expect(el.querySelector('[data-testid="sidebar-order-refresh"]')).toBeNull();
+
+    // Choosing the order again takes a fresh snapshot too.
+    fake.stream('/hub/events').handlers.onMessage({ type: 'stacks', stacks: [{ ...zoo, last_commit: 2000 }, { ...entry, last_commit: 950 }] });
+    await settle();
+    expect(names()).toEqual(['shop', 'zoo']);
     q(el, '[data-testid="sidebar-order"]').click();
     await settle();
     document.querySelector<HTMLElement>('[data-testid="sidebar-order-menu"] [data-order="edited"]')!.click();
     await settle();
-    expect(names()).toEqual(['shop', 'zoo']);
+    expect(names()).toEqual(['zoo', 'shop']);
+    expect(el.querySelector('[data-testid="sidebar-order-refresh"]')).toBeNull();
     app.unmount();
   });
 

@@ -57,6 +57,7 @@ export const paths = {
   stackAdd: '/hub/stacks/add',
   pickFolder: '/hub/pick-folder',
   openers: '/hub/openers',
+  openerIcon: (id: string) => `/hub/openers/${encodeURIComponent(id)}/icon`,
   open: '/hub/open',
   prompt: (kind: string, target: { stack?: string; path?: string }) =>
     `/hub/prompt?kind=${encodeURIComponent(kind)}${target.stack !== undefined ? `&stack=${encodeURIComponent(target.stack)}` : ''}${target.path !== undefined ? `&path=${encodeURIComponent(target.path)}` : ''}`,
@@ -72,6 +73,7 @@ export const paths = {
   worktreeRemove: (stack: string) => `/hub/stacks/${enc(stack)}/worktrees/remove`,
   laneStart: (stack: string) => `/hub/stacks/${enc(stack)}/lanes/start`,
   fetch: (stack: string) => `/hub/stacks/${enc(stack)}/fetch`,
+  push: (stack: string) => `/hub/stacks/${enc(stack)}/push`,
   upgrade: (stack: string) => `/hub/stacks/${enc(stack)}/upgrade`,
   mcp: (stack: string) => `/hub/stacks/${enc(stack)}/mcp`,
   /** Where devstack's MCP server is registered for each coding agent. */

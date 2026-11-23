@@ -290,6 +290,11 @@ pub fn files_and_terminals() -> Vec<Local> {
     out
 }
 
+/// A program's icon: not on Linux yet; the dashboard shows the kind's.
+pub fn icon(_of: crate::IconOf<'_>) -> Option<Vec<u8>> {
+    None
+}
+
 pub fn launch(how: &Launch, dir: &Path, path: &str) -> Result<(), String> {
     match how {
         Launch::Shell => shell_open(path),

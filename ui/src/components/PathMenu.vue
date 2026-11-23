@@ -12,7 +12,8 @@ import { useOpenerPrefs } from '@/lib/openers';
 import { useHub } from '@/stores/hub';
 import { useUi } from '@/stores/ui';
 import Icon from './icons/Icon.vue';
-import FavoriteOpeners, { openerIcon } from './FavoriteOpeners.vue';
+import FavoriteOpeners from './FavoriteOpeners.vue';
+import OpenerIcon from './OpenerIcon.vue';
 import OpenersDialog from './OpenersDialog.vue';
 
 const props = defineProps<{
@@ -90,7 +91,7 @@ function openWith(o: Opener) {
             data-testid="path-open"
             @click="openWith(o)"
           >
-            <Icon :name="openerIcon[o.kind] ?? 'external'" :size="14" class="muted" /><span class="grow">{{ o.label }}</span>
+            <OpenerIcon :opener="o" class="muted" /><span class="grow">{{ o.label }}</span>
             <Icon v-if="isFav(o)" name="star" :size="11" class="faint" label="Also beside the path" />
           </button>
           <div v-if="hub.openers?.length" class="menu-foot">

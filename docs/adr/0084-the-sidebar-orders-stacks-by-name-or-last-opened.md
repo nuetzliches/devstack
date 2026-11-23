@@ -54,3 +54,11 @@ As built:
 [ADR-0102](0102-the-stacks-list-orders-by-last-commit-hides-stacks-and-filters.md)
 adds a third choice, "Last edited first" (the newest commit, reported by the
 hub), with the snapshot rule of point 2, and builds hiding.
+
+## Addendum 2026-11-23
+
+Point 2 stays, with a way out of it that the user starts: when the order the
+current times would give differs from the one shown, the sidebar shows a
+button that takes the snapshot anew
+([ADR-0102](0102-the-stacks-list-orders-by-last-commit-hides-stacks-and-filters.md),
+addendum 2026-11-23).

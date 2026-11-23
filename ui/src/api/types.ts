@@ -22,6 +22,8 @@ export type StackEntry = {
   last_seen: number | null;
   /** When its repository last got a commit, on any branch (Unix seconds). Absent while unknown; older hubs omit it. */
   last_commit?: number;
+  /** How far the branch of its main working tree is ahead of and behind its upstream, as of the last fetch. Absent without an upstream and while level; older hubs omit it. */
+  sync?: { branch: string; upstream: string; ahead: number; behind: number };
   /** Why the last start from the dashboard failed, while the stack is down. Older hubs omit it. */
   start_error?: string;
   /** What its main tree's ports are moved by on this machine (ADR-0082); 0: the stack file's ports. Older hubs omit it. */

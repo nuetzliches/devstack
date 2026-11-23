@@ -143,6 +143,8 @@ export function shopSeed(now: number): MockStackSeed {
       daemon: { pid: 21544, port: 52711, started: now - 26 * MIN, version: '0.2.0' },
       last_seen: now,
       last_commit: Math.floor((now - 40 * MIN) / 1000),
+      // Behind its upstream: the page shows it, and cannot push (ADR-0088).
+      sync: { branch: 'main', upstream: 'origin/main', ahead: 0, behind: 3 },
     },
     view: {
       name: 'shop',
@@ -262,6 +264,8 @@ export function docsSeed(now: number): MockStackSeed {
       daemon: null,
       last_seen: last,
       last_commit: Math.floor((now - 2 * 24 * 60 * MIN) / 1000),
+      // Ahead of its upstream: a click on the badge pushes (ADR-0117).
+      sync: { branch: 'main', upstream: 'origin/main', ahead: 2, behind: 0 },
     },
     view: { name: 'docs', repo, version: '0.2.0', services, infra, groups, commands },
     previous,

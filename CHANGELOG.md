@@ -9,7 +9,48 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **The dashboard pushes a branch that is ahead of its upstream.** The
+  `↑n` in a lane's header is now a button: a click asks, then the hub runs
+  `git push` to the branch's own upstream. It pushes only a branch that is
+  ahead and not behind, never forces, and never asks for credentials; git's
+  message (a refused push, a hook) shows in a dialog. The start page shows the
+  same `↑n ↓m` for each stack's main working tree, on the tile and in the
+  list, and the command palette has "Push <branch>".
+- **The programs in the path menu show their own icons.** VS Code, Zed,
+  GitHub Desktop, Claude, Windows Terminal and the others are shown with the
+  icon Windows shows for them, in the menu, in "Manage programs…" and on the
+  favourites' buttons, instead of one icon per kind. The hub reads the icon
+  from the program installed on the machine; devstack ships no logos. On
+  macOS and Linux, and for a program without an icon, the kind's icon stays.
+
+### Changed
+
+- **The dashboard says when the order of the stacks has gone stale.** "Last
+  opened first" and "Last edited first" are a snapshot taken when the page
+  loads or the order is chosen, so a new commit or an opened stack moved
+  nothing, and only choosing the order again or reloading showed it. Now,
+  when the order would change, the sidebar's heading and the start page
+  show a button ("Update order") that takes the snapshot anew; nothing
+  moves until it is clicked. A newer commit that keeps the order shows
+  nothing.
+
 ### Fixed
+
+- **`devstack doctor` names a stack's port shift and checks the ports
+  `devstack up` would check.** It said "ports: free" for a stack shifted
+  +2000 while another stack ran on one of its Compose host ports. It then
+  offered `devstack up --shift none`, which was refused, and the stack
+  stayed down. It checked only the services' ports, without the shift.
+  Now, while the stack is down, doctor makes the same check as `up`: the
+  services' and the containers' host ports at the stack's shift, the other
+  stacks' claims, and what holds a port now. It warns with who holds a
+  port. For a shifted stack, doctor names the shift, says that it sticks,
+  and says whether `--shift none` would start now or which stack or
+  program holds which port. `devstack status`, the MCP `status` and the
+  note `up --shift` prints say the same instead of always offering
+  `--shift none`.
 
 - **Tailwind (and any tool that reads `.gitignore` files) sees a lane's
   sources again** (#613). Since 0.50.0 the state folder `.devstack/`

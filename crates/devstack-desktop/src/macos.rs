@@ -320,6 +320,11 @@ pub fn orca() -> Option<PathBuf> {
     })
 }
 
+/// A program's icon: not on macOS yet; the dashboard shows the kind's.
+pub fn icon(_of: crate::IconOf<'_>) -> Option<Vec<u8>> {
+    None
+}
+
 /// `open <target>`: a folder in Finder, a link in the application its
 /// scheme names.
 pub fn shell_open(target: &str) -> Result<(), String> {

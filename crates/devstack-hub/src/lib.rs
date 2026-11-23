@@ -131,6 +131,11 @@ pub struct StackEntry {
     /// dashboard's "Last edited first" order.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_commit: Option<u64>,
+    /// How far the branch of its main working tree is ahead of and behind
+    /// its upstream, as of the last fetch; absent without an upstream and
+    /// while the two are level. The start page's `↑n ↓m`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sync: Option<branches::TreeSync>,
     /// Why the last start from the dashboard failed (the end of `devstack
     /// up`'s output), while the stack is not running (#11).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -322,6 +327,7 @@ fn scan(
                 }),
                 last_seen: last_seen.get(&e.id).copied(),
                 last_commit: commits.get(&e.repo).copied(),
+                sync: worktrees::sync_of(&e.repo),
                 shift: e.shift,
                 no_file,
                 id: e.id,
@@ -668,6 +674,7 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/inspect", get(inspect))
         .route("/hub/pick-folder", post(pick_folder))
         .route("/hub/openers", get(openers))
+        .route("/hub/openers/{id}/icon", get(opener_icon))
         .route("/hub/open", post(open_tree))
         .route("/hub/prompt", get(prompt))
         .route("/hub/agent", post(agent))
@@ -684,6 +691,7 @@ fn router(state: AppState) -> axum::Router {
         )
         .route("/hub/stacks/{id}/worktrees/remove", post(worktree_remove))
         .route("/hub/stacks/{id}/fetch", post(stack_fetch))
+        .route("/hub/stacks/{id}/push", post(stack_push))
         // No route writes a file of a repository (ADR-0071).
         .route("/hub/stacks/{id}/upgrade", get(stack_upgrade))
         .route("/hub/stacks/{id}/mcp", get(stack_mcp))
@@ -1779,6 +1787,7 @@ fn entry(s: &AppState, id: &str) -> Option<StackEntry> {
                     daemon: None,
                     last_seen: None,
                     last_commit: None,
+                    sync: None,
                     start_error: None,
                     shift: e.shift,
                 })
@@ -1889,6 +1898,24 @@ async fn openers() -> Response {
     }
 }
 
+/// `GET /hub/openers/{id}/icon`: the program's own icon as this machine
+/// shows it, a PNG (ADR-0046, addendum 2026-11-23); `404` when there is none
+/// (the page then shows the kind's icon).
+async fn opener_icon(Path(id): Path<String>) -> Response {
+    match tokio::task::spawn_blocking(move || open::icon(&id)).await {
+        Ok(Some(png)) => (
+            [
+                (header::CONTENT_TYPE, "image/png"),
+                (header::CACHE_CONTROL, "private, max-age=86400"),
+            ],
+            png.as_ref().clone(),
+        )
+            .into_response(),
+        Ok(None) => err(StatusCode::NOT_FOUND, "no icon for this program"),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
 /// Run `f` on stack `id` (its repository), git being slow: its answer as
 /// JSON, `400` for what the page got wrong, `409` with what git said.
 async fn with_repo<T: serde::Serialize + Send + 'static>(
@@ -1972,6 +1999,24 @@ async fn worktree_remove(
 async fn stack_fetch(State(s): State<AppState>, Path(id): Path<String>) -> Response {
     with_repo(&s, &id, |e| {
         branches::fetch(&e.repo).map(|()| serde_json::json!({}))
+    })
+    .await
+}
+
+/// `POST /hub/stacks/{id}/push {path}`: `git push` of the branch the worktree
+/// `path` has checked out to its own upstream, when it is ahead and not
+/// behind (never forced, no prompt).
+async fn stack_push(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<WorktreePath>,
+) -> Response {
+    let raw = PathBuf::from(&b.path);
+    if !raw.is_absolute() || !local_path(&b.path, &raw) {
+        return err(StatusCode::BAD_REQUEST, "a folder on this machine");
+    }
+    with_repo(&s, &id, move |e| {
+        branches::push(&e.repo, &raw).map(|()| serde_json::json!({}))
     })
     .await
 }

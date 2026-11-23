@@ -38,6 +38,21 @@ fn sender() -> &'static watch::Sender<BTreeMap<String, String>> {
     TX.get_or_init(|| watch::channel(BTreeMap::new()).0)
 }
 
+/// The main working tree's branch against its upstream, by repository
+/// folder, for the stacks whose branch differs from it (the start page's
+/// `↑n ↓m`); kept current by the thread [`start`] runs.
+type Syncs = std::sync::Mutex<HashMap<PathBuf, crate::branches::TreeSync>>;
+
+fn syncs() -> &'static Syncs {
+    static SYNCS: OnceLock<Syncs> = OnceLock::new();
+    SYNCS.get_or_init(Syncs::default)
+}
+
+/// A repository's main-tree sync, if it differs from its upstream.
+pub(crate) fn sync_of(repo: &Path) -> Option<crate::branches::TreeSync> {
+    syncs().lock().unwrap().get(repo).cloned()
+}
+
 /// Each stack's worktrees' version now, and each change.
 pub fn subscribe() -> watch::Receiver<BTreeMap<String, String>> {
     sender().subscribe()
@@ -57,6 +72,8 @@ pub fn start() {
             // A stack's ref files to look at, and the trees' print they
             // were asked for.
             let mut refs: HashMap<String, (String, Vec<PathBuf>)> = HashMap::new();
+            // A stack's version when its sync was last asked of git.
+            let mut seen: HashMap<String, String> = HashMap::new();
             loop {
                 let stacks = devstack_daemon::registry::list();
                 let mut now = BTreeMap::new();
@@ -77,10 +94,27 @@ pub fn start() {
                     let files = &refs[&e.id].1;
                     let shared = ["FETCH_HEAD", "packed-refs"].map(|f| modified(&dir.join(f)));
                     let moved: Vec<_> = files.iter().map(|f| modified(f)).collect();
-                    now.insert(e.id.clone(), version(&(trees, shared, moved)));
+                    let v = version(&(trees, shared, moved));
+                    // The main tree's branch against its upstream, asked of
+                    // git only when this stack's refs moved.
+                    if seen.get(&e.id) != Some(&v) {
+                        let found = crate::branches::sync_of(&e.repo);
+                        let mut all = syncs().lock().unwrap();
+                        match found {
+                            Some(s) => all.insert(e.repo.clone(), s),
+                            None => all.remove(&e.repo),
+                        };
+                        seen.insert(e.id.clone(), v.clone());
+                    }
+                    now.insert(e.id.clone(), v);
                 }
                 dirs.retain(|id, _| stacks.iter().any(|e| &e.id == id));
                 refs.retain(|id, _| stacks.iter().any(|e| &e.id == id));
+                seen.retain(|id, _| stacks.iter().any(|e| &e.id == id));
+                syncs()
+                    .lock()
+                    .unwrap()
+                    .retain(|repo, _| stacks.iter().any(|e| &e.repo == repo));
                 sender().send_if_modified(|v| {
                     if *v == now {
                         false

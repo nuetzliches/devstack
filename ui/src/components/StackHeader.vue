@@ -16,7 +16,7 @@ import { useStack } from '@/stores/stack';
 import { connectedTo, usePool } from '@/stores/pool';
 import { useOpenerPrefs } from '@/lib/openers';
 import { laneActions, NOT_FOR_MAIN, type LaneAction } from '@/lib/laneActions';
-import { MAIN, samePath } from '@/lib/lanes';
+import { MAIN } from '@/lib/lanes';
 import { stackPage } from '@/lib/stackRoutes';
 import BranchPicker from './BranchPicker.vue';
 import SplitButton from './SplitButton.vue';
@@ -24,6 +24,7 @@ import Icon from './icons/Icon.vue';
 import McpHint from './McpHint.vue';
 import OpenersDialog from './OpenersDialog.vue';
 import PathMenu from './PathMenu.vue';
+import SyncBadge from './SyncBadge.vue';
 
 const hub = useHub();
 const stack = useStack();
@@ -162,13 +163,10 @@ function openWith(o: Opener) {
 
 // How far the shown tree's branch is ahead of and behind its upstream, as
 // the local refs say (ADR-0088): devstack asks no remote, a git client's
-// fetch moves it. Shown only when they differ; its menu has the git clients.
-const sync = computed(() => {
-  if (stack.foreign || stack.sharedLane) return null;
-  const b = stack.branches?.branches.find((x) => (isMain.value ? x.main : !!x.worktree && samePath(x.worktree, path.value)));
-  if (!b?.upstream || (!b.ahead && !b.behind)) return null;
-  return { ahead: b.ahead ?? 0, behind: b.behind ?? 0, upstream: b.upstream };
-});
+// fetch moves it. Shown only when they differ. Ahead and not behind, a click
+// pushes (SyncBadge); behind it, the page cannot, and the badge's menu has
+// the git clients.
+const sync = computed(() => stack.shownSync);
 const syncTitle = computed(() => {
   const s = sync.value;
   if (!s) return '';
@@ -348,7 +346,8 @@ function manageFromSync() {
     <div class="line2">
       <PathMenu v-if="path" :path="path" :stack-id="stack.id" :can-open="canOpen" />
       <BranchPicker />
-      <div v-if="sync" ref="syncRoot" class="picker">
+      <SyncBadge v-if="sync && !sync.behind && stack.id" :stack-id="stack.id" v-bind="sync" />
+      <div v-if="sync && sync.behind" ref="syncRoot" class="picker">
         <button ref="syncTrigger" type="button" class="sync-btn mono" :aria-expanded="syncOpen" aria-haspopup="menu" :title="syncTitle" data-testid="branch-sync" @click="toggleSync">
           <span v-if="sync.ahead" data-testid="branch-ahead">↑{{ sync.ahead }}</span>
           <span v-if="sync.behind" data-testid="branch-behind">↓{{ sync.behind }}</span>

@@ -13,6 +13,7 @@ import { useHub } from '@/stores/hub';
 import Icon from './icons/Icon.vue';
 import StatusPill from './StatusPill.vue';
 import FavoriteOpeners from './FavoriteOpeners.vue';
+import SyncBadge from './SyncBadge.vue';
 
 const props = defineProps<{ stack: StackEntry; favourite: boolean }>();
 const emit = defineEmits<{ toggleFavourite: [] }>();
@@ -62,7 +63,10 @@ function open(e: Event) {
     </td>
     <td class="num" data-testid="tile-lanes">{{ figures.lanes ?? '—' }}</td>
     <td class="num hide-sm" data-testid="tile-up">{{ upFor ?? '—' }}</td>
-    <td class="num" data-testid="tile-commit">{{ committed ?? '—' }}</td>
+    <td class="num" data-testid="tile-commit">
+      {{ committed ?? '—' }}
+      <SyncBadge v-if="stack.sync" :stack-id="stack.id" :stack-name="stack.name" :path="stack.repo" v-bind="stack.sync" />
+    </td>
     <td class="num attention" data-testid="row-attention" :title="notes || undefined">
       <span v-if="figures.items.length" class="count" :class="worst"><Icon :name="worst === 'warn' ? 'pause' : 'xCircle'" :size="13" /> {{ figures.items.length }}</span>
       <span v-else class="faint">—</span>

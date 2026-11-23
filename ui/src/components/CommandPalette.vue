@@ -9,6 +9,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
 import { useUi } from '@/stores/ui';
+import { plural, pushable, pushTree } from '@/lib/gitPush';
 import { laneActions } from '@/lib/laneActions';
 import { laneLabel, lastTab } from '@/lib/lanes';
 import { laneView, stackPage } from '@/lib/stackRoutes';
@@ -72,6 +73,10 @@ const items = computed<Item[]>(() => {
     for (const a of [main, ...more].filter((a) => !a.disabled))
       out.push({ id: `lane:${a.key}`, label: `${a.label.replace(/…$/, '')} lane ${laneLabel(lane)}`, hint: a.hint ? `lane, ${a.hint}` : 'lane', icon: a.icon ?? 'gitBranch', run: () => stack.laneAction(lane, a.key) });
   }
+  // The shown tree's branch, ahead of its upstream and not behind it: push it, as the badge in the header does.
+  const sync = onPage ? null : stack.shownSync;
+  if (sid && sync && changes && pushable(sync))
+    out.push({ id: 'git:push', label: `Push ${sync.branch}`, hint: `git, ${plural(sync.ahead)} to ${sync.upstream}`, icon: 'gitBranch', run: () => pushTree(sid, sync.path, sync, stack.entry?.name) });
   if (v && stack.running) {
     for (const s of v.services) {
       out.push({ id: `svc:${s.name}`, label: s.name, hint: 'service', icon: 'server', run: () => go('service', { name: s.name }) });

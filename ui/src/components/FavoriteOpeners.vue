@@ -7,7 +7,7 @@ import { computed, watchEffect } from 'vue';
 import type { Opener } from '@/api/types';
 import { useOpenerPrefs } from '@/lib/openers';
 import { useHub } from '@/stores/hub';
-import Icon from './icons/Icon.vue';
+import OpenerIcon from './OpenerIcon.vue';
 
 const props = defineProps<{ stackId: string | null; path: string }>();
 /** `opened`: a program was asked to open the path (PathMenu closes its menu). */
@@ -26,17 +26,6 @@ function openWith(o: Opener) {
 }
 </script>
 
-<script lang="ts">
-/** The icon of a program by its kind. */
-export const openerIcon = {
-  files: 'folder',
-  terminal: 'terminal',
-  editor: 'file',
-  git: 'gitBranch',
-  agent: 'zap',
-} as const;
-</script>
-
 <template>
   <button
     v-for="o in favs"
@@ -49,7 +38,7 @@ export const openerIcon = {
     :data-id="o.id"
     @click.stop.prevent="openWith(o)"
   >
-    <Icon :name="openerIcon[o.kind] ?? 'external'" :size="14" />
+    <OpenerIcon :opener="o" />
   </button>
 </template>
 

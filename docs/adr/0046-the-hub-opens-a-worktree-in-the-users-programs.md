@@ -151,6 +151,34 @@ list already knows can also be started with it, in the right folder.
    touch the file, but each teammate would acknowledge the same upgrade
    again.
 
+## Addendum 2026-11-23: each program's own icon
+
+The menu, the "Programs in the path menu" dialog and the favourites' buttons
+showed one icon per kind (a lightning bolt for every agent), so two agents or
+two editors looked alike. The owner approved these points in the
+conversation on 2026-11-23 (all five):
+
+1. **The hub serves the icon** (contract): `GET /hub/openers/{id}/icon`, a
+   PNG, for each program it finds; `404` when it has none, and the page then
+   shows the kind's icon. Not inlined into `GET /hub/openers`, which a page
+   reads often.
+2. **No vendor's artwork ships with devstack** (trust): the icon is read at
+   runtime from the program installed on the user's machine, as the
+   system's own "Open with" menu shows it. A bundled set of logos in a
+   repository under MIT would carry other licences and each vendor's
+   trademark rules (some forbid using their logos), and would go stale.
+3. **Where it comes from** (concept). Windows: the shell item of the program,
+   asked for its image (`IShellItemImageFactory`, 32 px). For a link scheme
+   the association says which: a packaged app by its application id
+   (`shell:AppsFolder\<id>`, Claude Desktop), else the program file (VS Code,
+   Zed). An app execution alias (`wt.exe`) shows only a generic window, so
+   the application id in its reparse point is used. Orca by `Orca.exe` beside
+   its CLI's `resources`. macOS and Linux: not yet, the kind's icon.
+4. **Read once** (concept): the hub keeps each icon in memory for its
+   lifetime; the response may be cached for a day.
+5. **In its own colours** (term), beside the label; the dialog still names
+   the kind in words.
+
 ## Consequences
 
 - The hub starts programs on request of the page. Narrowed by point 3: a
@@ -177,6 +205,9 @@ list already knows can also be started with it, in the right folder.
   `/hub/openers` and `/hub/open` in `crates/devstack-hub/src/lib.rs`.
 - `crates/devstack-daemon/src/lanes.rs` (`worktree_of`).
 - `ui/src/components/StackHeader.vue` (the path's menu).
+- `crates/devstack-desktop/src/windows/icon.rs` and `png.rs` (a program's
+  icon), route `/hub/openers/{id}/icon`, `ui/src/components/OpenerIcon.vue`
+  (addendum 2026-11-23).
 - `docs/dashboard-api.md` (`/hub/openers`, `/hub/open`, `/hub/prompt`,
   `/hub/agent`).
 - `crates/devstack-hub/src/prompts.rs` (the prompts), `ui/src/components/AgentPrompt.vue`

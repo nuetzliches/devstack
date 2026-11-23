@@ -316,6 +316,21 @@ describe('the order of the start page', () => {
     unmount();
   });
 
+  it('offers to update the order when a commit would move a tile, and moves nothing before', async () => {
+    const { el, events, unmount } = await mounted([gamma, alpha, beta]);
+    const refresh = () => el.querySelector<HTMLElement>('[data-testid="overview-order-refresh"]');
+    await choose(el, 'edited');
+    expect(refresh()).toBeNull();
+    events.onMessage({ type: 'stacks', stacks: [gamma, stack('aa01', 'alpha', { last_commit: 900 }), beta] });
+    await settle();
+    expect(names(el)).toEqual(['beta', 'alpha', 'gamma']);
+    refresh()!.click();
+    await settle();
+    expect(names(el)).toEqual(['alpha', 'beta', 'gamma']);
+    expect(refresh()).toBeNull();
+    unmount();
+  });
+
   it('puts the favourites first whatever the order', async () => {
     useFavourites().toggle('cc03');
     const { el, unmount } = await mounted([gamma, alpha, beta]);
@@ -466,6 +481,50 @@ describe('the views of the start page', () => {
     rowOf(el, 'cd34').querySelector<HTMLElement>('[data-testid="tile-commit"]')!.click();
     expect(push).toHaveBeenCalledWith({ name: 'stack', params: { stack: 'cd34' } });
     push.mockRestore();
+    unmount();
+  });
+});
+
+describe('the git state of a stack on the start page', () => {
+  const ahead = stack('aa01', 'alpha', { sync: { branch: 'main', upstream: 'origin/main', ahead: 2, behind: 0 } });
+  const behind = stack('bb02', 'beta', { sync: { branch: 'main', upstream: 'origin/main', ahead: 0, behind: 3 } });
+  const level = stack('cc03', 'gamma');
+  const badge = (el: HTMLElement, id: string) => el.querySelector<HTMLElement>(`[data-id="${id}"] [data-testid="branch-sync"]`);
+
+  it('shows how far the main tree is ahead of and behind its upstream, on a tile and in the list', async () => {
+    const { el, unmount } = await mounted([ahead, behind, level]);
+    expect(badge(el, 'aa01')?.textContent?.trim()).toBe('↑2');
+    expect(badge(el, 'bb02')?.textContent?.trim()).toBe('↓3');
+    expect(badge(el, 'cc03')).toBeNull();
+    el.querySelector<HTMLElement>('[data-testid="overview-view-list"]')!.click();
+    await settle();
+    expect(badge(el, 'aa01')?.textContent?.trim()).toBe('↑2');
+    expect(badge(el, 'bb02')?.textContent?.trim()).toBe('↓3');
+    expect(badge(el, 'cc03')).toBeNull();
+    unmount();
+  });
+
+  it('pushes from a tile after asking, and does not open the stack', async () => {
+    fake.on('/hub/stacks/aa01/push', ok({}));
+    const { el, events, unmount } = await mounted([ahead, behind, level]);
+    const open = vi.spyOn(router, 'push').mockResolvedValue(undefined);
+    const { useUi } = await import('@/stores/ui');
+    const ui = useUi();
+    // Only a branch that is ahead and not behind is a button.
+    expect(badge(el, 'bb02')!.tagName).toBe('SPAN');
+    badge(el, 'aa01')!.click();
+    await vi.waitFor(() => expect(ui.confirmRequest).not.toBeNull());
+    // Several stacks are in view: the question says which.
+    expect(ui.confirmRequest!.text).toBe('Push 2 commits of main (alpha) to origin/main?');
+    ui.confirmRequest!.resolve(true);
+    await settle();
+    expect(fake.requests.find((r) => r.path === '/hub/stacks/aa01/push')?.body).toMatchObject({ path: '/src/alpha' });
+    expect(open).not.toHaveBeenCalled();
+    // The hub says it is level now: the badge goes.
+    events.onMessage({ type: 'stacks', stacks: [stack('aa01', 'alpha'), behind, level] });
+    await settle();
+    expect(badge(el, 'aa01')).toBeNull();
+    open.mockRestore();
     unmount();
   });
 });

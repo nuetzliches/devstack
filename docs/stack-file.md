@@ -995,7 +995,12 @@ machine moved by a **port shift**, which is that machine's own
   every claim and of what runs on this machine; `--shift <n>` (a multiple
   of 1000) by that one; `--shift none` on the stack file's ports again.
   The shift sticks to the stack on this machine until `--shift none`, and
-  `devstack status` and the stack's page show it (`shifted +1000`). A
+  `devstack status` and the stack's page show it (`shifted +1000`).
+  `devstack status` and `devstack doctor` also say whether `--shift none`
+  would start now. If it would not, they name the stack or program that
+  holds which of the stack file's own ports, by the same check `up` makes.
+  doctor makes that check at the stack's shift as well while the stack is
+  down. A
   daemon that runs keeps its shift: `devstack down` first. The dashboard's
   *Start with shift* and the MCP `up` tool's `shift` do the same.
 - **What moves:** everything a lane's offset moves. Each service's `port`

@@ -1,7 +1,8 @@
 // The order of the stacks in the sidebar (#377): by name, or by when this
 // browser last opened each. Both are kept in this browser, as the fold state
 // is. "Last opened" is a snapshot taken when the page loads or the choice is
-// made: opening a stack moves nothing while the page is open. Favourites
+// made: opening a stack moves nothing while the page is open; when the order
+// would change, the page says so and takes a new snapshot on a click. Favourites
 // (ADR-0086) list first, each part in that order; marking one is the user's
 // own act on its row, so it moves at once.
 import { computed, ref, watch } from 'vue';
@@ -28,8 +29,13 @@ export function openedTimes(): Record<string, number> {
   return persist.get<Record<string, number>>(OPENED_KEY) ?? {};
 }
 
+// Counts every change to the opened times, so the "order has changed" hint
+// (`stale` below) can follow them: localStorage itself is not reactive.
+const openedVersion = ref(0);
+
 export function noteOpened(id: string, at = Date.now()): void {
   persist.set(OPENED_KEY, { ...openedTimes(), [id]: at });
+  openedVersion.value++;
 }
 
 export function forgetOpened(id: string): void {
@@ -37,6 +43,7 @@ export function forgetOpened(id: string): void {
   if (!(id in all)) return;
   delete all[id];
   persist.set(OPENED_KEY, all);
+  openedVersion.value++;
 }
 
 // One list for the sidebar and the switcher, so a star shows in both at once;
@@ -117,7 +124,7 @@ export function useOrderChoice() {
  * and when an order is chosen, so nothing moves under the pointer. A stack
  * whose commit time is first known later joins the snapshot with it.
  */
-export function useStackOrdering(stacks: () => readonly { id: string; last_commit?: number | null }[]) {
+export function useStackOrdering(stacks: () => readonly { id: string; name: string; last_commit?: number | null }[]) {
   const { order, chosen, choose } = useOrderChoice();
   const favourites = useFavourites();
   const opened = ref(openedTimes());
@@ -132,11 +139,28 @@ export function useStackOrdering(stacks: () => readonly { id: string; last_commi
     opened.value = openedTimes();
     takeEdited(true);
   });
+  const sort = <T extends Named>(list: readonly T[]): T[] => orderStacks(list, order.value, opened.value, favourites.list(), edited.value);
+  // Whether the snapshot shows an order that the times known now would change
+  // (ADR-0084, ADR-0102 addendum 2026-11-23): the page then offers to take the
+  // snapshot anew, and nothing moves until the user says so. A newer time that
+  // keeps the order is no change; by name there is nothing to take.
+  const stale = computed(() => {
+    if (order.value === 'name') return false;
+    void openedVersion.value;
+    const list = stacks();
+    const live: Record<string, number> = {};
+    for (const s of list) if (s.last_commit != null) live[s.id] = s.last_commit;
+    const ids = (l: readonly Named[]) => l.map((s) => s.id).join(',');
+    return ids(sort(list)) !== ids(orderStacks(list, order.value, openedTimes(), favourites.list(), live));
+  });
   return {
     order,
     choose,
+    stale,
+    /** Takes the snapshot anew, both pages' alike: choosing the order already chosen. */
+    refresh: () => choose(order.value),
     /** `list` in the chosen order, the favourites first. */
-    sort: <T extends Named>(list: readonly T[]): T[] => orderStacks(list, order.value, opened.value, favourites.list(), edited.value),
+    sort,
   };
 }
 

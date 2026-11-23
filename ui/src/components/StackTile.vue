@@ -14,6 +14,7 @@ import { useHub } from '@/stores/hub';
 import Icon from './icons/Icon.vue';
 import StatusPill from './StatusPill.vue';
 import FavoriteOpeners from './FavoriteOpeners.vue';
+import SyncBadge from './SyncBadge.vue';
 
 // `compact`: the small tile, which leaves out how long it has been up and the
 // ports shift, and tells only the first thing that needs attention.
@@ -87,6 +88,10 @@ const moreItems = computed(() => items.value.length - shownItems.value.length);
       <div v-if="committed" class="fig" data-testid="tile-commit">
         <dt>Last commit</dt>
         <dd>{{ committed }}</dd>
+      </div>
+      <div v-if="stack.sync" class="fig git" data-testid="tile-sync">
+        <dt :title="`The main working tree's branch ${stack.sync.branch}`">Git</dt>
+        <dd><SyncBadge :stack-id="stack.id" :stack-name="stack.name" :path="stack.repo" v-bind="stack.sync" /></dd>
       </div>
       <div v-if="stack.shift && !compact" class="fig">
         <dt>Ports</dt>
@@ -174,7 +179,8 @@ const moreItems = computed(() => items.value.length - shownItems.value.length);
 }
 .star,
 .foot,
-.notes {
+.notes,
+.fig.git {
   position: relative;
   z-index: 1;
 }

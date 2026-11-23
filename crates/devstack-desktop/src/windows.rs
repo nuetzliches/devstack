@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 mod foreground;
+mod icon;
 mod notify;
 
 pub use foreground::Front;
@@ -319,6 +320,32 @@ pub fn orca() -> Option<PathBuf> {
             .join(r"Programs\orca\resources\bin\orca.exe");
         p.is_file().then_some(p)
     })
+}
+
+pub fn icon(of: crate::IconOf<'_>) -> Option<Vec<u8>> {
+    use crate::IconOf;
+    match of {
+        IconOf::Scheme(s) => icon::scheme(s),
+        IconOf::File(p) => icon::file(p),
+        // The CLI is `<install>\resources\bin\orca.exe`; the app, with the
+        // icon, is `<install>\Orca.exe`.
+        IconOf::Orca(cli) => {
+            let app = cli
+                .parent()
+                .and_then(Path::parent)
+                .and_then(Path::parent)
+                .map(|d| d.join("Orca.exe"))
+                .filter(|p| p.is_file());
+            icon::file(app.as_deref().unwrap_or(cli))
+        }
+        IconOf::Local(l) => match &l.launch {
+            Launch::Shell => {
+                let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+                icon::file(&Path::new(&root).join("explorer.exe"))
+            }
+            Launch::Wt(exe) | Launch::Console(exe) => icon::file(exe),
+        },
+    }
 }
 
 /// What double-clicking `target` does: a folder opens in Explorer, a

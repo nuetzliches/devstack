@@ -153,3 +153,10 @@ route, `POST /hub/stacks/{id}/fetch`. The daemon's `StackView` says
 - Nothing about deleting branches, local or remote.
 - Nothing about lanes on a node (ADR-0025): a lane made here is started where
   the user chooses, as any other.
+
+## Amendment 2026-11-23
+
+Point 8 no longer holds for **push**: the dashboard pushes a branch that is
+ahead of its upstream and not behind it, after a confirmation
+([ADR-0117](0117-the-dashboard-pushes-a-branch-that-is-ahead-of-its-upstream.md)).
+Commits, staging, merge, rebase, force and conflicts stay a Git client's.

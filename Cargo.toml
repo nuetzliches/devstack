@@ -100,7 +100,15 @@ flate2 = "1"
 tar = "0.4"
 hmac = "0.13"
 # WinRT toasts (ADR-0045); windows-sys has no WinRT.
-windows = { version = "0.62", features = ["Data_Xml_Dom", "Foundation", "UI_Notifications"] }
+# ... and a program's icon through the shell's image factory (ADR-0046).
+windows = { version = "0.62", features = [
+    "Data_Xml_Dom",
+    "Foundation",
+    "UI_Notifications",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+] }
 # Desktop notifications on Linux over the session bus, pure Rust (ADR-0045).
 zbus = { version = "6", default-features = false, features = ["tokio", "proxy", "service"] }
 windows-sys = { version = "0.61", features = [
@@ -116,6 +124,8 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Console",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
     "Win32_System_JobObjects",
     "Win32_System_Kernel",
     "Win32_System_LibraryLoader",
