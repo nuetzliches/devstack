@@ -95,7 +95,7 @@ volumes:
     let started = match started {
         Ok(a) => a,
         Err(e) => {
-            run.purge(None);
+            let _ = run.purge(None);
             panic!("start: {e}");
         }
     };
@@ -115,7 +115,7 @@ volumes:
         "nothing runs yet"
     );
     if let Err(e) = started.infra.run(&run, &|| false, &|_, _, _| {}) {
-        run.purge(None);
+        let _ = run.purge(None);
         panic!("bringing up: {e}");
     }
     let infra = lane_file();
@@ -157,8 +157,8 @@ volumes:
         )
         .unwrap();
     assert_eq!(docker(&["ps", "-q", "--filter", &label]), "");
-    // And purged: nothing of it is left on the engine.
-    run.purge(None);
+    // And purged: nothing of it is left on the engine, nor on disk.
+    run.purge(None).unwrap();
     for what in [
         &["ps", "-aq", "--filter", &label][..],
         &["volume", "ls", "-q", "--filter", &label][..],

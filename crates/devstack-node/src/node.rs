@@ -543,7 +543,13 @@ impl Inner {
             "lane `{}` of {} ({}): its kept data goes: {why}",
             info.lane, info.member, info.repo
         );
-        self.slot_run(slot, info).purge(self.container.as_deref());
+        // Said once: what is left is no longer a kept slot (#621).
+        if let Err(e) = self.slot_run(slot, info).purge(self.container.as_deref()) {
+            eprintln!(
+                "lane `{}` of {}: not all of its data went: {e}",
+                info.lane, info.member
+            );
+        }
         remove_built_images(slot);
         self.volume_use.lock().unwrap().remove(slot);
         self.slot_purging.lock().unwrap().remove(slot);
@@ -1415,7 +1421,12 @@ impl Inner {
                         );
                     } else {
                         s.measure_disk(std::slice::from_ref(&l), Some(&images));
-                        run.purge(s.container.as_deref());
+                        if let Err(e) = run.purge(s.container.as_deref()) {
+                            eprintln!(
+                                "lane `{}` of {}: not all of its data went: {e}",
+                                l.lane, l.member
+                            );
+                        }
                         remove_built_images(slot);
                         s.slot_use.lock().unwrap().remove(slot);
                     }
@@ -1423,7 +1434,12 @@ impl Inner {
                 }
                 None => {
                     if l.stack_file.is_some() {
-                        run.purge(s.container.as_deref());
+                        if let Err(e) = run.purge(s.container.as_deref()) {
+                            eprintln!(
+                                "lane `{}` of {}: not all of its data went: {e}",
+                                l.lane, l.member
+                            );
+                        }
                         remove_built_images(&l.id);
                     }
                     let _ = std::fs::remove_dir_all(&run.dir);

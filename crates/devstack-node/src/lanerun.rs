@@ -26,6 +26,81 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+/// Remove a lane's directory (#621). What its containers wrote there as
+/// another user (Docker makes a missing bind mount's folder as root) the
+/// agent cannot remove: `as_root` removes it, then the rest goes. What is
+/// left even so loses its `slot.json`, so the slot is no longer counted
+/// as kept nor removed again at every sweep; the error says what is left.
+fn remove_slot_dir(dir: &Path, as_root: impl Fn(&Path) -> bool) -> std::result::Result<(), String> {
+    let first = match std::fs::remove_dir_all(dir) {
+        Ok(()) => return Ok(()),
+        Err(_) if !dir.exists() => return Ok(()),
+        Err(e) => e,
+    };
+    if as_root(dir) && std::fs::remove_dir_all(dir).is_ok() {
+        return Ok(());
+    }
+    let _ = std::fs::remove_file(dir.join("slot.json"));
+    let left: Vec<String> = walk_left(dir, dir);
+    Err(format!(
+        "{} left in {} ({first}): {}",
+        left.len(),
+        dir.display(),
+        left.join(", ")
+    ))
+}
+
+/// The folders under `dir` that are still there, at most five, relative.
+fn walk_left(root: &Path, dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return out;
+    };
+    for e in rd.flatten() {
+        let p = e.path();
+        if e.file_type().is_ok_and(|t| t.is_dir()) {
+            let below = walk_left(root, &p);
+            if below.is_empty() {
+                out.push(p.strip_prefix(root).unwrap_or(&p).display().to_string());
+            } else {
+                out.extend(below);
+            }
+        }
+        if out.len() >= 5 {
+            out.truncate(5);
+            break;
+        }
+    }
+    out
+}
+
+/// Remove `dir`'s content as root, in a container that sees `dir` only and
+/// has no network: [`crate::confine::config_image`], already on the node.
+fn remove_as_root(dir: &Path) -> bool {
+    let mount = format!("{}:/purge", dir.display());
+    let image = crate::confine::config_image();
+    docker(&[
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--security-opt",
+        "no-new-privileges",
+        "--user",
+        "0",
+        "-v",
+        &mount,
+        "--entrypoint",
+        "find",
+        &image,
+        "/purge",
+        "-mindepth",
+        "1",
+        "-delete",
+    ])
+    .is_ok()
+}
+
 /// The port the lane's daemon listens on inside its container, unless the
 /// lane uses it itself (#619, [`daemon_port`]); a container started before
 /// that has no [`PORT_LABEL`] and listens here.
@@ -1277,9 +1352,9 @@ impl LaneRun {
 
     /// Stop the lane and remove what it keeps: its Compose projects'
     /// volumes and its directory (the mirror, its builds, its caches).
-    pub fn purge(&self, agent: Option<&str>) {
+    pub fn purge(&self, agent: Option<&str>) -> std::result::Result<(), String> {
         self.take_down(agent, true);
-        let _ = std::fs::remove_dir_all(&self.dir);
+        remove_slot_dir(&self.dir, remove_as_root)
     }
 
     /// Whether its stack file asks to keep its data (`[lanes] keep_data`);
@@ -1428,6 +1503,46 @@ fn project_networks(project: &str, own: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #621: a slot whose containers wrote a folder as root (a bind mount's
+    /// source Docker made) was "removed" at every sweep and never left the
+    /// disk: `remove_dir_all` failed and `slot.json` stayed.
+    #[cfg(unix)]
+    #[test]
+    fn a_slot_with_what_the_agent_cannot_remove_goes_once() {
+        use std::os::unix::fs::PermissionsExt;
+        // As root nothing is out of reach, and there is nothing to show.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let slot = |d: &Path| {
+            let locked = d.join("src/data/maps");
+            std::fs::create_dir_all(&locked).unwrap();
+            std::fs::write(locked.join("tile"), "x").unwrap();
+            std::fs::write(d.join("slot.json"), "{}").unwrap();
+            // Another owner's folder, as far as the agent is concerned.
+            std::fs::set_permissions(d.join("src/data"), std::fs::Permissions::from_mode(0o555))
+                .unwrap();
+        };
+        let unlock = |d: &Path| {
+            let data = d.join("src/data");
+            let _ = std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o755));
+            std::fs::remove_dir_all(data).is_ok()
+        };
+        // Root removes what the agent cannot: the slot goes whole.
+        let t = tempfile::tempdir().unwrap();
+        let d = t.path().join("slot");
+        slot(&d);
+        assert_eq!(remove_slot_dir(&d, |p| unlock(p)), Ok(()));
+        assert!(!d.exists());
+        // Root cannot either: what is left is no longer a kept slot.
+        let d = t.path().join("slot2");
+        slot(&d);
+        let e = remove_slot_dir(&d, |_| false).unwrap_err();
+        assert!(e.contains("src/data"), "{e}");
+        assert!(!d.join("slot.json").exists());
+        unlock(&d);
+    }
 
     /// #619: the lane's daemon listened on 7600 in its container whatever
     /// the lane's own ports were; a service on 7600 (4200 at offset 3400)
