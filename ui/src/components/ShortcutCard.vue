@@ -2,7 +2,7 @@
 import { computed } from 'vue';
 import type { ServiceView } from '@/api/types';
 import { linkLabel, serviceUrl, webUrl } from '@/lib/format';
-import { statusBucket } from '@/lib/status';
+import { statusBucket, type Bucket } from '@/lib/status';
 import { useStack } from '@/stores/stack';
 import Icon from '@/components/icons/Icon.vue';
 
@@ -15,7 +15,7 @@ const url = computed(() => {
   return webUrl(s.link) || webUrl(s.url) || s.port ? serviceUrl(s) : null;
 });
 const bucket = computed(() => statusBucket(props.service));
-const tone: Record<ReturnType<typeof statusBucket>, string> = { healthy: 'ok', starting: 'accent', failed: 'danger', idle: 'neutral' };
+const tone: Record<Bucket, string> = { healthy: 'ok', starting: 'accent', job: 'info', failed: 'danger', idle: 'neutral' };
 </script>
 
 <template>
@@ -87,6 +87,10 @@ const tone: Record<ReturnType<typeof statusBucket>, string> = { healthy: 'ok', s
 .tone-accent {
   --tone: var(--accent);
   --tone-soft: var(--accent-soft);
+}
+.tone-info {
+  --tone: var(--info);
+  --tone-soft: var(--info-soft);
 }
 .tone-danger {
   --tone: var(--danger);

@@ -181,8 +181,9 @@ impl Scope {
         for name in names {
             let svc = &self.services[name];
             match svc.state.as_str() {
-                // A job runs until it ends (#544): that is its start (#575).
-                "running" if svc.kind == "job" => g.starting = true,
+                // A job runs until it ends (#544): not ready (#575), and not
+                // a start either, which a run of hours would show (#611).
+                "running" if svc.kind == "job" => g.jobs += 1,
                 "running" | "healthy" => g.ready += 1,
                 "completed" if svc.exit_code == Some(0) => g.ready += 1,
                 "building" | "starting" => g.starting = true,
@@ -530,25 +531,27 @@ mod tests {
         assert_eq!(g.attention[1].level, Level::Error);
     }
 
-    /// #575: a job is `running` while it runs (#544), which is its start,
-    /// not a service that is ready; a long-running service's `running` is.
+    /// #575: a job is `running` while it runs (#544), not a service that is
+    /// ready; a long-running service's `running` is. #611: nor is it a start,
+    /// which a training of hours would show for its whole run.
     #[test]
-    fn a_running_job_counts_as_starting_not_ready() {
+    fn a_running_job_counts_as_a_job_not_ready_nor_starting() {
         let mut s = Scope::default();
         s.apply(&snapshot(json!([
             { "name": "api", "kind": "long-running", "status": { "state": "running" } },
             { "name": "migrate", "kind": "job", "status": { "state": "starting" } }
         ])));
+        assert_eq!((s.glance().starting, s.glance().jobs), (true, 0));
         // The service event carries no kind: the snapshot's stays.
         s.apply(&service("migrate", json!({ "state": "running" })));
         let g = s.glance();
-        assert_eq!((g.ready, g.total, g.starting), (1, 2, true));
+        assert_eq!((g.ready, g.total, g.starting, g.jobs), (1, 2, false, 1));
         s.apply(&service(
             "migrate",
             json!({ "state": "completed", "exit_code": 0 }),
         ));
         let g = s.glance();
-        assert_eq!((g.ready, g.starting), (2, false));
+        assert_eq!((g.ready, g.starting, g.jobs), (2, false, 0));
     }
 
     #[test]

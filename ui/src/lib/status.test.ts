@@ -28,9 +28,10 @@ describe('statusLook', () => {
     expect(b({ state: 'exited', exit_code: 1 })).toBe('failed');
   });
 
-  it('counts a running job as starting, not healthy (#591)', () => {
+  it('counts a running job as a job, neither healthy (#591) nor starting (#611)', () => {
     const b = (status: Status) => statusBucket({ status, kind: 'job' });
-    expect(b({ state: 'running' })).toBe('starting');
+    expect(b({ state: 'running' })).toBe('job');
+    expect(b({ state: 'starting' })).toBe('starting');
     expect(b({ state: 'completed', exit_code: 0 })).toBe('idle');
     expect(b({ state: 'failed', reason: 'exit 1' })).toBe('failed');
     // A long-running kind stays healthy while it runs.

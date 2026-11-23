@@ -3,7 +3,7 @@
 // daemon runs, the last commit and what needs attention. One source for the
 // tile (large and small), the list's row and the list's sorting, so the three
 // cannot disagree.
-import type { AttentionItem, StackEntry } from '@/api/types';
+import type { AttentionItem, StackEntry, StackGlance } from '@/api/types';
 import type { Tone } from '@/lib/status';
 import type { useHub } from '@/stores/hub';
 
@@ -19,8 +19,12 @@ export type StackLook = {
 
 export type StackFigures = {
   look: StackLook;
-  /** Services ready of all in the main tree; `null` while the stack does not run or the hub has no figures. */
-  services: { ready: number; total: number; share: number } | null;
+  /**
+   * Services ready of all in the main tree, or in the lanes (`inLanes`) while
+   * the main tree has none up and a lane runs (#611); `null` while the stack
+   * does not run or the hub has no figures.
+   */
+  services: { ready: number; total: number; share: number; inLanes: boolean } | null;
   /** Lanes started; `null` while the stack does not run. */
   lanes: number | null;
   /** When the daemon started (milliseconds); `null` while the stack does not run. */
@@ -44,11 +48,22 @@ function lookOf(s: StackEntry, hub: Hub, items: readonly AttentionItem[]): Stack
       return { label: 'Starting', tone: 'accent', busy: true, rank: 4 };
     case 'stopping':
       return { label: 'Stopping', tone: 'neutral', busy: true, rank: 2 };
-    case 'ok':
-      return { label: 'Running', tone: 'ok', busy: false, rank: 3 };
+    case 'ok': {
+      // A job that runs for hours is no start (#611): the stack runs, and says so.
+      const jobs = hub.glances[s.id]?.jobs ?? 0;
+      const label = jobs ? `Running · ${jobs} ${jobs === 1 ? 'job' : 'jobs'}` : 'Running';
+      return { label, tone: 'ok', busy: false, rank: 3 };
+    }
     default:
       return { label: 'Stopped', tone: 'neutral', busy: false, rank: 1 };
   }
+}
+
+/** The main tree's figures, or the lanes' while nothing of the main tree is up and a lane is (older hubs: the main tree's). */
+function servicesOf(g: StackGlance): StackFigures['services'] {
+  const inLanes = g.ready === 0 && !!g.lane_ready;
+  const [ready, total] = inLanes ? [g.lane_ready ?? 0, g.lane_total ?? 0] : [g.ready, g.total];
+  return total ? { ready, total, share: ready / total, inLanes } : null;
 }
 
 export function stackFigures(s: StackEntry, hub: Hub): StackFigures {
@@ -56,7 +71,7 @@ export function stackFigures(s: StackEntry, hub: Hub): StackFigures {
   const items = hub.attention.filter((a) => a.stack === s.id);
   return {
     look: lookOf(s, hub, items),
-    services: s.running && glance && glance.total ? { ready: glance.ready, total: glance.total, share: glance.ready / glance.total } : null,
+    services: s.running && glance ? servicesOf(glance) : null,
     lanes: s.running && glance ? glance.lanes : null,
     upSince: s.running && s.daemon ? s.daemon.started : null,
     committedAt: s.last_commit ? s.last_commit * 1000 : null,

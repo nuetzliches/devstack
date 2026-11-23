@@ -69,7 +69,9 @@ export type HubEvent =
 /**
  * A stack at a glance (`summary` events, as `GET /hub/summary` has it without
  * the attention items): `ready` of `total` of the main tree's services run,
- * healthy or done; `lanes` started.
+ * healthy or done; `lanes` started; `jobs` running in the main tree and the
+ * lanes; `lane_ready` of `lane_total` the lanes' services, summed. Older hubs
+ * leave the last three out.
  */
 export type StackGlance = {
   id: string;
@@ -77,6 +79,9 @@ export type StackGlance = {
   ready: number;
   total: number;
   lanes: number;
+  jobs?: number;
+  lane_ready?: number;
+  lane_total?: number;
 };
 
 /**

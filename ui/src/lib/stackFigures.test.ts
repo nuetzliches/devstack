@@ -46,8 +46,26 @@ describe('stackFigures', () => {
   it('has services, lanes and the start of the daemon only while the stack runs', () => {
     const glances = { ab12: { id: 'ab12', state: 'ok' as const, ready: 2, total: 4, lanes: 1 } };
     const up = stackFigures(stack({ running: true, daemon: { pid: 1, port: 7000, started: 1000, version: '0.9.8' } }), hubOf({ glances }));
-    expect(up).toMatchObject({ services: { ready: 2, total: 4, share: 0.5 }, lanes: 1, upSince: 1000 });
+    expect(up).toMatchObject({ services: { ready: 2, total: 4, share: 0.5, inLanes: false }, lanes: 1, upSince: 1000 });
     expect(stackFigures(stack(), hubOf({ glances }))).toMatchObject({ services: null, lanes: null, upSince: null });
+  });
+
+  it('says running with the jobs that run, not starting (#611)', () => {
+    const glances = { ab12: { id: 'ab12', state: 'ok' as const, ready: 3, total: 4, lanes: 0, jobs: 1 } };
+    expect(stackFigures(stack({ running: true }), hubOf({ glances })).look).toMatchObject({ label: 'Running · 1 job', tone: 'ok', busy: false, rank: 3 });
+    glances.ab12.jobs = 2;
+    expect(stackFigures(stack({ running: true }), hubOf({ glances })).look.label).toBe('Running · 2 jobs');
+  });
+
+  it('shows the lanes’ services while the main tree has none up and a lane runs (#611)', () => {
+    const glances = { ab12: { id: 'ab12', state: 'ok' as const, ready: 0, total: 4, lanes: 1, jobs: 1, lane_ready: 1, lane_total: 4 } };
+    const f = stackFigures(stack({ running: true }), hubOf({ glances }));
+    expect(f.services).toEqual({ ready: 1, total: 4, share: 0.25, inLanes: true });
+    // A main tree with a service up keeps its own figures; an older hub has no lane figures.
+    glances.ab12.ready = 1;
+    expect(stackFigures(stack({ running: true }), hubOf({ glances })).services).toEqual({ ready: 1, total: 4, share: 0.25, inLanes: false });
+    const old = { ab12: { id: 'ab12', state: 'ok' as const, ready: 0, total: 4, lanes: 1 } };
+    expect(stackFigures(stack({ running: true }), hubOf({ glances: old })).services).toMatchObject({ ready: 0, total: 4, inLanes: false });
   });
 
   it('keeps the stack’s own items and its commit time in milliseconds', () => {

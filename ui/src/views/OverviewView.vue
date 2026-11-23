@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import type { CommandView, ContainerView, ServiceView } from '@/api/types';
-import { containerBucket, parseComposeMember, statusBucket } from '@/lib/status';
+import { containerBucket, parseComposeMember, statusBucket, type Bucket } from '@/lib/status';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
 import ServiceRow from '@/components/ServiceRow.vue';
@@ -65,7 +65,7 @@ const cards = computed(() => {
 });
 
 /** A state badge picked as filter: only those members show (click again: all). */
-type Filter = 'healthy' | 'starting' | 'failed' | 'idle' | 'pending';
+type Filter = Bucket | 'pending';
 const filter = ref<Filter | null>(null);
 function toggle(f: Filter) {
   filter.value = filter.value === f ? null : f;
@@ -110,10 +110,11 @@ function fold(key: string) {
 function groupLoad(key: string) {
   return stack.usage?.groups.find((g) => g.name === key) ?? null;
 }
-const filterLabel: Record<Filter, string> = { healthy: 'healthy', starting: 'starting', failed: 'failing', idle: 'stopped or done', pending: 'not live yet' };
+// A job that runs is neither healthy (#591) nor starting: it may run for hours (#611).
+const filterLabel: Record<Filter, string> = { healthy: 'healthy', starting: 'starting', job: 'running as a job', failed: 'failing', idle: 'stopped or done', pending: 'not live yet' };
 
 const counts = computed(() => {
-  const c = { healthy: 0, starting: 0, failed: 0, idle: 0 };
+  const c: Record<Bucket, number> = { healthy: 0, starting: 0, job: 0, failed: 0, idle: 0 };
   const v = view.value;
   if (!v) return c;
   for (const s of v.services) c[statusBucket(s)]++;
@@ -123,6 +124,7 @@ const counts = computed(() => {
 const badges = computed<{ f: Filter; n: number; tone: string }[]>(() => [
   { f: 'healthy', n: counts.value.healthy, tone: 'ok' },
   { f: 'starting', n: counts.value.starting, tone: 'accent' },
+  { f: 'job', n: counts.value.job, tone: 'info' },
   { f: 'failed', n: counts.value.failed, tone: 'danger' },
   { f: 'idle', n: counts.value.idle, tone: 'neutral' },
   { f: 'pending', n: stack.pending.length, tone: stack.pendingTone },
@@ -418,6 +420,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 }
 .badge.accent {
   --tone: var(--accent);
+}
+.badge.info {
+  --tone: var(--info);
 }
 .badge.danger {
   --tone: var(--danger);

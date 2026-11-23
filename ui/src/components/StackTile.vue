@@ -70,7 +70,7 @@ const moreItems = computed(() => items.value.length - shownItems.value.length);
 
     <dl class="figures">
       <div v-if="services" class="fig" data-testid="tile-services">
-        <dt>Services</dt>
+        <dt :title="services.inLanes ? 'Nothing of the main tree runs: the services of the started lanes' : undefined">{{ services.inLanes ? 'Services in lanes' : 'Services' }}</dt>
         <dd>
           <span class="num">{{ services.ready }}<span class="faint">/{{ services.total }}</span></span>
           <span class="bar" aria-hidden="true"><span :style="{ width: `${services.share * 100}%` }" :class="{ full: services.ready === services.total }" /></span>

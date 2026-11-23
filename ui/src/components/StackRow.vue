@@ -57,7 +57,7 @@ function open(e: Event) {
     </td>
     <td><StatusPill :tone="figures.look.tone" :label="figures.look.label" :busy="figures.look.busy" size="sm" data-testid="tile-state" /></td>
     <td class="num" data-testid="tile-services">
-      <template v-if="figures.services">{{ figures.services.ready }}<span class="faint">/{{ figures.services.total }}</span></template>
+      <template v-if="figures.services">{{ figures.services.ready }}<span class="faint">/{{ figures.services.total }}<template v-if="figures.services.inLanes"> in lanes</template></span></template>
       <span v-else class="faint">—</span>
     </td>
     <td class="num" data-testid="tile-lanes">{{ figures.lanes ?? '—' }}</td>

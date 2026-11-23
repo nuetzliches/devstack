@@ -9,6 +9,18 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **A long-running job no longer reads as "starting" for its whole run**
+  (#611). In a stack's overview a job that runs is in a state of its own
+  ("running as a job"), counted neither as healthy nor as starting, with
+  its own filter. On the start page a stack with a running job is
+  "Running · 1 job" instead of "Starting", and a stack whose main tree is
+  stopped while a lane runs shows the lanes' services ("Services in
+  lanes 1/4") instead of 0/4. The hub's summary (`GET /hub/summary`, the
+  `summary` event) carries `jobs`, `lane_ready` and `lane_total` for it;
+  a running job no longer makes a stack `starting`.
+
 ## [0.52.0] - 2026-11-21
 
 A shared machine keeps the GPUs its owner wants: the share switch takes a
