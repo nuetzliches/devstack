@@ -9,6 +9,7 @@
 //   ?mock=skills     shop's stack file has no `reviewed`; its agent skills name an older devstack
 //   ?mock=startfailed  the docs stack's last start from the dashboard failed
 //   ?mock=strays     the stopped docs stack's containers run (Docker started them again, ADR-0096)
+//   ?mock=longjob    shop's migrate job runs for hours; crm's main tree is stopped while a lane runs a job (#611)
 //   Add a stack with a path containing "broken": a stack file that does not load
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
 //   ?mock=nopool     this machine is in no pool; ?mock=poolmember: a member, not an admin
@@ -271,6 +272,14 @@ class MockHub {
     if (q.includes('nofile')) docs.entry.no_file = true;
     if (q.includes('badfile')) this.brokenFile = docs;
     if (q.includes('strays')) docs.strayContainers = true;
+    // `?mock=longjob`: shop's migrate runs for hours; crm's main tree is stopped while lane run-8 trains (#611).
+    if (q.includes('longjob')) {
+      const migrate = shop.view.services.find((v) => v.name === 'migrate');
+      if (migrate) migrate.status = { state: 'running' };
+      for (const v of crm.view.services) v.status = { state: 'stopped' };
+      crm.startedLanes.add('run-8');
+      crm.laneFigures = { ready: 1, total: 4, jobs: 1 };
+    }
     if (q.includes('startfailed')) docs.entry.start_error = 'Error: port 4000 (site) is taken by another process (node.exe, pid 4242)\n  devstack doctor names it; stop it or change the port in devstack.toml';
     // `?mock=skills`: shop was set up with an older devstack.
     // `?mock=worktrees`: a worktree appears in docs (not running) after 4 s, as one made by `git worktree add` elsewhere.
@@ -336,12 +345,16 @@ class MockHub {
     return (this.empty ? [] : this.stacks).map((s) => {
       const services = s.entry.running ? s.view.services : [];
       const attention = items.some((a) => a.stack === s.entry.id);
+      const lanes = s.entry.running ? s.laneFigures : { ready: 0, total: 0, jobs: 0 };
       return {
         id: s.entry.id,
         state: attention ? 'attention' : s.entry.running ? 'ok' : 'stopped',
         ready: services.filter((v) => statusBucket(v) === 'healthy').length,
         total: services.length,
         lanes: s.entry.running ? s.startedLanes.size : 0,
+        jobs: services.filter((v) => statusBucket(v) === 'job').length + lanes.jobs,
+        lane_ready: lanes.ready,
+        lane_total: lanes.total,
       };
     });
   }

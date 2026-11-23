@@ -48,6 +48,8 @@ pub(crate) struct Glance {
     pub total: usize,
     /// A service builds or starts.
     pub starting: bool,
+    /// Jobs running (#611): neither ready nor starting.
+    pub jobs: usize,
     pub attention: Vec<Item>,
 }
 
@@ -145,6 +147,12 @@ pub(crate) struct StackSummary {
     pub total: usize,
     /// Lanes whose stream the hub follows: started, here or on a node.
     pub lanes: usize,
+    /// Jobs running in the main tree and the lanes (#611).
+    pub jobs: usize,
+    /// The lanes' services ready, of all, summed (#611): a stack that works
+    /// in a lane while its main tree is stopped does not look idle.
+    pub lane_ready: usize,
+    pub lane_total: usize,
     pub attention: Vec<Item>,
 }
 
@@ -180,9 +188,15 @@ fn stack(
         });
     }
     let mut starting = false;
+    let (mut jobs, mut lane_ready, mut lane_total) = (0, 0, 0);
     for (lane, g) in streams {
         if e.running {
             starting |= g.starting;
+            jobs += g.jobs;
+            if lane.is_some() {
+                lane_ready += g.ready;
+                lane_total += g.total;
+            }
             attention.extend(g.attention.iter().cloned().map(|mut i| {
                 i.lane = lane.clone();
                 i
@@ -206,6 +220,9 @@ fn stack(
         ready: main.ready,
         total: main.total,
         lanes: streams.keys().filter(|l| l.is_some()).count(),
+        jobs,
+        lane_ready,
+        lane_total,
         attention,
     }
 }
@@ -274,6 +291,9 @@ pub(crate) struct StackGlance {
     pub ready: usize,
     pub total: usize,
     pub lanes: usize,
+    pub jobs: usize,
+    pub lane_ready: usize,
+    pub lane_total: usize,
 }
 
 /// Every stack's figures in `sum`, for `/hub/events`.
@@ -286,6 +306,9 @@ pub(crate) fn glances(sum: &Summary) -> Vec<StackGlance> {
             ready: st.ready,
             total: st.total,
             lanes: st.lanes,
+            jobs: st.jobs,
+            lane_ready: st.lane_ready,
+            lane_total: st.lane_total,
         })
         .collect()
 }
@@ -343,6 +366,39 @@ mod tests {
         assert_eq!((s.ready, s.total, s.lanes), (2, 3, 1));
         assert_eq!(s.attention[0].lane.as_deref(), Some("feat-x"));
         assert_eq!(overall(&[s]), "attention");
+    }
+
+    /// #611: a job running for hours in a lane, while the main tree is
+    /// stopped, is neither a start nor an idle stack.
+    #[test]
+    fn a_running_job_is_counted_and_the_lanes_have_their_figures() {
+        let streams = BTreeMap::from([
+            (
+                None,
+                Glance {
+                    total: 4,
+                    ..Default::default()
+                },
+            ),
+            (
+                Some("run-8".to_string()),
+                Glance {
+                    ready: 1,
+                    total: 4,
+                    jobs: 1,
+                    ..Default::default()
+                },
+            ),
+        ]);
+        let s = stack(&entry("ab12", true), None, &streams);
+        assert_eq!(s.state, "ok");
+        assert_eq!(
+            (s.ready, s.total, s.jobs, s.lane_ready, s.lane_total),
+            (0, 4, 1, 1, 4)
+        );
+        // A stopped stack's stale streams count nothing.
+        let s = stack(&entry("ab12", false), None, &streams);
+        assert_eq!((s.jobs, s.lane_ready, s.lane_total), (0, 0, 0));
     }
 
     #[test]
@@ -427,11 +483,15 @@ mod tests {
             ready: 2,
             total: 3,
             lanes: 1,
+            jobs: 1,
+            lane_ready: 1,
+            lane_total: 4,
         })
         .unwrap();
         assert_eq!(
             v,
-            serde_json::json!({ "id": "ab12", "state": "ok", "ready": 2, "total": 3, "lanes": 1 })
+            serde_json::json!({ "id": "ab12", "state": "ok", "ready": 2, "total": 3, "lanes": 1,
+                "jobs": 1, "lane_ready": 1, "lane_total": 4 })
         );
     }
 

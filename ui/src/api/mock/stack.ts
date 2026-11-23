@@ -42,6 +42,8 @@ export class MockStack {
   }
   /** Mock lanes started from the dashboard (`agent-login-fix` runs from the start; the shop's `review-cart` too, on a node). */
   startedLanes = new Set<string>();
+  /** The started lanes' services as the hub's summary sums them (`?mock=longjob`); the mock has no lane streams of its own. */
+  laneFigures = { ready: 0, total: 0, jobs: 0 };
   /** Worktrees without a stack file of their own (ADR-0055) until one is copied in. */
   noStackFile = new Set<string>(['C:\\work\\_wt\\1333']);
   /** Its containers run though its daemon does not (ADR-0096; `?mock=strays`). */

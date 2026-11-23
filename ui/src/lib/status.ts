@@ -31,18 +31,22 @@ export function statusLook(s: Status): StatusLook {
   return { label: cap(state), tone: 'neutral', busy: false, detail: null };
 }
 
+export type Bucket = 'healthy' | 'starting' | 'job' | 'failed' | 'idle';
+
 /**
  * Healthy/starting/failed buckets for the summary. Takes the service, not its
  * status alone: a job is `running` while it runs, and counts as ready only
  * once it completed (#591, as the daemon's #573 and the hub's #575 count).
+ * Until then it is in a bucket of its own, not "starting": a training of
+ * hours is not a service stuck in its start (#611).
  */
-export function statusBucket(svc: Pick<ServiceView, 'status' | 'kind'>): 'healthy' | 'starting' | 'failed' | 'idle' {
+export function statusBucket(svc: Pick<ServiceView, 'status' | 'kind'>): Bucket {
   const s = svc.status;
   switch (s.state) {
     case 'healthy':
       return 'healthy';
     case 'running':
-      return svc.kind === 'job' ? 'starting' : 'healthy';
+      return svc.kind === 'job' ? 'job' : 'healthy';
     case 'starting':
     case 'building':
       return 'starting';
