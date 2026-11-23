@@ -48,6 +48,13 @@ and listed with their assets on the
 
 ### Fixed
 
+- **A pool node frees the disk of a lane's expired data** (#621). What a
+  lane's containers wrote into its folder as root (Docker makes a missing
+  bind mount's folder that way) the node agent could not delete: the slot
+  stayed, was "removed" again every ten minutes with a log line, and its
+  disk was never freed. The agent now removes such files in a short-lived
+  container; what is left even so is said once and no longer counted as
+  kept. Needs the node's devstack updated.
 - **A service of a lane on a node whose port is 7600 starts** (#619). The
   lane's daemon listened on 7600 in its container, so a service the lane's
   offset moved onto 7600 (a dev server on 4200 at offset 3400) failed with
