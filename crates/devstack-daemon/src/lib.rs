@@ -137,8 +137,16 @@ pub fn read_info(state_dir: &Path) -> Option<DaemonInfo> {
 /// The `.gitignore` devstack writes into a repository's state folder: it
 /// ignores the folder, itself included, so `git status` never lists it and
 /// the repository's own `.gitignore` needs no line for it (as for the skill
-/// folders, ADR-0079).
+/// folders, ADR-0079). `/*`, not `*`: git ignores what is right in the
+/// folder and so all beneath it, while a file deeper down does not match.
+/// A lane runs from a copy beneath it, and a tool that walks the copy and
+/// reads the `.gitignore` files above it (Tailwind's scanner) would see none
+/// of the copy's files under `*` (#613).
 pub const STATE_GITIGNORE: &str =
+    "# Written by devstack: its state for this working tree, not the repository's.\n/*\n";
+
+/// What [`STATE_GITIGNORE`] was from #578 on: written again at the next start.
+const OLD_STATE_GITIGNORE: &str =
     "# Written by devstack: its state for this working tree, not the repository's.\n*\n";
 
 /// Create the state folder `.devstack/` of a working tree, with a
@@ -146,9 +154,10 @@ pub const STATE_GITIGNORE: &str =
 /// create the folder goes through here: the daemon's start, the CLI before
 /// it starts one, `devstack build`. A lane keeps its state under the main
 /// tree's folder (ADR-0024), so a worktree gets none of its own. A
-/// `.gitignore` already there is left as it is: written only when missing,
+/// `.gitignore` already there is left as it is (written only when missing,
 /// and with `create_new`, so a daemon and a CLI starting at the same moment
-/// do not write over each other.
+/// do not write over each other), unless it is the one an earlier devstack
+/// wrote.
 pub fn ensure_state_dir(state_dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(state_dir)?;
     match std::fs::OpenOptions::new()
@@ -160,7 +169,13 @@ pub fn ensure_state_dir(state_dir: &Path) -> std::io::Result<()> {
             use std::io::Write as _;
             f.write_all(STATE_GITIGNORE.as_bytes())
         }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            let path = state_dir.join(".gitignore");
+            if std::fs::read_to_string(&path).is_ok_and(|t| t == OLD_STATE_GITIGNORE) {
+                std::fs::write(&path, STATE_GITIGNORE)?;
+            }
+            Ok(())
+        }
         Err(e) => Err(e),
     }
 }
@@ -647,6 +662,70 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(state.join(".gitignore")).unwrap(),
             "daemon.log\n"
+        );
+    }
+
+    /// #613: a lane runs from a copy beneath the state folder (on a node
+    /// `/src/.devstack/lanes/main/src`). A tool that walks the copy and reads
+    /// the `.gitignore` files above it (Tailwind's scanner, the `ignore`
+    /// crate) must still see its files, while git ignores the whole folder.
+    #[test]
+    fn a_copy_beneath_the_state_folder_is_not_ignored_from_within() {
+        let repo = tempfile::tempdir().unwrap();
+        let o = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(repo.path())
+            .output()
+            .expect("git runs");
+        assert!(o.status.success());
+        let state = repo.path().join(".devstack");
+        super::ensure_state_dir(&state).unwrap();
+        let web = state.join("lane-x/lanes/main/src/web");
+        std::fs::create_dir_all(web.join("src")).unwrap();
+        std::fs::write(web.join("index.html"), "<div class=\"max-w-3xl\">").unwrap();
+        std::fs::write(web.join("src/App.vue"), "<template/>").unwrap();
+        for require_git in [true, false] {
+            let mut found: Vec<String> = ignore::WalkBuilder::new(&web)
+                .require_git(require_git)
+                .build()
+                .filter_map(Result::ok)
+                .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            found.sort();
+            assert_eq!(
+                found,
+                ["App.vue", "index.html"],
+                "require_git {require_git}"
+            );
+        }
+        let status = std::process::Command::new("git")
+            .args(["status", "--porcelain", "--untracked-files=all"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&status.stdout), "");
+    }
+
+    /// The file an earlier devstack wrote (`*`, #578) is written again with
+    /// the current rule at the next start; a changed one stays the user's.
+    #[test]
+    fn the_old_state_gitignore_is_replaced() {
+        let d = tempfile::tempdir().unwrap();
+        let state = d.path().join(".devstack");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(state.join(".gitignore"), super::OLD_STATE_GITIGNORE).unwrap();
+        super::ensure_state_dir(&state).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(state.join(".gitignore")).unwrap(),
+            super::STATE_GITIGNORE
+        );
+        let own = format!("{}daemon.log\n", super::OLD_STATE_GITIGNORE);
+        std::fs::write(state.join(".gitignore"), &own).unwrap();
+        super::ensure_state_dir(&state).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(state.join(".gitignore")).unwrap(),
+            own
         );
     }
 
