@@ -10,6 +10,7 @@
 //   ?mock=startfailed  the docs stack's last start from the dashboard failed
 //   ?mock=strays     the stopped docs stack's containers run (Docker started them again, ADR-0096)
 //   ?mock=longjob    shop's migrate job runs for hours; crm's main tree is stopped while a lane runs a job (#611)
+//   ?mock=heldhere   something else holds shop's api and db ports here, as for a lane on a node (#615)
 //   Add a stack with a path containing "broken": a stack file that does not load
 //   ?mock=nodocker   the Docker engine is stopped; "Start Docker" brings it up after 4 s
 //   ?mock=nopool     this machine is in no pool; ?mock=poolmember: a member, not an admin
@@ -279,6 +280,14 @@ class MockHub {
       for (const v of crm.view.services) v.status = { state: 'stopped' };
       crm.startedLanes.add('run-8');
       crm.laneFigures = { ready: 1, total: 4, jobs: 1 };
+    }
+    // `?mock=heldhere`: something else holds two of shop's ports here, as for a lane on a node (#615).
+    if (q.includes('heldhere')) {
+      const held = (p: number) => `port ${p} here: Only one usage of each socket address is normally permitted (os error 10048) (something else holds it; tried again until it is free)`;
+      const api = shop.view.services.find((v) => v.name === 'api');
+      if (api) api.not_forwarded_here = held(api.port ?? 5000);
+      const db = shop.view.infra.flatMap((g) => g.containers).find((c) => c.service === 'db');
+      if (db) db.not_forwarded_here = held(5432);
     }
     if (q.includes('startfailed')) docs.entry.start_error = 'Error: port 4000 (site) is taken by another process (node.exe, pid 4242)\n  devstack doctor names it; stop it or change the port in devstack.toml';
     // `?mock=skills`: shop was set up with an older devstack.
