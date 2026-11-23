@@ -457,7 +457,7 @@ mod tests {
             if cfg!(windows) {
                 "c:/w/lane"
             } else {
-                "c:/W/Lane"
+                "C:/W/Lane"
             }
         );
     }
