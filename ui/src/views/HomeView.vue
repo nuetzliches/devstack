@@ -186,6 +186,17 @@ function manage() {
             <Icon name="arrowUpDown" :size="14" /> Order
           </button>
         </StackOrderMenu>
+        <button
+          v-if="ordering.stale.value"
+          type="button"
+          class="chip-toggle order-btn"
+          title="The order has changed: update it"
+          aria-label="Update the order of the stacks"
+          data-testid="overview-order-refresh"
+          @click="ordering.refresh()"
+        >
+          <Icon name="restart" :size="14" /> Update order
+        </button>
         <div class="btn-group views" role="group" aria-label="View">
           <button
             v-for="v in views"

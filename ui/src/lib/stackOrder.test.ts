@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { ref } from 'vue';
 import {
   filterStacks,
   forgetFavourite,
@@ -112,6 +113,55 @@ describe('the order of two pages', () => {
     page.choose('edited');
     await Promise.resolve();
     expect(page.sort(stacks).map((s) => s.id)).toEqual(['a', 'b']);
+  });
+});
+
+describe('the hint that the order would change', () => {
+  const mk = (a: number, b: number) => [
+    { id: 'a', name: 'alpha', last_commit: a },
+    { id: 'b', name: 'beta', last_commit: b },
+  ];
+
+  it('is never shown by name', () => {
+    const stacks = mk(100, 200);
+    const page = useStackOrdering(() => stacks);
+    page.choose('name');
+    stacks[0].last_commit = 900;
+    expect(page.stale.value).toBe(false);
+  });
+
+  it('shows when a commit would move a row, not for a newer time that keeps the order, and refresh clears it', async () => {
+    // A ref stands in for the hub's list, which the stream replaces.
+    const list = ref(mk(100, 200));
+    const page = useStackOrdering(() => list.value);
+    page.choose('edited');
+    await Promise.resolve();
+    expect(page.stale.value).toBe(false);
+    list.value = mk(100, 300);
+    await Promise.resolve();
+    expect(page.stale.value).toBe(false);
+    list.value = mk(400, 300);
+    await Promise.resolve();
+    expect(page.sort(list.value).map((x) => x.id)).toEqual(['b', 'a']);
+    expect(page.stale.value).toBe(true);
+    page.refresh();
+    await Promise.resolve();
+    expect(page.sort(list.value).map((x) => x.id)).toEqual(['a', 'b']);
+    expect(page.stale.value).toBe(false);
+  });
+
+  it('follows the opened times', async () => {
+    const stacks = [{ id: 'a', name: 'alpha' }, { id: 'b', name: 'beta' }];
+    const page = useStackOrdering(() => stacks);
+    page.choose('opened');
+    await Promise.resolve();
+    expect(page.stale.value).toBe(false);
+    noteOpened('b', 5000);
+    expect(page.stale.value).toBe(true);
+    page.refresh();
+    await Promise.resolve();
+    expect(page.sort(stacks).map((x) => x.id)).toEqual(['b', 'a']);
+    expect(page.stale.value).toBe(false);
   });
 });
 

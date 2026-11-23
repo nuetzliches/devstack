@@ -9,6 +9,17 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Changed
+
+- **The dashboard says when the order of the stacks has gone stale.** "Last
+  opened first" and "Last edited first" are a snapshot taken when the page
+  loads or the order is chosen, so a new commit or an opened stack moved
+  nothing, and only choosing the order again or reloading showed it. Now,
+  when the order would change, the sidebar's heading and the start page
+  show a button ("Update order") that takes the snapshot anew; nothing
+  moves until it is clicked. A newer commit that keeps the order shows
+  nothing.
+
 ### Fixed
 
 - **`devstack doctor` names a stack's port shift and checks the ports

@@ -316,6 +316,21 @@ describe('the order of the start page', () => {
     unmount();
   });
 
+  it('offers to update the order when a commit would move a tile, and moves nothing before', async () => {
+    const { el, events, unmount } = await mounted([gamma, alpha, beta]);
+    const refresh = () => el.querySelector<HTMLElement>('[data-testid="overview-order-refresh"]');
+    await choose(el, 'edited');
+    expect(refresh()).toBeNull();
+    events.onMessage({ type: 'stacks', stacks: [gamma, stack('aa01', 'alpha', { last_commit: 900 }), beta] });
+    await settle();
+    expect(names(el)).toEqual(['beta', 'alpha', 'gamma']);
+    refresh()!.click();
+    await settle();
+    expect(names(el)).toEqual(['alpha', 'beta', 'gamma']);
+    expect(refresh()).toBeNull();
+    unmount();
+  });
+
   it('puts the favourites first whatever the order', async () => {
     useFavourites().toggle('cc03');
     const { el, unmount } = await mounted([gamma, alpha, beta]);

@@ -486,6 +486,17 @@ function toggleFavourite(s: StackEntry) {
         </button>
       </StackOrderMenu>
       <button
+        v-if="ordering.stale.value"
+        type="button"
+        class="head-btn"
+        title="The order has changed: update it"
+        aria-label="Update the order of the stacks"
+        data-testid="sidebar-order-refresh"
+        @click="ordering.refresh()"
+      >
+        <Icon name="restart" :size="14" />
+      </button>
+      <button
         type="button"
         class="head-btn"
         title="Fold all stacks"

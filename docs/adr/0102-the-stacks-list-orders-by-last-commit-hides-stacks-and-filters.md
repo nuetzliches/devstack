@@ -75,3 +75,24 @@ As built:
   favourites. A stack hidden in one browser is listed in another.
 - ADR-0084 gains a third choice, and its note that hiding stays open is
   answered here; ADR-0086 point 5 is decided here.
+
+## Addendum 2026-11-23
+
+The snapshot of points 2 (here) and 2 (ADR-0084) stays, but a user who left
+the page open saw no sign that the order had gone stale: only choosing the
+order again, or a reload, took a new snapshot. The owner approved three
+points in the conversation on **2026-11-23**:
+
+| # | Category | Point | Beats | Reversing costs |
+|---|---|---|---|---|
+| 1 | concept | The snapshot stays; when the order the times known now would give differs from the one shown, the sidebar's heading shows a button whose click takes the snapshot anew. Nothing moves by itself. | Re-sorting live (rows jump under the pointer); re-sorting once the pointer has left the list (a hidden timing rule). | Low: one button, UI code. |
+| 2 | concept | The hint applies to "last opened" and "last edited", never to "by name", and only when the **order** would change, not at every newer commit time. | A hint at every change of the data. | Low. |
+| 3 | concept | The start page shows the same hint beside its order button (one choice for both pages, as the order itself). | The sidebar alone. | Low. |
+
+As built: `useStackOrdering` (`ui/src/lib/stackOrder.ts`) returns `stale`
+(the ids of the snapshot's order against the order the live commit times,
+opened times and favourites give) and `refresh()` (choosing the order
+already chosen, so both pages take their snapshots anew). The opened times
+bump a counter so `stale` follows them, as localStorage is not reactive.
+Decided on its own: no hub state and no API change. Tests:
+`stackOrder.test.ts`, `Sidebar.test.ts`, `HomeView.test.ts`.
