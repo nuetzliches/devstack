@@ -11,6 +11,20 @@ and listed with their assets on the
 
 ### Fixed
 
+- **`devstack doctor` names a stack's port shift and checks the ports
+  `devstack up` would check.** It said "ports: free" for a stack shifted
+  +2000 while another stack ran on one of its Compose host ports. It then
+  offered `devstack up --shift none`, which was refused, and the stack
+  stayed down. It checked only the services' ports, without the shift.
+  Now, while the stack is down, doctor makes the same check as `up`: the
+  services' and the containers' host ports at the stack's shift, the other
+  stacks' claims, and what holds a port now. It warns with who holds a
+  port. For a shifted stack, doctor names the shift, says that it sticks,
+  and says whether `--shift none` would start now or which stack or
+  program holds which port. `devstack status`, the MCP `status` and the
+  note `up --shift` prints say the same instead of always offering
+  `--shift none`.
+
 - **A long-running job no longer reads as "starting" for its whole run**
   (#611). In a stack's overview a job that runs is in a state of its own
   ("running as a job"), counted neither as healthy nor as starting, with

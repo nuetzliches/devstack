@@ -405,45 +405,86 @@ fn ports(stack: &devstack_config::Stack, stack_file: &Path) -> Vec<Finding> {
         Ok(d) => d,
         Err(e) => return vec![f(Level::Fail, format!("daemon: {e:#}"))],
     };
-    if let Some(c) = daemon {
-        let mut out = vec![f(Level::Ok, "ports: the stack runs, its daemon holds them")];
-        // Containers healthy inside Docker, but not reachable from here.
-        if let Ok((200, body)) = c.call_raw("POST", "/v1/infra/check", None)
-            && let Ok(lost) = serde_json::from_str::<Vec<serde_json::Value>>(&body)
-        {
-            for l in lost {
-                out.push(f(
-                    Level::Fail,
-                    format!(
-                        "container {}: {} accepts connections from this machine and closes them at once: Docker lost the port forward (restart the container: `docker compose restart {}` or the dashboard, else Docker Desktop), or nothing listens on it inside",
-                        l["service"].as_str().unwrap_or(""),
-                        l["ports"].as_array().into_iter().flatten().filter_map(|p| p.as_str()).collect::<Vec<_>>().join(", "),
-                        l["service"].as_str().unwrap_or("")
-                    ),
-                ));
+    // The check `up` makes (ADR-0082, ADR-0096): at the stack's shift
+    // while it is down, at shift 0 while it is shifted.
+    // A worktree's lane takes its ports, the main tree's moved by its
+    // offset, when it starts; `up` checks no shift there.
+    let mut out = if crate::client::worktree().is_some() {
+        vec![f(
+            Level::Ok,
+            if daemon.is_some() {
+                "ports: the lane runs, its daemon holds them"
+            } else {
+                "ports: a lane takes its ports when it starts"
+            },
+        )]
+    } else {
+        match crate::shift::now(stack, stack_file, daemon.is_some()) {
+            Ok(n) => ports_findings(&n, daemon.is_some()),
+            Err(e) => vec![f(Level::Warn, format!("ports: not checked: {e:#}"))],
+        }
+    };
+    // Containers healthy inside Docker, but not reachable from here.
+    if let Some(c) = daemon
+        && let Ok((200, body)) = c.call_raw("POST", "/v1/infra/check", None)
+        && let Ok(lost) = serde_json::from_str::<Vec<serde_json::Value>>(&body)
+    {
+        for l in lost {
+            out.push(f(
+                Level::Fail,
+                format!(
+                    "container {}: {} accepts connections from this machine and closes them at once: Docker lost the port forward (restart the container: `docker compose restart {}` or the dashboard, else Docker Desktop), or nothing listens on it inside",
+                    l["service"].as_str().unwrap_or(""),
+                    l["ports"].as_array().into_iter().flatten().filter_map(|p| p.as_str()).collect::<Vec<_>>().join(", "),
+                    l["service"].as_str().unwrap_or("")
+                ),
+            ));
+        }
+    }
+    out
+}
+
+/// What the port check of `up` found, as doctor says it (`runs`: the
+/// stack's daemon runs, so its ports at its shift are its own). A shift
+/// is named, with what `--shift none` would meet now.
+fn ports_findings(n: &crate::shift::Now, runs: bool) -> Vec<Finding> {
+    let at = match n.shift {
+        0 => String::new(),
+        s => format!(" at its shift +{s}"),
+    };
+    let mut out = vec![if runs {
+        f(
+            Level::Ok,
+            format!("ports: the stack runs{at}, its daemon holds them"),
+        )
+    } else {
+        match &n.refused {
+            None => f(Level::Ok, format!("ports: free{at}")),
+            Some(who) => {
+                let mut text = format!(
+                    "ports{at}: `devstack up` would not start now: {}",
+                    who.join("; ")
+                );
+                if let Some(p) = n.program {
+                    text.push_str(&format!(
+                        " (find the program: `Get-NetTCPConnection -LocalPort {p}` on Windows, `lsof -nP -iTCP:{p} -sTCP:LISTEN` on macOS and Linux)"
+                    ));
+                }
+                f(Level::Warn, text)
             }
         }
-        return out;
-    }
-    let taken: Vec<String> = stack
-        .services
-        .iter()
-        .filter_map(|(n, s)| {
-            let p = s.port?;
-            devstack_daemon::supervisor::port_in_use(p).then(|| format!("{p} ({n})"))
-        })
-        .collect();
-    if taken.is_empty() {
-        vec![f(Level::Ok, "ports: free")]
-    } else {
-        vec![f(
-            Level::Warn,
+    }];
+    if let Some(u) = &n.unshifted {
+        out.push(f(
+            Level::Info,
             format!(
-                "ports in use by another process while the stack is down: {}; find the owner (`Get-NetTCPConnection -LocalPort <p>` / `ss -ltnp`)",
-                taken.join(", ")
+                "ports: shifted +{} on this machine, which sticks to this stack until `--shift none`; {}",
+                u.shift,
+                crate::shift::shift_back_text(u)
             ),
-        )]
+        ));
     }
+    out
 }
 
 /// `stacks` with what the running containers of the stopped ones publish
@@ -913,6 +954,80 @@ pub fn text(findings: &[Finding]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The case of 2026-11-23: doctor said "ports: free" for a stack
+    /// shifted +2000 and never named the shift, though `--shift none` was
+    /// refused for a port another running stack held.
+    #[test]
+    fn a_shift_is_named_with_what_shift_none_would_meet() {
+        use crate::shift::{Now, Unshifted};
+        let held = Unshifted {
+            shift: 2000,
+            holders: vec!["the stack `timetrack` (/work/timetrack) runs on 5433".into()],
+            program: None,
+        };
+        let n = Now {
+            shift: 2000,
+            refused: None,
+            program: None,
+            unshifted: Some(held.clone()),
+        };
+        let out = ports_findings(&n, false);
+        assert_eq!(out.len(), 2);
+        assert!(out[0].level == Level::Ok && out[0].text == "ports: free at its shift +2000");
+        assert!(out[1].level == Level::Info);
+        assert!(
+            out[1]
+                .text
+                .starts_with("ports: shifted +2000 on this machine, which sticks"),
+            "{}",
+            out[1].text
+        );
+        assert!(
+            out[1]
+                .text
+                .contains("would not start now: the stack `timetrack`")
+                && out[1].text.contains("5433"),
+            "{}",
+            out[1].text
+        );
+        // Running: its own ports at the shift, and the same note.
+        let out = ports_findings(&n, true);
+        assert_eq!(
+            out[0].text,
+            "ports: the stack runs at its shift +2000, its daemon holds them"
+        );
+        assert_eq!(out.len(), 2);
+        // Not shifted and free: one line, as before.
+        let plain = Now {
+            shift: 0,
+            refused: None,
+            program: None,
+            unshifted: None,
+        };
+        let out = ports_findings(&plain, false);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].text, "ports: free");
+    }
+
+    #[test]
+    fn ports_up_would_be_refused_on_are_a_warning_with_who_holds_them() {
+        let n = crate::shift::Now {
+            shift: 0,
+            refused: Some(vec!["another program holds 5433".into()]),
+            program: Some(5433),
+            unshifted: None,
+        };
+        let out = ports_findings(&n, false);
+        assert!(out[0].level == Level::Warn, "{}", out[0].text);
+        assert!(
+            out[0].text.starts_with(
+                "ports: `devstack up` would not start now: another program holds 5433"
+            ) && out[0].text.contains("Get-NetTCPConnection -LocalPort 5433"),
+            "{}",
+            out[0].text
+        );
+    }
 
     #[test]
     fn a_pools_upstream_the_agent_has_itself_is_named_with_its_removal() {

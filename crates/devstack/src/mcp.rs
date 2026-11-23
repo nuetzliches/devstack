@@ -773,7 +773,7 @@ fn call(name: &str, args: &Value, file: &Path) -> Result<String> {
     match name {
         "status" => {
             let c = connect(file)?;
-            let mut text = client::status_text(&c.stack()?);
+            let mut text = client::status_text(&client::with_shift_back(c.stack()?, file));
             if let Some(n) = client::lanes_note(&c) {
                 text.push_str(&format!("\n{n}\n"));
             }

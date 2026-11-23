@@ -749,7 +749,7 @@ pub fn print_status(stack: &Value) {
 /// `devstack status`: the table, a note when the generated agent skills no
 /// longer match, and where the dashboard shows this tree.
 pub fn print_status_for(stack: &Value, stack_file: &Path) {
-    print_status(stack);
+    print_status(&with_shift_back(stack.clone(), stack_file));
     let c = Client::probe(&state_dir(stack_file).unwrap_or_default())
         .ok()
         .flatten();
@@ -764,6 +764,27 @@ pub fn print_status_for(stack: &Value, stack_file: &Path) {
         "\n{}",
         crate::hubcmd::dashboard_line(&daemon_file(stack_file), lane)
     );
+}
+
+/// `stack` with `shift_back`, the main tree's shift note as it stands now:
+/// whether `devstack up --shift none` would start, or who holds its own
+/// ports (ADR-0082, the check `up` makes). Only for the main tree with a
+/// shift; else, or when the check fails, `stack` as it is.
+pub fn with_shift_back(mut stack: Value, stack_file: &Path) -> Value {
+    if worktree().is_some()
+        || stack["lane"].is_string()
+        || stack["shift"].as_u64().is_none_or(|n| n == 0)
+    {
+        return stack;
+    }
+    let u = devstack_config::load(stack_file)
+        .ok()
+        .and_then(|cfg| crate::shift::now(&cfg, stack_file, true).ok())
+        .and_then(|n| n.unshifted);
+    if let Some(u) = u {
+        stack["shift_back"] = Value::String(crate::shift::shift_back_text(&u));
+    }
+    stack
 }
 
 /// The service table and the infrastructure, as `devstack status` shows them.
@@ -836,7 +857,10 @@ pub fn status_text(stack: &Value) -> String {
     if let Some(n) = stack["shift"].as_u64().filter(|n| *n > 0) {
         let _ = writeln!(
             out,
-            "ports: shifted +{n} on this machine (ADR-0082; `devstack up --shift none` takes it back)\n"
+            "ports: shifted +{n} on this machine ({})\n",
+            stack["shift_back"]
+                .as_str()
+                .unwrap_or("ADR-0082; `devstack up --shift none` takes it back")
         );
     }
     if stack["config_changed"].as_bool() == Some(true) {
@@ -3139,6 +3163,25 @@ data: {\"type\":\"line\",\"text\":\"c\"}\n\n";
         let stack = serde_json::json!({ "services": [], "watcher_error": "the file watcher lost events (overflow)" });
         assert!(status_text(&stack).starts_with("! the file watcher lost events (overflow)\n"));
         assert!(!status_text(&serde_json::json!({ "services": [] })).contains('!'));
+    }
+
+    #[test]
+    fn the_shift_note_says_who_holds_the_own_ports() {
+        let plain = status_text(&serde_json::json!({ "services": [], "shift": 2000 }));
+        assert!(
+            plain.starts_with("ports: shifted +2000 on this machine (ADR-0082; `devstack up --shift none` takes it back)"),
+            "{plain}"
+        );
+        let held = status_text(&serde_json::json!({
+            "services": [],
+            "shift": 2000,
+            "shift_back": "`devstack up --shift none` would not start now: the stack `timetrack` (/work/timetrack) runs on 5433"
+        }));
+        assert!(
+            held.starts_with("ports: shifted +2000 on this machine (`devstack up --shift none` would not start now: the stack `timetrack`"),
+            "{held}"
+        );
+        assert!(!held.contains("takes it back"), "{held}");
     }
 
     #[test]
