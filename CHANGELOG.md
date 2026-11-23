@@ -11,6 +11,15 @@ and listed with their assets on the
 
 ### Fixed
 
+- **Tailwind (and any tool that reads `.gitignore` files) sees a lane's
+  sources again** (#613). Since 0.50.0 the state folder `.devstack/`
+  ignored itself with a `.gitignore` of `*`; a lane runs from a copy
+  beneath it, here and on a pool node, and `*` matched every file of the
+  copy for a tool walking it from inside: Tailwind v4's scanner found no
+  source and emitted no utility class from the app's own files. The file
+  is `/*` now (git still ignores the whole folder), and the one an
+  earlier devstack wrote is replaced at the next start.
+
 - **A long-running job no longer reads as "starting" for its whole run**
   (#611). In a stack's overview a job that runs is in a state of its own
   ("running as a job"), counted neither as healthy nor as starting, with
