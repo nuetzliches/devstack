@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 pub const MIN_NEED: Need = Need {
     cpus: 0.25,
     memory: 256 << 20,
+    builds: 0,
     disk_repo: 0,
     disk_lane: 0,
     gpus: None,

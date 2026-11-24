@@ -201,4 +201,4 @@ stay.
 | [0116](0116-admins-see-a-machine-that-asks-to-run-lanes.md) | Admins see a machine that asks to run lanes, and are told when one starts | Accepted (card in the pull request); built |
 | [0117](0117-the-dashboard-pushes-a-branch-that-is-ahead-of-its-upstream.md) | The dashboard pushes a branch that is ahead of its upstream, and the start page shows how far each stack is | Accepted (card in the pull request); built |
 | [0118](0118-lane-list-says-which-lanes-are-done.md) | `lane list` says which lanes are done, and devstack removes none of them | Accepted (card in the pull request); built; amended 2026-11-23 (`new`, no command for a name a shell reads) |
-| [0119](0119-a-lanes-memory-counts-what-it-owns-and-names-its-builds.md) | A lane's memory counts what it owns and names its builds; main is stopped when only what serves its lanes runs | Accepted (card in the pull request); points 1, 2, 4 built, point 3 follows |
+| [0119](0119-a-lanes-memory-counts-what-it-owns-and-names-its-builds.md) | A lane's memory counts what it owns and names its builds; main is stopped when only what serves its lanes runs | Accepted (card in the pull request); built |

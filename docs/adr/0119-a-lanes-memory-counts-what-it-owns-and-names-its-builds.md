@@ -1,6 +1,6 @@
 # ADR-0119: A lane's memory counts what it owns and names its builds; main is stopped when only what serves its lanes runs
 
-- **Status:** Accepted (card in the pull request); points 1, 2 and 4 built, point 3 follows
+- **Status:** Accepted (card in the pull request); built (points 1, 2 and 4 in #626, point 3 in its own pull request)
 - **Date:** 2026-11-24
 - **Deciders:** project owner
 - **Related:** [ADR-0009](0009-the-daemon-owns-every-process-tree.md) (process trees), [ADR-0020](0020-builds-share-one-long-lived-build-job.md) (the build job, its servers stay warm), [ADR-0049](0049-a-lanes-need-is-measured-disk-included.md) (a lane's need), [ADR-0080](0080-the-main-tree-answers-as-a-lane-shared-is-deprecated.md) (`singleton`), [ADR-0095](0095-the-daemon-ends-with-the-last-tree.md) (main stops alone), [ADR-0070](0070-a-review-card-comes-before-the-code-an-adr-records-what-was-built.md)
@@ -58,6 +58,18 @@ As built (points 1, 2 and 4):
    `singleton` while a lane runs; the stop's toast reads `kept`,
    `containers` and `lanes` of the daemon's `200`; the stack page's
    "main stopped" names what keeps running.
+
+As built (point 3, a pull request of its own after #626):
+
+4. **The need's builds.** `Need::builds` in `crates/devstack-node/src/share.rs`
+   (left out at zero, so an older peer reads the rest; `max` keeps the
+   larger). The daemon's estimate from the main tree takes the build
+   series' peak (`Estimate::builds`); a node asks each lane's daemon for
+   `builds` of `/v1/usage` every round, all at once with three seconds each
+   (`lane_builds`), and keeps the most in the run (`Runs::builds`), whence
+   the coordinator's footprint keeps the most of the last five. The lease
+   step says "of it builds …" and `remote_lane_need` logs `builds`.
+   Placement is unchanged: it takes `memory`.
 
 ## Consequences
 

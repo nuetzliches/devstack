@@ -866,6 +866,7 @@ fn lane_estimate(
     let need = devstack_node::share::Need {
         cpus: e.cpus.max(CPUS),
         memory: if runs { e.memory.max(MEMORY) } else { MEMORY },
+        builds: if runs { e.builds } else { 0 },
         disk_repo: e.disk_repo,
         disk_lane: if counted { e.disk_lane } else { DISK },
         gpus: None,

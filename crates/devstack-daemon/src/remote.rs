@@ -581,6 +581,7 @@ pub fn floor_of(n: &devstack_config::model::Need) -> Option<devstack_node::share
     Some(devstack_node::share::Need {
         cpus: n.cpus.unwrap_or(0.0),
         memory: n.memory.unwrap_or(0),
+        builds: 0,
         disk_repo: 0,
         disk_lane: n.disk.unwrap_or(0),
         gpus: n.gpus.as_ref().map(|g| devstack_node::share::GpuNeed {
@@ -870,13 +871,22 @@ impl RemoteLane {
             crate::diag::info(
                 "remote_lane_need",
                 serde_json::json!({ "lane": spec.name, "node": offer.node.name,
-                    "cpus": n.cpus, "memory": n.memory, "disk_repo": n.disk_repo,
-                    "disk_lane": n.disk_lane, "from": from }),
+                    "cpus": n.cpus, "memory": n.memory, "builds": n.builds,
+                    "disk_repo": n.disk_repo, "disk_lane": n.disk_lane, "from": from }),
             );
+            // The builds' part of the memory (ADR-0119 point 3), when known.
+            let builds = if n.builds > 0 {
+                format!(
+                    " (of it builds {})",
+                    devstack_node::coordinator::gib(n.builds)
+                )
+            } else {
+                String::new()
+            };
             (spec.step)(
                 1,
                 &format!(
-                    "lease on {}: {:.1} CPU, {} memory, {} disk ({from})",
+                    "lease on {}: {:.1} CPU, {} memory{builds}, {} disk ({from})",
                     offer.node.name,
                     n.cpus,
                     devstack_node::coordinator::gib(n.memory),
