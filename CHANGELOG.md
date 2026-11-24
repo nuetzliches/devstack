@@ -9,6 +9,14 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Fixed
+
+- **A stopped stack no longer shows the memory of its containers.** When
+  the last container stopped, the daemon kept its last load, so a group and
+  the lane card showed gigabytes after `down` (and the lane's estimate for
+  the pool counted them) until the next container started. Now every
+  stopped container is idle at the next round, the last one too.
+
 ## [0.53.0] - 2026-11-23
 
 The dashboard pushes a branch that is ahead of its upstream, and the start
