@@ -242,6 +242,12 @@ pub fn github_desktop_open(exe: &Path, path: &str) -> Result<(), String> {
     os::github_desktop_open(exe, path)
 }
 
+/// GitHub Desktop (`exe` from [`github_desktop`]) on its own, with no folder:
+/// to clone a repository there.
+pub fn github_desktop_start(exe: &Path) -> Result<(), String> {
+    os::github_desktop_start(exe)
+}
+
 /// Orca's CLI: on `PATH`, or in its install folder.
 pub fn orca() -> Option<PathBuf> {
     os::orca()

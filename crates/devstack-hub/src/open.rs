@@ -209,6 +209,38 @@ pub fn open(id: &str, tree: &Path, repo: &Path, stack_file: &Path) -> Result<(),
     .map_err(OpenError::Failed)
 }
 
+/// Start the Git client `id` to clone a repository that is not on this
+/// machine yet (ADR-0046, amendment 2026-11-24): with `url` (checked by
+/// [`clone_url`]) its clone dialog, the address filled in; without, the
+/// program alone. Where the clone goes, the user chooses there.
+pub fn clone(id: &str, url: Option<&str>) -> Result<(), OpenError> {
+    let f = found()
+        .into_iter()
+        .find(|f| f.opener.id == id && f.opener.kind == Kind::Git)
+        .ok_or(OpenError::Unknown)?;
+    let _front = devstack_desktop::Front::take();
+    match (&f.how, url) {
+        // Its own link: `openRepo/<url>` opens the clone dialog.
+        (How::GitHubDesktop(_), Some(url)) => {
+            devstack_desktop::shell_open(&format!("x-github-client://openRepo/{url}"))
+        }
+        (How::GitHubDesktop(exe), None) => devstack_desktop::github_desktop_start(exe),
+        _ => return Err(OpenError::Unknown),
+    }
+    .map_err(OpenError::Failed)
+}
+
+/// A repository's address as it may be handed to a Git client: `https://`, a
+/// host, and only the characters of a path. No query or fragment, which the
+/// client's link would read as its own parameters (`?branch=`).
+pub fn clone_url(s: &str) -> Option<&str> {
+    let s = s.trim();
+    let rest = s.strip_prefix("https://")?;
+    let host = rest.split('/').next()?;
+    let allowed = |c: char| c.is_ascii_alphanumeric() || "-._~/:@%+".contains(c);
+    (!host.is_empty() && s.len() <= 2048 && rest.chars().all(allowed)).then_some(s)
+}
+
 /// Start the agent `id` in `tree` with `prompt` (written by the hub, never by
 /// the page): a link that fills its input, or Orca's agent, which starts on
 /// it at once.
@@ -406,6 +438,25 @@ mod tests {
     fn git_clients_come_after_the_editors_before_the_agents() {
         assert!(Kind::Editor < Kind::Git && Kind::Git < Kind::Agent);
         assert_eq!(serde_json::to_value(Kind::Git).unwrap(), "git");
+    }
+
+    #[test]
+    fn a_clone_url_is_https_and_a_plain_path() {
+        assert_eq!(
+            clone_url(" https://github.com/acme/shop.git "),
+            Some("https://github.com/acme/shop.git")
+        );
+        assert_eq!(
+            clone_url("https://git.example.com:8443/team/shop"),
+            Some("https://git.example.com:8443/team/shop")
+        );
+        assert_eq!(clone_url("http://github.com/acme/shop"), None);
+        assert_eq!(clone_url("git@github.com:acme/shop.git"), None);
+        assert_eq!(clone_url("https:///acme/shop"), None);
+        assert_eq!(clone_url("https://github.com/acme/shop?branch=x"), None);
+        assert_eq!(clone_url("https://github.com/acme/shop#x"), None);
+        assert_eq!(clone_url("https://github.com/acme/my shop"), None);
+        assert_eq!(clone_url("https://github.com/a\"b"), None);
     }
 
     #[test]

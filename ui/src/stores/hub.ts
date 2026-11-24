@@ -282,6 +282,11 @@ export const useHub = defineStore('hub', () => {
     await act({ label: `Open in ${o.label}`, path: paths.open, body: { stack, path, with: o.id }, success: false });
   }
 
+  /** Start a Git client to clone a repository; with an https address, its clone dialog with it filled in. */
+  async function cloneWith(o: Opener, url?: string) {
+    await act({ label: `Clone with ${o.label}`, path: paths.clone, body: url ? { with: o.id, url } : { with: o.id }, success: false });
+  }
+
   return {
     status,
     version,
@@ -316,6 +321,7 @@ export const useHub = defineStore('hub', () => {
     checkUpdate,
     loadOpeners,
     openWith,
+    cloneWith,
     entry,
     save,
   };

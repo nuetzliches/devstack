@@ -676,6 +676,7 @@ fn router(state: AppState) -> axum::Router {
         .route("/hub/openers", get(openers))
         .route("/hub/openers/{id}/icon", get(opener_icon))
         .route("/hub/open", post(open_tree))
+        .route("/hub/clone", post(clone_with))
         .route("/hub/prompt", get(prompt))
         .route("/hub/agent", post(agent))
         .route("/hub/stacks/add", post(stack_add))
@@ -2209,6 +2210,51 @@ async fn open_tree(State(s): State<AppState>, Json(q): Json<OpenQuery>) -> Respo
         Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
         Ok(Err((status, msg))) => {
             diag::warn("open_failed", serde_json::json!({ "error": msg }));
+            err(status, msg)
+        }
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct CloneQuery {
+    with: String,
+    #[serde(default)]
+    url: Option<String>,
+}
+
+/// `POST /hub/clone {with, url?}`: start a Git client `GET /hub/openers`
+/// lists to clone a repository not on this machine yet; with an `https://`
+/// address, its clone dialog with it filled in. No folder: the clone is the
+/// user's, in the client (ADR-0046, amendment 2026-11-24).
+async fn clone_with(Json(q): Json<CloneQuery>) -> Response {
+    let url = match q.url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
+        None => None,
+        Some(u) => match open::clone_url(u) {
+            Some(u) => Some(u.to_string()),
+            None => {
+                return err(
+                    StatusCode::BAD_REQUEST,
+                    "an https:// address of a repository",
+                );
+            }
+        },
+    };
+    let started = tokio::task::spawn_blocking(move || {
+        open::clone(&q.with, url.as_deref()).map_err(|e| (q.with, e))
+    })
+    .await;
+    match started {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Err((with, e))) => {
+            let (status, msg) = match e {
+                open::OpenError::Failed(why) => (StatusCode::BAD_GATEWAY, why),
+                _ => (
+                    StatusCode::BAD_REQUEST,
+                    format!("{with} is not a Git client found on this machine"),
+                ),
+            };
+            diag::warn("clone_failed", serde_json::json!({ "error": msg }));
             err(status, msg)
         }
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),

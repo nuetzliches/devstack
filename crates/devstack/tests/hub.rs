@@ -1770,6 +1770,32 @@ fn a_push_needs_the_hubs_own_page_and_reaches_the_remote() {
     assert_eq!(s, 400);
 }
 
+/// Cloning starts only a Git client, and hands it only an `https://` address
+/// (ADR-0046, amendment 2026-11-24): a file manager or an address with more
+/// in it is refused before anything starts.
+#[test]
+fn clone_starts_only_a_git_client_with_a_plain_address() {
+    let h = start();
+    let clone = |body: &str| {
+        http(
+            h.port,
+            &format!(
+                "POST /hub/clone HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                h.port,
+                token(&h),
+                body.len()
+            ),
+        )
+    };
+    let (s, _, body) = clone(r#"{"with":"files"}"#);
+    assert_eq!(s, 400, "{body}");
+    assert!(body.contains("not a Git client"), "{body}");
+    let (s, _, body) =
+        clone(r#"{"with":"github-desktop","url":"https://github.com/acme/shop?branch=x"}"#);
+    assert_eq!(s, 400, "{body}");
+    assert!(body.contains("https://"), "{body}");
+}
+
 /// A program's icon (ADR-0046, addendum 2026-11-23): a PNG for a program
 /// found here, cached by the browser; 404 for one that is not, which the
 /// page answers with the kind's icon. Explorer is on every Windows desktop;
