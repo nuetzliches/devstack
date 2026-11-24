@@ -1,5 +1,5 @@
 //! macOS: what the POSIX backend needs from the OS, from libproc (process
-//! lists, start times, CPU time and resident sets), and the machine's memory
+//! lists, start times, CPU time and physical footprints), and the machine's memory
 //! and CPU time from `sysctl` and the Mach host statistics (ADR-0054).
 //! There are no cgroups: a tree is its process group, and the shim notices
 //! the supervisor's death by polling `getppid()`.
@@ -200,8 +200,8 @@ pub(crate) fn group(pgid: i32) -> Option<Vec<i32>> {
     )
 }
 
-/// CPU time (user plus kernel, microseconds) and resident set (bytes) of
-/// one process; zero for what cannot be read.
+/// CPU time (user plus kernel, microseconds) and memory (bytes) of one
+/// process; zero for what cannot be read.
 pub(crate) fn process_usage(pid: u32) -> (u64, u64) {
     let Ok(pid) = i32::try_from(pid) else {
         return (0, 0);
@@ -210,9 +210,26 @@ pub(crate) fn process_usage(pid: u32) -> (u64, u64) {
         // The times are Mach absolute time units, not nanoseconds.
         Some(t) => (
             mach_to_ns(t.pti_total_user.saturating_add(t.pti_total_system)) / 1000,
-            t.pti_resident_size,
+            phys_footprint(pid).unwrap_or(t.pti_resident_size),
         ),
         None => (0, 0),
+    }
+}
+
+/// Its physical footprint, what Activity Monitor shows as its memory: its
+/// own pages, without the shared libraries the resident set counts again
+/// with every process of a tree.
+fn phys_footprint(pid: c_int) -> Option<u64> {
+    // SAFETY: a zeroed plain-data struct, passed for the flavor that fills
+    // exactly one.
+    unsafe {
+        let mut info: libc::rusage_info_v2 = mem::zeroed();
+        let ok = libc::proc_pid_rusage(
+            pid,
+            libc::RUSAGE_INFO_V2,
+            (&raw mut info).cast::<libc::rusage_info_t>(),
+        );
+        (ok == 0).then_some(info.ri_phys_footprint)
     }
 }
 
@@ -346,10 +363,15 @@ mod tests {
     /// Apple silicon. Other tests run in this process meanwhile: only the
     /// lower bound is tight.
     #[test]
-    fn cpu_time_and_resident_set_are_in_microseconds_and_bytes() {
+    fn cpu_time_and_footprint_are_in_microseconds_and_bytes() {
         let me = std::process::id();
-        let (before, rss) = process_usage(me);
-        assert!(rss >= 1 << 20, "{rss}");
+        let (before, footprint) = process_usage(me);
+        assert!(footprint >= 1 << 20, "{footprint}");
+        assert_eq!(
+            phys_footprint(me as i32),
+            Some(footprint),
+            "not the resident set"
+        );
         let t0 = Instant::now();
         let mut x = 0u64;
         while t0.elapsed() < Duration::from_millis(300) {

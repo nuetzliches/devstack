@@ -19,7 +19,11 @@ pub(crate) fn memory_available() -> Option<u64> {
 }
 
 fn meminfo(key: &str) -> Option<u64> {
-    let text = fs::read_to_string("/proc/meminfo").ok()?;
+    kb_field(&fs::read_to_string("/proc/meminfo").ok()?, key)
+}
+
+/// A `<key> <n> kB` line of `/proc` (meminfo, smaps_rollup), in bytes.
+fn kb_field(text: &str, key: &str) -> Option<u64> {
     let kb: u64 = text
         .lines()
         .find_map(|l| l.strip_prefix(key))?
@@ -102,10 +106,34 @@ fn live(pid: i32) -> bool {
     })
 }
 
-/// CPU time (user plus kernel, microseconds) and resident set (bytes) of
-/// one process; zero for what cannot be read.
+/// CPU time (user plus kernel, microseconds) and memory (bytes) of one
+/// process; zero for what cannot be read.
 pub(crate) fn process_usage(pid: u32) -> (u64, u64) {
-    (proc_cpu_us(pid), proc_rss(pid))
+    (
+        proc_cpu_us(pid),
+        proc_pss(pid).unwrap_or_else(|| proc_rss(pid)),
+    )
+}
+
+/// Its proportional set: each page it shares with others counted by its
+/// share, so a tree's sum counts the .NET runtime's pages once, not with
+/// every process (as the resident set does). `None` where the kernel does
+/// not let us read it (another user's process): then the resident set.
+fn proc_pss(pid: u32) -> Option<u64> {
+    kb_field(
+        &fs::read_to_string(format!("/proc/{pid}/smaps_rollup")).ok()?,
+        "Pss:",
+    )
+}
+
+/// `inactive_file` of a cgroup's `memory.stat`, in bytes.
+fn inactive_file(memory_stat: &str) -> Option<u64> {
+    memory_stat
+        .lines()
+        .find_map(|l| l.strip_prefix("inactive_file "))?
+        .trim()
+        .parse()
+        .ok()
 }
 
 fn proc_cpu_us(pid: u32) -> u64 {
@@ -227,7 +255,17 @@ impl Cgroup {
                 .find_map(|l| l.strip_prefix("usage_usec "))
                 .and_then(|v| v.trim().parse().ok())
         });
-        let memory = read("memory.current").and_then(|s| s.trim().parse().ok());
+        // Without the file cache the kernel may drop at once, as `docker
+        // stats` counts a container.
+        let memory = read("memory.current")
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .map(|m| {
+                m.saturating_sub(
+                    read("memory.stat")
+                        .and_then(|s| inactive_file(&s))
+                        .unwrap_or(0),
+                )
+            });
         let summed = || crate::posix::summed_usage(pids);
         Usage {
             cpu_us: cpu_us.unwrap_or_else(|| summed().cpu_us),
@@ -264,4 +302,28 @@ fn join_cgroup(procs: &std::ffi::CStr) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_process_counts_its_share_of_what_it_shares() {
+        let rollup = "55e0-7ffd ---p 00000000 00:00 0 [rollup]\nRss:  4096 kB\nPss:  1536 kB\nPss_Anon:  1024 kB\n";
+        assert_eq!(kb_field(rollup, "Pss:"), Some(1536 * 1024), "not Pss_Anon");
+        let me = std::process::id();
+        let (pss, rss) = (proc_pss(me).unwrap(), proc_rss(me));
+        assert!(pss > 0 && pss <= rss, "pss {pss}, rss {rss}");
+        // Read again: the process lives, its pages change by a few.
+        let used = process_usage(me).1;
+        assert!(used.abs_diff(pss) < pss / 4, "used {used}, pss {pss}");
+    }
+
+    #[test]
+    fn a_cgroup_does_not_count_the_cache_it_can_drop() {
+        let stat = "anon 1000\nfile 9000\nactive_file 3000\ninactive_file 6000\n";
+        assert_eq!(inactive_file(stat), Some(6000));
+        assert_eq!(inactive_file("anon 1\n"), None);
+    }
 }

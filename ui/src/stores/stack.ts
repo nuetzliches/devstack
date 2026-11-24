@@ -319,7 +319,7 @@ export const useStack = defineStore('stack', () => {
   const runningLanes = computed(() => (lanesOf.value === id.value ? lanes.value.filter((l) => l.active !== false).map((l) => l.name) : []));
   /** The main tree is shown and nothing of it runs, while its daemon stays for the lanes. */
   const mainIdle = computed(
-    () => running.value && lane.value === null && live.value && services.value.length > 0 && services.value.every((s) => statusBucket(s) === 'idle'),
+    () => running.value && lane.value === null && live.value && services.value.length > 0 && services.value.every((s) => statusBucket(s) === 'idle' || keptForLanes(s)),
   );
 
   /**
@@ -343,14 +343,22 @@ export const useStack = defineStore('stack', () => {
     }
   }
   /**
-   * Whether the main working tree runs something: its services, or with
-   * none its containers. Not known yet: it does while the daemon runs.
+   * A service that runs only because lanes do: a `singleton` the main tree's
+   * stop keeps for them (ADR-0080, the daemon's `down` names it in `kept`).
+   */
+  function keptForLanes(s: ServiceView) {
+    return !!s.singleton && runningLanes.value.length > 0;
+  }
+  /**
+   * Whether the main working tree runs something: its services (not those
+   * it keeps for its lanes), or with none its containers. Not known yet: it
+   * does while the daemon runs.
    */
   const mainActive = computed(() => {
     if (!running.value) return false;
     const mv = mainView.value;
     if (!mv) return true;
-    if (mv.services.length) return mv.services.some((x) => statusBucket(x) !== 'idle');
+    if (mv.services.length) return mv.services.some((x) => statusBucket(x) !== 'idle' && !keptForLanes(x));
     const containers = mv.infra.flatMap((g) => g.containers).filter((c) => c.managed !== false);
     return !containers.length || containers.some((c) => c.state === 'running');
   });
@@ -610,7 +618,17 @@ export const useStack = defineStore('stack', () => {
     endStart(id.value, MAIN);
     const unmark = mark('lane-stop', MAIN);
     try {
-      await act({ label: 'Stop main', path: paths.api(id.value, v1.downTree), success: 'main stopped' });
+      // While lanes run, the daemon keeps what serves them and says so (200).
+      await act<{ lanes?: string[]; kept?: string[]; containers?: string[] }>({
+        label: 'Stop main',
+        path: paths.api(id.value, v1.downTree),
+        success: (b) => {
+          const kept = [...(b?.kept ?? []), ...(b?.containers ?? [])];
+          if (!kept.length) return 'main stopped';
+          const lanes = b?.lanes?.length ? `lane${b.lanes.length > 1 ? 's' : ''} ${b.lanes.join(', ')}` : 'its lanes';
+          return `main stopped; ${kept.join(', ')} keep${kept.length > 1 ? '' : 's'} running for ${lanes}`;
+        },
+      });
     } finally {
       unmark();
     }

@@ -118,7 +118,7 @@ impl Job {
     }
 
     /// Job accounting for CPU time (it includes exited processes), the summed
-    /// working sets of the live ones for memory.
+    /// private working sets of the live ones for memory.
     pub(crate) fn usage(&self) -> Usage {
         // SAFETY: valid job handle, correctly sized out struct.
         let cpu_us = unsafe {
@@ -327,24 +327,42 @@ impl Tree {
     }
 }
 
+/// The part of a process's working set no other process shares (what Task
+/// Manager shows as memory): the shared pages, such as the .NET runtime's,
+/// would count again with every process of a tree. A Windows without the
+/// private figure (before Windows 10 21H2) gives the whole working set.
 fn working_set(pid: u32) -> u64 {
     use windows_sys::Win32::System::ProcessStatus::{
-        K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+        K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX2,
     };
     use windows_sys::Win32::System::Threading::{
         OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
     };
-    // SAFETY: plain Win32 calls; handle checked and closed.
+    // SAFETY: plain Win32 calls; handle checked and closed; each struct is
+    // passed with its own size, which tells the call how much it may fill.
     unsafe {
         let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, pid);
         if h.is_null() {
             return 0;
         }
-        let mut c: PROCESS_MEMORY_COUNTERS = mem::zeroed();
-        c.cb = mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
-        let ok = K32GetProcessMemoryInfo(h, &mut c, c.cb);
+        let mut x: PROCESS_MEMORY_COUNTERS_EX2 = mem::zeroed();
+        x.cb = mem::size_of::<PROCESS_MEMORY_COUNTERS_EX2>() as u32;
+        let bytes =
+            if K32GetProcessMemoryInfo(h, &mut x as *mut _ as *mut PROCESS_MEMORY_COUNTERS, x.cb)
+                != 0
+            {
+                x.PrivateWorkingSetSize as u64
+            } else {
+                let mut c: PROCESS_MEMORY_COUNTERS = mem::zeroed();
+                c.cb = mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+                if K32GetProcessMemoryInfo(h, &mut c, c.cb) == 0 {
+                    0
+                } else {
+                    c.WorkingSetSize as u64
+                }
+            };
         CloseHandle(h);
-        if ok == 0 { 0 } else { c.WorkingSetSize as u64 }
+        bytes
     }
 }
 
@@ -630,6 +648,30 @@ pub(crate) fn cpu_times() -> Option<(u64, u64)> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_process_counts_its_private_working_set() {
+        use windows_sys::Win32::System::ProcessStatus::{
+            K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+        };
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+        let private = super::working_set(std::process::id());
+        // SAFETY: the pseudo handle of this process, a struct of the size given.
+        let whole = unsafe {
+            let mut c: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
+            c.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+            assert_ne!(
+                K32GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb),
+                0
+            );
+            c.WorkingSetSize as u64
+        };
+        // Its DLLs are shared with every other process: the private part is less.
+        assert!(
+            private > 0 && private < whole,
+            "private {private}, whole {whole}"
+        );
+    }
+
     #[test]
     fn a_job_with_more_processes_than_room_lists_them_all() {
         let job = super::Job::new().unwrap();

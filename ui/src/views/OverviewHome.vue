@@ -64,7 +64,7 @@ async function repairAll() {
     </section>
     <p v-if="inFlight" class="inflight muted"><span class="spinner" /> {{ inFlight }} change{{ inFlight === 1 ? '' : 's' }} on the way; the running instances keep serving until the new builds are healthy.</p>
 
-    <LaneUsage v-if="lane" class="stale-dim" :lane="lane" :title="stack.lane ?? 'main'" link />
+    <LaneUsage v-if="lane" class="stale-dim" :lane="lane" :title="stack.lane ?? 'main'" :builds="stack.usage?.builds.memory" link />
 
     <div v-if="!attention.length && !infraErrors.length && !unreachable.length" class="card">
       <div class="empty">

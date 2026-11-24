@@ -432,8 +432,12 @@ export class MockStack {
         return { group: g.group, service: c.service, ...l };
       }),
     );
+    // Its build servers stay warm after a build (ADR-0020): memory without CPU.
     const bw = this.walk('builds', 220, 950e6);
-    const builds = { name: 'builds' as const, ...this.step(bw, this.buildsActive > 0), cpu_time_ms: 0, processes: this.buildsActive > 0 ? 7 : 0 };
+    const building = this.buildsActive > 0;
+    const warm = this.entry.running;
+    const b = this.step(bw, building || warm);
+    const builds = { name: 'builds' as const, cpu: building ? b.cpu : 0, memory: b.memory, cpu_time_ms: 0, processes: building ? 7 : warm ? 4 : 0 };
     const groups = this.view.groups.map((g) => {
       let cpu = 0;
       let memory = 0;

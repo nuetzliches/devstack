@@ -9,8 +9,10 @@ import Sparkline from '@/components/Sparkline.vue';
 import Icon from '@/components/icons/Icon.vue';
 
 // `title`: the lane as the page names it. A lane on a node reports from its
-// own daemon there, to which it is the main tree (`main`).
-defineProps<{ lane: Lane; link?: boolean; title?: string }>();
+// own daemon there, to which it is the main tree (`main`). `builds`: the
+// memory of its build job, part of `lane.memory` (its build servers stay
+// warm after a build, ADR-0020): said, so the lane's number adds up.
+defineProps<{ lane: Lane; link?: boolean; title?: string; builds?: number }>();
 
 const stack = useStack();
 
@@ -86,6 +88,13 @@ function diskTotal(d: LaneDisk) {
         <span class="ml"><Icon name="memoryStick" :size="13" /> Memory</span>
         <span class="mv tabular">{{ bytes(lane.memory) }}</span>
         <Sparkline :values="memSeries(`lane:${lane.name}`)" :width="240" :height="40" :min-max="16 * 1024 * 1024" :zero-based="false" fluid color="var(--ok)" :label="`Lane ${lane.name} memory`" />
+        <span
+          v-if="builds"
+          class="part tabular"
+          title="Of it, the build job: compilers and build servers (MSBuild nodes and the like). They stay after a build so the next one is fast, and end on their own after a while without work."
+          data-testid="lane-builds-memory"
+          >of it builds {{ bytes(builds) }}</span
+        >
       </div>
       <div v-if="lane.gpu" class="metric" data-testid="lane-gpu">
         <span class="ml" :title="`${lane.gpu.name}: the GPU${lane.gpu.count === 1 ? '' : 's'} its node gave this lane, no other lane's. Load in % of one GPU, summed.`">
@@ -167,6 +176,10 @@ function diskTotal(d: LaneDisk) {
   font-weight: 650;
   line-height: 1.2;
   margin-bottom: 4px;
+}
+.part {
+  font-size: 12px;
+  color: var(--text-muted);
 }
 .bar {
   display: flex;

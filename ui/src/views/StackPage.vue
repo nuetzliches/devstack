@@ -17,7 +17,7 @@ import { ago, bytes, clock, duration, percent, useNow } from '@/lib/format';
 import { journalLabel, viaText } from '@/lib/journal';
 import { laneLabel, lastTab, MAIN, nodeLabel, started } from '@/lib/lanes';
 import { laneView } from '@/lib/stackRoutes';
-import { statusLook } from '@/lib/status';
+import { statusBucket, statusLook } from '@/lib/status';
 import { useHub } from '@/stores/hub';
 import { useStack } from '@/stores/stack';
 import { SHIFT_SKIP_HINT } from '@/stores/ui';
@@ -79,7 +79,14 @@ const state = computed(() => {
 const mainState = computed(() => {
   if (!stack.running || hubDown.value) return null;
   const profile = stack.mainView?.profile;
-  if (!stack.mainActive) return { tone: '', label: 'main stopped', title: 'The main working tree runs nothing; the daemon runs for its lanes. Its start card chooses a profile.' };
+  if (!stack.mainActive) {
+    const kept = (stack.mainView?.services ?? []).filter((s) => s.singleton && statusBucket(s) !== 'idle').map((s) => s.name);
+    return {
+      tone: '',
+      label: 'main stopped',
+      title: `The main working tree runs nothing; the daemon runs for its lanes${kept.length ? `, and so ${kept.length > 1 ? 'do' : 'does'} ${kept.join(', ')}, which ${kept.length > 1 ? 'serve' : 'serves'} them` : ''}. Its start card chooses a profile.`,
+    };
+  }
   return {
     tone: 'ok',
     label: profile ? `main runs · ${profile}` : 'main runs',
