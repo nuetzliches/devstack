@@ -350,6 +350,10 @@ pub fn github_desktop_open(_exe: &Path, _path: &str) -> Result<(), String> {
     Err("no GitHub Desktop on Linux".into())
 }
 
+pub fn github_desktop_start(_exe: &Path) -> Result<(), String> {
+    Err("no GitHub Desktop on Linux".into())
+}
+
 /// Start `cmd` and let it go; a thread waits for it, so it leaves no
 /// zombie behind.
 fn detach(mut cmd: Command, what: &str) -> Result<(), String> {

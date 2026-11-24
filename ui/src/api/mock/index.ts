@@ -973,6 +973,7 @@ export class MockTransport implements Transport {
         { id: 'orca', label: 'Orca', kind: 'agent', prompt: 'send' },
       ]);
     if (p === '/hub/open' && method === 'POST') return empty(204);
+    if (p === '/hub/clone' && method === 'POST') return empty(204);
     // The hub writes the prompts (ADR-0046, amendment 2026-10-22); the mock's are short.
     if (p === '/hub/prompt' && method === 'GET') {
       const kind = url.searchParams.get('kind');

@@ -59,6 +59,7 @@ export const paths = {
   openers: '/hub/openers',
   openerIcon: (id: string) => `/hub/openers/${encodeURIComponent(id)}/icon`,
   open: '/hub/open',
+  clone: '/hub/clone',
   prompt: (kind: string, target: { stack?: string; path?: string }) =>
     `/hub/prompt?kind=${encodeURIComponent(kind)}${target.stack !== undefined ? `&stack=${encodeURIComponent(target.stack)}` : ''}${target.path !== undefined ? `&path=${encodeURIComponent(target.path)}` : ''}`,
   agent: '/hub/agent',

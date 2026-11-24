@@ -1,6 +1,6 @@
 # ADR-0046: The hub opens a stack's worktree in the user's own programs, from a fixed list
 
-- **Status:** Accepted (2026-10-21), amended 2026-10-21 (the program opens in front on Windows; GitHub Desktop), amended 2026-10-22 (an agent started with a prompt the hub writes; the upgrade goes by `[stack] reviewed`)
+- **Status:** Accepted (2026-10-21), amended 2026-10-21 (the program opens in front on Windows; GitHub Desktop), amended 2026-10-22 (an agent started with a prompt the hub writes; the upgrade goes by `[stack] reviewed`), amended 2026-11-24 (a Git client started to clone a repository)
 - **Date:** 2026-10-21
 - **Deciders:** project owner
 - **Related:** [ADR-0011](0011-platform-windows-native-first.md), [ADR-0019](0019-control-api-security.md), [ADR-0021](0021-a-hub-serves-the-dashboard.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md), [ADR-0040](0040-a-shared-lane-can-be-watched-like-ones-own.md)
@@ -179,6 +179,37 @@ conversation on 2026-11-23 (all five):
 5. **In its own colours** (term), beside the label; the dialog still names
    the kind in words.
 
+## Amendment 2026-11-24: a Git client started to clone a repository
+
+"Add a stack" takes a repository's folder. A repository that is not on this
+machine yet has none; cloning it is a Git client's (ADR-0047 point 8), and
+the list already knows one. Points approved by the owner on 2026-11-24:
+
+1. **A request of its own.** `POST /hub/clone {with, url?}` starts a
+   program of the kind `git` from `GET /hub/openers` without a folder.
+   `/hub/open` keeps its check (point 3 above): only a stack's own trees.
+2. **The page names the program, not a command.** Without `url` the
+   program starts as from the start menu (GitHub Desktop: its launcher,
+   no arguments).
+3. **An https address goes to the clone dialog.** With `url`, GitHub
+   Desktop's own link `x-github-client://openRepo/<url>` opens its clone
+   dialog with the address filled in; the user confirms the clone there.
+   The hub takes only `https://`, a host and the characters of a path
+   (letters, digits, `-._~/:@%+`), at most 2048 characters: no query or
+   fragment, which the link would read as its own parameters (`?branch=`),
+   no space or quote. Anything else is refused (`400`).
+4. **In "Add a stack".** Below the folder field, and in the note "No folder
+   at …": "Not cloned yet? Clone it with [client] · Manage programs…". An
+   address pasted into the field is not checked as a folder: an `https://`
+   one is handed to the client, another (`git@…`, `http://`) is not, and
+   the dialog says to paste it into the client's dialog.
+5. **The path menu's choice.** The clients offered are the Git clients
+   checked in "Manage programs…" (in this browser); none found, no line;
+   all unchecked, only "Manage programs…".
+6. **The folder is the user's.** Where the clone goes, the user chooses in
+   the client and pastes the folder afterwards; the hub does not watch for
+   it.
+
 ## Consequences
 
 - The hub starts programs on request of the page. Narrowed by point 3: a
@@ -212,6 +243,9 @@ conversation on 2026-11-23 (all five):
   `/hub/agent`).
 - `crates/devstack-hub/src/prompts.rs` (the prompts), `ui/src/components/AgentPrompt.vue`
   (copy, show, start).
+- `open::clone` and `open::clone_url`, route `/hub/clone`;
+  `ui/src/components/CloneWith.vue` in `AddStackDialog.vue`;
+  `crates/devstack/tests/hub.rs` (`clone_starts_only_a_git_client_with_a_plain_address`).
 
 ## What this ADR does not say
 

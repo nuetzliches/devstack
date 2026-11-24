@@ -314,6 +314,16 @@ pub fn github_desktop_open(exe: &Path, path: &str) -> Result<(), String> {
         .map_err(|e| format!("start GitHub Desktop: {e}"))
 }
 
+pub fn github_desktop_start(exe: &Path) -> Result<(), String> {
+    Command::new(exe)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(drop)
+        .map_err(|e| format!("start GitHub Desktop: {e}"))
+}
+
 pub fn orca() -> Option<PathBuf> {
     on_path("orca").or_else(|| {
         let p = PathBuf::from(std::env::var_os("LOCALAPPDATA")?)

@@ -10,6 +10,7 @@ import { useRouter } from 'vue-router';
 import { api, paths } from '@/api';
 import { act } from '@/lib/actions';
 import AgentPrompt from './AgentPrompt.vue';
+import CloneWith from './CloneWith.vue';
 import FolderField from './FolderField.vue';
 import Modal from './Modal.vue';
 import Icon from './icons/Icon.vue';
@@ -50,15 +51,20 @@ watch(
     clearTimeout(timer);
     info.value = null;
     problem.value = null;
-    if (path.value.trim()) timer = setTimeout(check, 450);
+    if (path.value.trim() && !address.value) timer = setTimeout(check, 450);
   },
   { flush: 'sync' },
 );
 
+/** A repository's address pasted instead of a folder: it is cloned first. */
+const address = computed(() => /^([a-z][a-z0-9+.-]*:\/\/|[\w.-]+@[\w.-]+:)/i.test(path.value.trim()));
+/** Only an https address goes to the Git client's clone dialog. */
+const httpsUrl = computed(() => (address.value && /^https:\/\//i.test(path.value.trim()) ? path.value.trim() : undefined));
+
 async function check() {
   clearTimeout(timer);
   const p = path.value.trim();
-  if (!p) return;
+  if (!p || address.value) return;
   checking.value = true;
   problem.value = null;
   info.value = null;
@@ -113,12 +119,21 @@ async function add() {
       <ScanStacks @added="emit('close')" />
     </template>
     <template v-else>
-    <p class="muted">The folder of a repository: browse to it, or paste its path. devstack looks for its <code>devstack.toml</code>.</p>
+    <p class="muted">The folder of a repository: browse to it, or paste its path. devstack looks for its <code>devstack.toml</code>. Not on this machine yet? Paste its address to clone it.</p>
     <FolderField v-model="path" placeholder="C:\src\shop  or  /home/me/src/shop" :busy="checking" testid="add-stack" @submit="check" @picked="check" @problem="problem = $event" />
+
+    <template v-if="address">
+      <CloneWith :url="httpsUrl" />
+      <p v-if="!httpsUrl" class="muted small" data-testid="add-stack-not-https">Only an <code>https://</code> address is handed to the Git client; paste this one into its clone dialog yourself.</p>
+    </template>
+    <CloneWith v-else-if="state !== 'missing'" />
 
     <p v-if="problem" class="note danger">{{ problem }}</p>
 
-    <div v-if="state === 'missing'" class="note danger">No folder at <code>{{ info!.repo }}</code>.</div>
+    <div v-if="state === 'missing'" class="note danger">
+      <p>No folder at <code>{{ info!.repo }}</code>.</p>
+      <CloneWith />
+    </div>
 
     <div v-else-if="state === 'registered'" class="note ok">
       This stack is in the list already.

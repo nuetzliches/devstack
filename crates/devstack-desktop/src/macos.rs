@@ -313,6 +313,13 @@ pub fn github_desktop_open(bundle: &Path, path: &str) -> Result<(), String> {
     run(cmd, "open GitHub Desktop")
 }
 
+/// `open <bundle>`: started, or the running one brought to the front.
+pub fn github_desktop_start(bundle: &Path) -> Result<(), String> {
+    let mut cmd = Command::new("open");
+    cmd.arg(bundle);
+    run(cmd, "open GitHub Desktop")
+}
+
 pub fn orca() -> Option<PathBuf> {
     on_path("orca").or_else(|| {
         let p = app("Orca")?.join("Contents/Resources/bin/orca");

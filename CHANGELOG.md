@@ -9,6 +9,15 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Added
+
+- **"Add a stack" clones with your Git client** (ADR-0046, amendment
+  2026-11-24). Below the folder field: "Not cloned yet? Clone it with
+  [GitHub Desktop] · Manage programs…", the Git clients checked in the path
+  menu's programs. Paste a repository's `https://` address instead of a
+  folder, and its clone dialog opens with it filled in; then paste the
+  folder it was cloned to. New: `POST /hub/clone`.
+
 ### Changed
 
 - **A service's memory is what its processes own** (ADR-0119). Shared
