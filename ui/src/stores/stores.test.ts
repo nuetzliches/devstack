@@ -565,6 +565,26 @@ describe('stack store', () => {
       expect(stack.shownLane?.active).toBe(false);
     });
 
+    it('is stopped when only what it keeps for its lanes runs, and its stop says what that is', async () => {
+      const stack = await shownStack();
+      const events = fake.stream('/hub/stacks/shop/api/v1/events');
+      const tray = { ...svc('tray', 'running'), singleton: true };
+      events.handlers.onMessage({ type: 'snapshot', stack: view([svc('api', 'stopped'), tray]) } as never);
+      // No lane runs: the singleton is main's own.
+      events.handlers.onMessage({ type: 'lanes', lanes: [] });
+      expect(stack.mainActive).toBe(true);
+      // A lane runs: main's stop kept it for the lane, main is stopped.
+      events.handlers.onMessage({ type: 'lanes', lanes: [feat] });
+      expect(stack.mainActive).toBe(false);
+      expect(stack.mainLane?.active).toBe(false);
+      // Another of its services runs: it runs.
+      events.handlers.onMessage({ type: 'snapshot', stack: view([svc('api', 'healthy'), tray]) } as never);
+      expect(stack.mainActive).toBe(true);
+      fake.on('/hub/stacks/shop/api/v1/down?infra=true', ok({ lanes: ['feat'], kept: ['tray'], containers: [] }));
+      await stack.laneAction(stack.mainLane!, 'stop');
+      expect(useUi().toasts.map((t) => t.title)).toContain('main stopped; tray keeps running for lane feat');
+    });
+
     it('starts with its up and stops with its down, the daemon and the lanes kept', async () => {
       const stack = await shownStack();
       fake.on('/hub/stacks/shop/api/v1/up', { status: 202, ok: true, body: null });

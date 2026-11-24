@@ -110,6 +110,11 @@ function fold(key: string) {
 function groupLoad(key: string) {
   return stack.usage?.groups.find((g) => g.name === key) ?? null;
 }
+/** The build job while it takes memory: its servers stay after a build. */
+const builds = computed(() => {
+  const b = stack.usage?.builds;
+  return b && b.memory > 0 ? b : null;
+});
 // A job that runs is neither healthy (#591) nor starting: it may run for hours (#611).
 const filterLabel: Record<Filter, string> = { healthy: 'healthy', starting: 'starting', job: 'running as a job', failed: 'failing', idle: 'stopped or done', pending: 'not live yet' };
 
@@ -240,6 +245,18 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
                   <li v-else class="unknown"><Icon name="info" :size="14" /> {{ m.key }} <span class="faint">(not in this stack)</span></li>
                 </template>
               </ul>
+            </section>
+            <!-- The build job is in no group but in the lane's number: shown, so the groups and it add up. -->
+            <section v-if="!filter && builds" class="card section folded" data-testid="group-builds">
+              <header class="card-header section-head">
+                <span class="fold static" title="Compilers and build servers (MSBuild nodes and the like): they stay after a build so the next one is fast, and end on their own after a while without work">
+                  <Icon name="wrench" :size="13" />
+                  <h2>Builds</h2>
+                  <span v-if="builds.processes" class="count">{{ builds.processes }}</span>
+                </span>
+                <RowUsage series-key="builds" :load="builds" />
+                <div class="head-tail" />
+              </header>
             </section>
           </div>
         </div>
@@ -486,6 +503,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 }
 .fold h2 {
   margin: 0;
+}
+.fold.static {
+  cursor: default;
+  padding-left: 22px;
 }
 .section.folded .section-head {
   border-bottom: 0;

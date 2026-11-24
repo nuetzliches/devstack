@@ -1286,7 +1286,7 @@ second worktree runs.
 | Measure | Native processes | Containers |
 |---|---|---|
 | CPU (% of one core, and total CPU time) | Windows: job accounting of the service's job; Linux: the service's cgroup (`cpu.stat`), else the sum over its process group | `docker stats` of the Compose services |
-| Memory (working set / RSS) | Windows: sum over the job's processes; Linux: cgroup `memory.current`, else sum over the process group | `docker stats` |
+| Memory (what a process does not share, ADR-0119) | Windows: the private working sets summed over the job's processes; Linux: cgroup `memory.current` less `inactive_file`, else the proportional sets (`Pss`) summed over the process group; macOS: the physical footprints summed | `docker stats` |
 | Processes | job / cgroup membership (ADR-0009) | — |
 | Disk | per lane: snapshot, artifacts, logs under `.devstack/` | named volumes of the Compose project (`docker system df -v`), sampled rarely |
 
@@ -1306,8 +1306,8 @@ second worktree runs.
 per native sample, `devstack top [--watch]`; the dashboard follows in phase 2.
 Known limits of the numbers:
 
-- Windows memory is the summed working set, so pages shared between the tree's
-  processes count more than once.
+- Windows memory was the summed working set, so pages shared between the tree's
+  processes counted more than once; since ADR-0119 it is the private part.
 - Linux without a writable cgroup sums CPU time over the live processes; it can
   drop when a process exits, which the sampler reads as "no rate this round".
   Builds on such a host are not measured (they have no common cgroup).

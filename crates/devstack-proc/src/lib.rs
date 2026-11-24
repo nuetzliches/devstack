@@ -198,8 +198,10 @@ pub struct Usage {
     /// cgroup (and on macOS) it is the sum over the live processes and may
     /// drop.
     pub cpu_us: u64,
-    /// Bytes: the summed working sets (Windows), `memory.current` of the
-    /// cgroup, else the summed resident sets (Linux, macOS).
+    /// Bytes, each process's own and its share of what it shares (ADR-0119):
+    /// the summed private working sets (Windows), `memory.current` of the
+    /// cgroup less its inactive file cache, else the summed proportional
+    /// sets (Linux), the summed physical footprints (macOS).
     pub memory: u64,
     pub processes: u32,
 }

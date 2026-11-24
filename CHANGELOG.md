@@ -9,6 +9,24 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+### Changed
+
+- **A service's memory is what its processes own** (ADR-0119). Shared
+  pages, such as the .NET runtime's, no longer count again with every
+  process of a tree: Linux takes the proportional set (`Pss`) instead of the
+  resident set, and a cgroup's `memory.current` without the file cache the
+  kernel may drop; Windows the private working set; macOS the physical
+  footprint. The numbers in the dashboard, `devstack top` and a lane's
+  need for the pool are lower, for a .NET stack by about a third.
+- **The dashboard names the builds' memory** (ADR-0119). The lane card says
+  "of it builds …", and the overview lists *Builds* below the groups: the
+  build servers stay after a build so the next one is fast, and were in the
+  lane's number but in no group.
+- **main is stopped when only what serves its lanes runs** (ADR-0119). A
+  `singleton` the stop of main keeps for running lanes no longer shows main
+  as running with a Stop button; the stop says what keeps running, and for
+  which lanes.
+
 ### Fixed
 
 - **A stopped stack no longer shows the memory of its containers.** When

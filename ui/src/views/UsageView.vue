@@ -82,7 +82,7 @@ const filters: { v: 'all' | Kind; label: string }[] = [
     <template v-if="u">
       <div class="cols">
         <div class="lanes stale-dim">
-          <LaneUsage v-for="l in u.lanes" :key="l.name" :lane="l" />
+          <LaneUsage v-for="l in u.lanes" :key="l.name" :lane="l" :builds="u.builds.memory" />
         </div>
         <section class="card procs">
           <header class="card-header wrap-head">
