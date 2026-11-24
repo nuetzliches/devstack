@@ -352,18 +352,30 @@ impl Sampler {
                 }
             }
         }
+        if let Some(file) = sup.external_infra() {
+            let running_keys: Vec<String> = running
+                .values()
+                .map(|(group, service)| container_key(group, service))
+                .collect();
+            return self.sample_external(&file, &running_keys);
+        }
+        let names: Vec<String> = running.keys().cloned().collect();
+        self.record_docker(&running, || sup.docker().stats(&names));
+    }
+
+    /// What `docker stats` measured for the running containers (`name` ->
+    /// group and service). Also with none running: the ones that stopped
+    /// lose their load here.
+    fn record_docker(
+        &self,
+        running: &BTreeMap<String, (String, String)>,
+        stats: impl FnOnce() -> devstack_compose::Result<Vec<devstack_compose::ContainerStats>>,
+    ) {
         let running_keys: Vec<String> = running
             .values()
             .map(|(group, service)| container_key(group, service))
             .collect();
-        if let Some(file) = sup.external_infra() {
-            return self.sample_external(&file, &running_keys);
-        }
-        let names: Vec<String> = running.keys().cloned().collect();
-        if names.is_empty() {
-            return;
-        }
-        let stats = sup.docker().stats(&names);
+        let stats = stats();
         let mut inner = self.inner.lock().unwrap();
         let mut seen = Vec::new();
         match stats {
@@ -772,6 +784,46 @@ mod tests {
         assert_eq!(inner.series[&key].load(), load);
         unmeasured(&mut inner, &[], &[]);
         assert_eq!(inner.series[&key].load(), Load::default());
+    }
+
+    #[test]
+    fn the_last_container_that_stops_takes_its_load_along() {
+        let sampler = Sampler {
+            inner: Mutex::new(Inner::default()),
+            tree: Mutex::new(None),
+        };
+        let one = |name: &str| (name.to_string(), ("app".to_string(), name.to_string()));
+        let measured = |name: &str, memory| devstack_compose::ContainerStats {
+            name: name.into(),
+            cpu: 1.0,
+            memory,
+        };
+        let load = |s: &Sampler, service: &str| {
+            s.inner.lock().unwrap().series[&container_key("app", service)].load()
+        };
+        let running = BTreeMap::from([one("db"), one("search")]);
+        sampler.record_docker(&running, || {
+            Ok(vec![measured("db", 1 << 30), measured("search", 2 << 30)])
+        });
+        assert_eq!(load(&sampler, "search").memory, 2 << 30);
+        // One stops, then the other: none is left with a load.
+        sampler.record_docker(&BTreeMap::from([one("db")]), || {
+            Ok(vec![measured("db", 1 << 30)])
+        });
+        assert_eq!(load(&sampler, "search"), Load::default());
+        assert_eq!(load(&sampler, "db").memory, 1 << 30, "still running");
+        sampler.record_docker(&BTreeMap::new(), || Ok(Vec::new()));
+        assert_eq!(
+            load(&sampler, "db"),
+            Load::default(),
+            "the last one stopped"
+        );
+        let inner = sampler.inner.lock().unwrap();
+        assert_eq!(
+            inner.series[&container_key("app", "db")].history.len(),
+            2,
+            "its history stays"
+        );
     }
 
     #[test]
