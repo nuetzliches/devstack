@@ -138,6 +138,14 @@ impl Runs {
         }
     }
 
+    /// What its build job takes of its memory now, as its daemon says
+    /// (ADR-0119 point 3): part of what [`Runs::load`] measured.
+    pub fn builds(&mut self, id: &str, bytes: u64) {
+        if let Some(s) = self.by.get_mut(id) {
+            s.peak.builds = s.peak.builds.max(bytes);
+        }
+    }
+
     /// What its slot and its containers' images take now.
     pub fn disk(&mut self, id: &str, lane: u64, images: u64) {
         let Some(s) = self.by.get_mut(id) else {
@@ -386,6 +394,30 @@ mod tests {
         r.load("l2", Amount::default(), 12.0);
         r.end("l2");
         assert!(r.report().is_empty());
+    }
+
+    #[test]
+    fn a_runs_builds_are_its_highest_as_its_daemon_said() {
+        let mut r = Runs::default();
+        r.begin("l1", "shop");
+        r.load(
+            "l1",
+            Amount {
+                cpus: 1.0,
+                memory: 9 * GIB,
+            },
+            12.0,
+        );
+        r.builds("l1", 5 * GIB);
+        r.builds("l1", 2 * GIB);
+        r.builds("gone", GIB);
+        r.by.get_mut("l1").unwrap().since = Instant::now().checked_sub(COUNTS_AFTER);
+        let p = r.report()[0].peak;
+        assert_eq!(
+            (p.memory, p.builds),
+            (9 * GIB, 5 * GIB),
+            "a part, not added"
+        );
     }
 
     #[test]

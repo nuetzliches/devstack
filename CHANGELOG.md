@@ -22,6 +22,11 @@ and listed with their assets on the
   "of it builds …", and the overview lists *Builds* below the groups: the
   build servers stay after a build so the next one is fast, and were in the
   lane's number but in no group.
+- **A lane's need for the pool names its builds** (ADR-0119). The lease
+  step says "… memory (of it builds …)" and `remote_lane_need` in
+  `daemon.log` logs `builds`: the most the lane's build job took, as its
+  daemon measured it (a node asks each lane's daemon). Placement still takes
+  the whole memory; a node before this release sends no part.
 - **main is stopped when only what serves its lanes runs** (ADR-0119). A
   `singleton` the stop of main keeps for running lanes no longer shows main
   as running with a Stop button; the stop says what keeps running, and for

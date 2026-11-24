@@ -3319,6 +3319,46 @@ async fn shared_tunnel(
     }
 }
 
+/// What the lane's build job takes of its memory now, as its daemon
+/// measures it (`builds` of `/v1/usage`, ADR-0119 point 3): the node sees
+/// the lane as one container and cannot tell its builds apart. `None` when
+/// the daemon does not answer within a few seconds.
+async fn lane_builds(d: &DaemonAddr) -> Option<u64> {
+    use http_body_util::BodyExt;
+    let ask = async {
+        let tcp = tokio::net::TcpStream::connect(&d.addr).await.ok()?;
+        let (mut send, conn) =
+            hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(tcp))
+                .await
+                .ok()?;
+        tokio::spawn(conn);
+        let req = hyper::Request::builder()
+            .uri("/v1/usage")
+            .header(hyper::header::HOST, d.host())
+            .header(hyper::header::AUTHORIZATION, format!("Bearer {}", d.token))
+            .body(http_body_util::Empty::<hyper::body::Bytes>::new())
+            .ok()?;
+        let res = send.send_request(req).await.ok()?;
+        if !res.status().is_success() {
+            return None;
+        }
+        let body = res.into_body().collect().await.ok()?.to_bytes();
+        builds_of(&body)
+    };
+    tokio::time::timeout(Duration::from_secs(3), ask)
+        .await
+        .ok()
+        .flatten()
+}
+
+/// `builds.memory` of a daemon's usage report.
+fn builds_of(report: &[u8]) -> Option<u64> {
+    serde_json::from_slice::<serde_json::Value>(report)
+        .ok()?
+        .pointer("/builds/memory")?
+        .as_u64()
+}
+
 /// Pass `req` to the lane's daemon at `path`, with its token; a tunnel is
 /// spliced once the daemon switched protocols.
 async fn pass(
@@ -3891,12 +3931,34 @@ async fn background(s: Shared) {
             let all: Vec<&crate::policy::NodePolicy> = policies.iter().collect();
             crate::policy::NodePolicy::strictest(&all).and_then(|p| p.share_percent)
         };
+        // Of that, each lane's builds, as its daemon measures them.
+        let daemons: Vec<(String, DaemonAddr)> = s
+            .daemons
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(id, _)| by.contains_key(*id))
+            .map(|(id, d)| (id.clone(), d.clone()))
+            .collect();
+        let mut asking = tokio::task::JoinSet::new();
+        for (id, d) in daemons {
+            asking.spawn(async move { (id, lane_builds(&d).await) });
+        }
+        let mut builds = Vec::new();
+        while let Some(r) = asking.join_next().await {
+            if let Ok((id, Some(b))) = r {
+                builds.push((id, b));
+            }
+        }
         {
             // Half of the most this node offers its lanes (ADR-0066).
             let cap = s.share.most_cpus(cores as f64, percent) / 2.0;
             let mut runs = s.runs.lock().unwrap();
             for (id, a) in &by {
                 runs.load(id, *a, cap);
+            }
+            for (id, b) in &builds {
+                runs.builds(id, *b);
             }
         }
         let used = by.values().fold(Amount::default(), |a, b| Amount {
@@ -4414,6 +4476,46 @@ pub fn serve_blocking(config: NodeConfig, listen: std::net::SocketAddr) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_lanes_builds_come_from_its_daemon_with_its_token_and_host() {
+        // A daemon that answers its token at its loopback host only, as one does.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let port = listener.local_addr().unwrap().port();
+        let app = axum::Router::new().route(
+            "/v1/usage",
+            get(move |h: hyper::HeaderMap| async move {
+                let ok = h.get("authorization").is_some_and(|v| v == "Bearer t0k")
+                    && h.get("host")
+                        .is_some_and(|v| *v == *format!("127.0.0.1:{port}"));
+                if ok {
+                    (
+                        StatusCode::OK,
+                        r#"{"builds":{"name":"builds","cpu":0.0,"memory":5368709120}}"#,
+                    )
+                } else {
+                    (StatusCode::UNAUTHORIZED, "{}")
+                }
+            }),
+        );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let d = |token: &str| DaemonAddr {
+            addr: addr.clone(),
+            token: token.into(),
+            infra_ports: Vec::new(),
+            infra_udp_ports: Vec::new(),
+        };
+        assert_eq!(lane_builds(&d("t0k")).await, Some(5 << 30));
+        assert_eq!(lane_builds(&d("wrong")).await, None);
+        // Nobody listens: none, soon.
+        let gone = DaemonAddr {
+            addr: "127.0.0.1:1".into(),
+            ..d("t0k")
+        };
+        assert_eq!(lane_builds(&gone).await, None);
+        assert_eq!(builds_of(br#"{"services":[]}"#), None);
+    }
 
     #[test]
     fn a_gone_lanes_projects_are_found_by_slot_and_place() {

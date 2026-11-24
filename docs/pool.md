@@ -307,7 +307,12 @@ containers each took over the last ten minutes, and as disk its tree
 and its Compose images; with nothing running, 0.5 CPU, 1 GiB and 10 GiB of
 disk. `[lanes.need]` and the profile's `need` in the stack file raise each
 part to what they say. The lease says the need and where it came from, in
-the lane's start and in `daemon.log` (`remote_lane_need`).
+the lane's start and in `daemon.log` (`remote_lane_need`). Of its memory it
+names the builds' part (`builds`, [ADR-0119](adr/0119-a-lanes-memory-counts-what-it-owns-and-names-its-builds.md)):
+the compilers and the build servers that stay warm after a build, the most
+of them the lane's daemon measured (a node asks it, since it sees the lane as
+one container). The part is said, not added, and a node before 0.54.0 sends
+none.
 
 The need is a peak, its build included, and decides only whether a start
 fits the room free now: running lanes count by what they use. Besides it a

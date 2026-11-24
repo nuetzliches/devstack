@@ -267,6 +267,8 @@ pub struct Estimate {
     pub cpus: f64,
     /// Bytes: each one's highest over the last ten minutes, summed.
     pub memory: u64,
+    /// Bytes: of `memory`, the build job's highest (ADR-0119 point 3).
+    pub builds: u64,
     /// Bytes: the tree without `.git` and its state (its sources,
     /// dependencies and builds), its snapshot, artifacts and logs, and its
     /// Compose volumes.
@@ -508,10 +510,12 @@ impl Sampler {
             .filter(|(k, _)| *k != GPU_KEY)
             .map(|(_, s)| s.peak())
             .fold((0.0, 0), |(c, m), (pc, pm)| (c + pc, m + pm));
+        let builds = inner.series.get("build").map_or(0, |s| s.peak().1);
         let d = &inner.disk;
         Estimate {
             cpus,
             memory,
+            builds,
             disk_lane: tree + d.snapshot + d.artifacts + d.logs + d.volumes.unwrap_or(0),
             disk_repo: images,
         }

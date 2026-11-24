@@ -37,6 +37,12 @@ pub struct Amount {
 pub struct Need {
     pub cpus: f64,
     pub memory: u64,
+    /// Of `memory`, the most its build job took (compilers and the build
+    /// servers that stay warm after a build, ADR-0119 point 3): said, so a
+    /// need can be explained; never added, `memory` holds it already. Absent
+    /// from an older peer.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub builds: u64,
     /// The repository's part of its disk: the lane image and the
     /// infrastructure's images, shared by the repository's lanes on a node.
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -87,6 +93,7 @@ impl Need {
         Need {
             cpus: self.cpus.max(o.cpus),
             memory: self.memory.max(o.memory),
+            builds: self.builds.max(o.builds),
             disk_repo: self.disk_repo.max(o.disk_repo),
             disk_lane: self.disk_lane.max(o.disk_lane),
             gpus: match (self.gpus, o.gpus) {
@@ -508,13 +515,36 @@ mod tests {
     }
 
     #[test]
+    fn a_needs_builds_are_said_apart_and_an_older_peer_reads_without_them() {
+        let n = Need {
+            cpus: 1.0,
+            memory: 9 * GIB,
+            builds: 5 * GIB,
+            ..Need::default()
+        };
+        let wire = serde_json::to_value(n).unwrap();
+        assert_eq!(wire["builds"], 5 * GIB);
+        // What an older peer sends has none; what it reads keeps its memory.
+        let old: Need = serde_json::from_str(r#"{"cpus":1.0,"memory":1024}"#).unwrap();
+        assert_eq!((old.memory, old.builds), (1024, 0));
+        let amount: Amount = serde_json::from_value(wire).unwrap();
+        assert_eq!(amount.memory, 9 * GIB);
+        assert!(
+            !serde_json::to_string(&Need::default())
+                .unwrap()
+                .contains("builds")
+        );
+        assert_eq!(old.max(n).builds, 5 * GIB);
+    }
+
+    #[test]
     fn a_floor_raises_each_part_and_the_disk_in_all() {
         let measured = Need {
             cpus: 1.0,
             memory: 2 * GIB,
             disk_repo: 6 * GIB,
             disk_lane: 3 * GIB,
-            gpus: None,
+            ..Need::default()
         };
         let (same, raised) = measured.at_least(Need {
             memory: GIB,

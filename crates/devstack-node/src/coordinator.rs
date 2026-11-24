@@ -4435,7 +4435,7 @@ mod placement_tests {
             memory: GIB,
             disk_repo: 20 * GIB,
             disk_lane: 10 * GIB,
-            gpus: None,
+            ..Need::default()
         };
         // 30 GiB room: enough for a node with the repository's images
         // (10 + 5 free), not for a cold one (30 + 5).
