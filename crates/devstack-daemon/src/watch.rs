@@ -391,9 +391,21 @@ fn watch(sup: Arc<Supervisor>) -> Result<Watcher, String> {
     // What runs from a copy of the tree, to keep in step with it: a lane
     // here, and a lane's daemon on a node, which is its own main tree there
     // (its `lane` is empty) and runs from a copy of the mirror all the same.
+    // Services whose `prepare` the next start runs again when its inputs
+    // change (#630): a running one says so.
+    let prepared: Vec<(String, GlobSet)> = sup
+        .stack()
+        .services
+        .iter()
+        .filter(|(_, s)| runs(s))
+        .filter_map(|(n, s)| set(&s.prepare.as_ref()?.inputs).map(|g| (n.clone(), g)))
+        .collect();
     let lane = sup.runs_from_copy();
-    let only_stack_file =
-        built.is_empty() && devservers.is_empty() && containers.is_empty() && !lane;
+    let only_stack_file = built.is_empty()
+        && devservers.is_empty()
+        && containers.is_empty()
+        && prepared.is_empty()
+        && !lane;
     let stack_rel = sup
         .stack_file()
         .strip_prefix(&sup.repo)
@@ -449,6 +461,11 @@ fn watch(sup: Arc<Supervisor>) -> Result<Watcher, String> {
                     for (n, g) in &built {
                         if g.is_match(&rel) || build_file {
                             me.changed(n, &rel);
+                        }
+                    }
+                    for (n, g) in &prepared {
+                        if g.is_match(&rel) {
+                            me.prepare_inputs_changed(n, &rel);
                         }
                     }
                 }

@@ -91,7 +91,13 @@ The running instance was left as it was."
             return Err(STOPPED.into());
         }
         let running = self.slots.lock().unwrap()[name].main.is_some();
-        if svc.proxied() && running {
+        // The main tree prepares in place (#630): the running instance holds
+        // what `prepare` replaces (Windows locks open files), so it stops
+        // first instead of serving until a candidate took over.
+        let prepares_in_place = artifact.is_none()
+            && !self.runs_from_copy()
+            && self.tree_prepare_job(name, &svc)?.is_some();
+        if svc.proxied() && running && !prepares_in_place {
             self.replace(name, &svc, artifact)?;
         } else {
             self.set_candidate(name, None);

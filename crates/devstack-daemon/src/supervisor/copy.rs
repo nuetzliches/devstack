@@ -488,8 +488,114 @@ impl Supervisor {
         {
             self.set_prepare(name, view);
         }
+        self.clear_notice(&format!("prepare.inputs.{name}"));
         self.link_prepared(name, svc);
         Ok(())
+    }
+
+    /// The main tree, prepared for `svc` before it starts there (#630): it
+    /// runs in place, so `prepare` runs in the tree itself when the files of
+    /// its `inputs` changed since it last ran there, or one of its `outputs`
+    /// is gone. A merge that brought packages would leave the dev server on
+    /// the old ones otherwise. Without the store: what it makes is the
+    /// tree's, not a copy's.
+    pub(super) fn tree_ready(
+        &self,
+        name: &str,
+        svc: &Service,
+        cancel: &dyn Fn() -> bool,
+    ) -> Result<(), String> {
+        if let Some(job) = self.tree_prepare_job(name, svc)?
+            && let Some(view) = self.run_prepare(name, job, cancel)?
+        {
+            self.set_prepare(name, view);
+        }
+        self.clear_notice(&format!("prepare.inputs.{name}"));
+        Ok(())
+    }
+
+    /// `rel`, a file of the `inputs` of `name`'s `prepare`, changed: while it
+    /// runs, it runs on what `prepare` made before, until its next start
+    /// prepares again (#630). Said, unless its `restart_on` restarts it.
+    pub fn prepare_inputs_changed(&self, name: &str, rel: &str) {
+        let Some(svc) = self.stack().services.get(name).cloned() else {
+            return;
+        };
+        let running = self
+            .slots
+            .lock()
+            .unwrap()
+            .get(name)
+            .is_some_and(|s| s.main.as_ref().is_some_and(|i| i.build_id.is_none()));
+        let restarts = devstack_build::watch_set(&svc.restart_on)
+            .ok()
+            .flatten()
+            .is_some_and(|g| {
+                g.is_match(rel) || rel.match_indices('/').any(|(i, _)| g.is_match(&rel[..i]))
+            });
+        if !running || restarts {
+            return;
+        }
+        self.set_notice(
+            &format!("prepare.inputs.{name}"),
+            NoticeLevel::Warn,
+            format!(
+                "`{rel}` changed: {name} still runs on what its `prepare` made before. `devstack restart {name}` runs `prepare` again; `restart_on = [\"{rel}\"]` does it on every change."
+            ),
+        );
+    }
+
+    /// The `prepare` of `svc` the main tree needs before it starts there;
+    /// `None` when it has none, or it ran for these inputs and its outputs
+    /// are there.
+    pub(super) fn tree_prepare_job(
+        &self,
+        name: &str,
+        svc: &Service,
+    ) -> Result<Option<PrepareJob>, String> {
+        let Some(p) = &svc.prepare else {
+            return Ok(None);
+        };
+        let files = self
+            .snapshot
+            .lock()
+            .unwrap()
+            .list()
+            .map_err(|e| e.to_string())?;
+        let inputs = devstack_build::watch_set(&p.inputs).map_err(|e| e.to_string())?;
+        let hashed: Vec<(String, String)> = files
+            .into_iter()
+            .filter(|rel| inputs.as_ref().is_some_and(|g| g.is_match(rel)))
+            .filter_map(|rel| {
+                let bytes = std::fs::read(self.repo.join(&rel)).ok()?;
+                Some((rel, blake3::hash(&bytes).to_hex().to_string()))
+            })
+            .collect();
+        let key = prepare_key(p, svc, hashed.iter().map(|(r, h)| (r.as_str(), h.clone())))?;
+        let marks = self.state_dir.join("prepared-tree");
+        let mark = marks.join(name);
+        let outputs: Vec<PathBuf> = p.outputs.iter().map(|o| self.repo.join(o)).collect();
+        if std::fs::read_to_string(&mark).is_ok_and(|k| k == key)
+            && outputs.iter().all(|o| o.is_dir())
+        {
+            return Ok(None);
+        }
+        let cwd = p.cwd.as_ref().or(svc.cwd.as_ref());
+        Ok(Some(PrepareJob {
+            key,
+            mark,
+            // Two services whose `prepare` makes the same outputs prepare
+            // them once (#513).
+            shared: (!p.outputs.is_empty()).then(|| SharedMark {
+                mark: shared_mark(&marks.join("outputs"), &p.outputs),
+                outputs,
+            }),
+            cwd: cwd.map_or_else(|| self.repo.clone(), |c| self.repo.join(c)),
+            run: p.run.clone(),
+            store: Err(None),
+            before_run: None,
+            counted: Vec::new(),
+        }))
     }
 
     /// Whether what `prepare` installs is linked into the worktree
@@ -1832,6 +1938,71 @@ mod tests {
         std::fs::write(deps.join("in-use.txt"), "ui reads this").unwrap();
         sup.copy_ready("app", &services["app"], &|| false).unwrap();
         assert!(deps.join("in-use.txt").is_file());
+    }
+
+    // #630: the main tree runs in place; its `prepare` runs there when its
+    // inputs changed since it last ran, or what it makes is gone.
+    #[cfg(windows)]
+    #[test]
+    fn the_main_tree_is_prepared_in_place_when_its_inputs_changed() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let d = tempfile::tempdir().unwrap();
+        let stack = "version = 1\n[stack]\nname = \"t\"\n[services.web]\nkind = \"devserver\"\nrun = \"x\"\nport = 4200\nprepare = { run = \"mkdir deps 2>nul & copy /y package-lock.json deps\\\\lock.json\", inputs = [\"package-lock.json\"], outputs = [\"deps\"] }\n";
+        let sup = warm_repo(
+            d.path(),
+            stack,
+            &[("package-lock.json", "{\"v\":1}"), ("app.js", "1")],
+            &rt,
+        );
+        let svc = sup.stack().services["web"].clone();
+        let deps = d.path().join("deps");
+        let lock = || std::fs::read_to_string(deps.join("lock.json")).unwrap_or_default();
+
+        // Never prepared here: it runs, in the tree itself.
+        sup.tree_ready("web", &svc, &|| false).unwrap();
+        assert_eq!(lock(), "{\"v\":1}", "{:?}", sup.notices());
+        assert!(!sup.snapshot.lock().unwrap().dir.join("deps").exists());
+
+        // Same inputs: what is there stays.
+        std::fs::write(deps.join("own.txt"), "mine").unwrap();
+        sup.tree_ready("web", &svc, &|| false).unwrap();
+        assert!(
+            deps.join("own.txt").is_file(),
+            "prepared again for the same inputs"
+        );
+
+        // New inputs (a merge brought packages): prepared again.
+        std::fs::write(d.path().join("package-lock.json"), "{\"v\":2}").unwrap();
+        sup.tree_ready("web", &svc, &|| false).unwrap();
+        assert_eq!(lock(), "{\"v\":2}");
+
+        // What it makes is gone: prepared again.
+        std::fs::remove_dir_all(&deps).unwrap();
+        sup.tree_ready("web", &svc, &|| false).unwrap();
+        assert_eq!(lock(), "{\"v\":2}");
+    }
+
+    // #630: a `prepare` that fails in the main tree stops the start with its
+    // tail, and the next start tries again.
+    #[cfg(windows)]
+    #[test]
+    fn a_failed_prepare_in_the_main_tree_stops_the_start_and_runs_again() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let d = tempfile::tempdir().unwrap();
+        let stack = "version = 1\n[stack]\nname = \"t\"\n[services.web]\nkind = \"devserver\"\nrun = \"x\"\nport = 4200\nprepare = { run = \"if exist ok.txt (mkdir deps) else (echo no ok.txt & exit 3)\", inputs = [\"package-lock.json\"], outputs = [\"deps\"] }\n";
+        let sup = warm_repo(d.path(), stack, &[("package-lock.json", "{}")], &rt);
+        let svc = sup.stack().services["web"].clone();
+        let e = sup.tree_ready("web", &svc, &|| false).unwrap_err();
+        assert!(e.contains("code 3") && e.contains("no ok.txt"), "{e}");
+        std::fs::write(d.path().join("ok.txt"), "").unwrap();
+        sup.tree_ready("web", &svc, &|| false).unwrap();
+        assert!(d.path().join("deps").is_dir());
     }
 
     #[cfg(windows)]

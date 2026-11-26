@@ -45,7 +45,9 @@ which needs no privilege, a symbolic link elsewhere.
 4. A linked directory that is gone from the copy runs `prepare` again,
    even with unchanged inputs.
 5. The main working tree runs in place with its own directories, and a
-   lane on a node has no worktree there: neither links.
+   lane on a node has no worktree there: neither links. (*Since 2026-11-26*
+   the main tree's `prepare` runs in those directories itself,
+   ADR-0062's amendment.)
 
 ## Alternatives considered
 
