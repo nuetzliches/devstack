@@ -61,6 +61,13 @@ and listed with their assets on the
   that holds anything else (a build's output) stays. The same holds for a
   lane on a node and for the snapshot builds run in. Empty directories a
   copy kept before this release stay until the copy is made anew.
+- **A change saved while a lane's dev server starts reaches it** (#631).
+  The lane's copy took the worktree's changes only once a service running
+  from it was ready; a dev server whose first build failed on a half-made
+  change never got the save that completed it, and stayed `starting` until
+  its health timeout (300 s), with the services after it waiting. Now a
+  service that is still starting counts too, here and on a node. The notice
+  about changed `prepare` inputs (#630) also comes while it starts.
 - **A stopped stack no longer shows the memory of its containers.** When
   the last container stopped, the daemon kept its last load, so a group and
   the lane card showed gigabytes after `down` (and the lane's estimate for
