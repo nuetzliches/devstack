@@ -50,15 +50,15 @@ is not installed, start the service by hand, and stop it before you finish.
 
 A change to the stack file format (`crates/devstack-config`) that makes an
 existing file fail to load, or behave differently, is a **breaking change**.
-devstack has users outside its maintainers since 2026-10-23 (the first macOS
-build handed to a tester, [ADR-0054](docs/adr/0054-macos-is-a-developer-platform-in-preview.md)
-point 8), so the second phase of
-[ADR-0023](docs/adr/0023-stack-file-compatibility.md) holds: a new key is
-optional and keeps the old behaviour, a renamed or removed key stays readable
-as a deprecated alias, a break is `version = 2` with `devstack migrate`. A new
-key gets its `*_SINCE` constant and a warning in `validate::warnings` when
-`[stack] requires` is older. The frozen files in
-`crates/devstack-config/tests/compat/` catch a break you did not intend.
+Since 2026-11-26 the first phase of
+[ADR-0023](docs/adr/0023-stack-file-compatibility.md) holds again: devstack's
+users are its maintainers' small team, so a break is allowed when it gives the
+lasting, technically right solution, without `version = 2` or a migration. Name
+it in the review card and in the changelog (what changes for an existing file,
+and what to do), and replace the frozen copy it breaks in
+`crates/devstack-config/tests/compat/` on purpose. A new key gets its
+`*_SINCE` constant and a warning in `validate::warnings` when `[stack]
+requires` is older. The frozen files catch a break you did not intend.
 
 ## Public-repository hygiene
 
