@@ -1,6 +1,6 @@
 # ADR-0062: What `prepare` makes is kept in a store per machine and repository, keyed by its inputs
 
-- **Status:** Accepted (2026-10-26); measured and built on the developer's machine, noted 2026-10-26; built on nodes, noted 2026-10-26; addendum 2026-10-28 (a node keeps the member's build artifacts too; card on the pull request)
+- **Status:** Accepted (2026-10-26); measured and built on the developer's machine, noted 2026-10-26; built on nodes, noted 2026-10-26; addendum 2026-10-28 (a node keeps the member's build artifacts too; card on the pull request); amended 2026-11-26 (the main tree prepares in place, #630)
 - **Date:** 2026-10-26
 - **Deciders:** project owner
 - **Related:** [#277](https://github.com/nuetzliches/devstack/issues/277), [ADR-0002](0002-processes-run-from-immutable-artifacts.md), [ADR-0024](0024-a-lane-is-a-supervisor-in-the-main-trees-daemon.md) (a lane runs from a copy), [ADR-0028](0028-lane-images.md) (point 3), [ADR-0033](0033-a-node-decides-what-runs-on-it.md), [ADR-0034](0034-a-machine-can-belong-to-several-pools.md), [ADR-0038](0038-a-lanes-data-outlives-its-lease.md) (slots, the member's disk cap), [ADR-0044](0044-a-lanes-prepared-directories-can-be-linked-into-its-worktree.md), [ADR-0049](0049-a-lanes-need-is-measured-disk-included.md), [ADR-0063](0063-a-lane-on-a-node-links-its-worktree-to-a-copy-from-the-local-store.md)
@@ -201,9 +201,25 @@ agent takes in; only the member's own lanes see it. Swept and counted like
 the rest of the store. A start that finds its artifact there copies it
 (`build_reused` with `source: store`) instead of building.
 
+## Amendment 2026-11-26: the main tree prepares in place
+
+Card approved by the owner on 2026-11-26 (#630), with the automatic variant
+and the break it brings. A merge that brought packages left the main tree's
+dev server on the old `node_modules`, and only its import errors said so.
+Now `prepare` runs in the main tree itself before a service starts there
+(`up`, `start`, `restart`), when the files of its `inputs` changed since it
+last ran there (a mark under `.devstack/prepared-tree/`) or a directory of
+its `outputs` is gone; never prepared there counts as changed, so the first
+start after the release runs it once. A restart that prepares stops the
+running instance first instead of starting a candidate beside it: Windows
+keeps the files `npm ci` replaces locked. While a service runs, a change to
+its `inputs` is a notice naming `restart` and `restart_on`. The main tree
+still does not use the store: its outputs are the developer's tree, not a
+copy.
+
 ## What this ADR does not say
 
-- That the main working tree uses the store. It runs in place, with the
-  developer's own `node_modules`.
+- That the main working tree uses the store. It runs in place; its
+  `prepare` runs there without the store (amendment 2026-11-26).
 - That a store entry is ever linked into a worktree. ADR-0063 links a copy.
 - Anything about warming the store for a ref before a lane needs it.

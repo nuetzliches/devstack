@@ -689,8 +689,15 @@ copy). `cwd` defaults to the service's. `run` is required and, like `cwd`,
 used as written: placeholders and `${VAR}` are an error there. `inputs` are
 globs. Its output goes to
 `.devstack/logs/<service>/prepare-*.log`; a failure stops the build or start
-with its tail. The main working tree runs dev servers in place, with the
-developer's own `node_modules`.
+with its tail. The main working tree runs dev servers in place: there
+`prepare` runs in the tree itself before the service starts (`up`, `start`,
+`restart`), when the files of `inputs` changed since it last ran there or a
+directory of `outputs` is gone (#630). A restart then stops the running
+instance first, so `npm ci` can replace files it holds open. The main tree
+does not use the store (`outputs` below) and links nothing. While a service
+runs, here or in a lane, a change to a file of its `inputs` is a notice: it
+runs on what `prepare` made before until its next start. To have that start
+come by itself, add the lockfile to the dev server's `restart_on`.
 
 ```toml
 [services.web]

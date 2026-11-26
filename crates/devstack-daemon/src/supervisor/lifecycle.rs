@@ -916,8 +916,12 @@ impl Supervisor {
         is_main: bool,
         cancel: &dyn Fn() -> bool,
     ) -> Result<Instance, String> {
-        if artifact.is_none() && self.runs_from_copy() {
-            self.copy_ready(name, svc, cancel)?;
+        if artifact.is_none() {
+            if self.runs_from_copy() {
+                self.copy_ready(name, svc, cancel)?;
+            } else {
+                self.tree_ready(name, svc, cancel)?;
+            }
         }
         let ctx = self.context(svc, artifact.map(|(_, d)| d.as_path()), port, is_main);
         let env = {

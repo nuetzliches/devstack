@@ -79,6 +79,11 @@ without a stack file starts from `devstack init` (a draft with TODOs).
   main branch's lockfile prepared before the first lane needs it, add
   `[prepare] warm = ["origin/main"]` (devstack never fetches; it watches the
   ref) and `requires = "0.24.0"`.
+- **The main tree runs `prepare` in place too**, before a service starts
+  there, when its `inputs` changed since it last ran or its `outputs` are
+  gone: after a merge that brought packages, `devstack restart web` installs
+  them (no hand-made `npm ci` under a running dev server). To do it on every
+  lockfile change, add the lockfile to the dev server's `restart_on`.
 - **Lanes on other machines** (`devstack up --on <node>`) run in a Linux
   container: `[lanes] image` (a toolchain image) or `[lanes] dockerfile`. Files
   git ignores do not go there unless `[lanes] sync` names them (a dev

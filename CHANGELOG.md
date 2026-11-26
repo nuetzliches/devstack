@@ -40,6 +40,17 @@ and listed with their assets on the
   `singleton` the stop of main keeps for running lanes no longer shows main
   as running with a Stop button; the stop says what keeps running, and for
   which lanes.
+- **`prepare` runs in the main tree too** (#630). Before a service starts
+  there (`up`, `start`, `restart`), its `prepare` runs in place when the
+  files of its `inputs` changed since it last ran there, or a directory of
+  its `outputs` is gone; the first start after this release runs it once.
+  A merge that brought new packages no longer leaves the dev server on the
+  old `node_modules`. The running instance is stopped first, so `npm ci`
+  can replace the files Windows keeps locked. A failing `prepare` stops the
+  start with its tail. While a service runs, here or in a lane, a change to
+  its `inputs` is a notice naming `devstack restart`; `restart_on` with the
+  lockfile makes it happen on every change. The main tree still does not use
+  the store (ADR-0062, amendment 2026-11-26).
 
 ### Fixed
 
