@@ -16,7 +16,8 @@ and listed with their assets on the
   [GitHub Desktop] · Manage programs…", the Git clients checked in the path
   menu's programs. Paste a repository's `https://` address instead of a
   folder, and its clone dialog opens with it filled in; then paste the
-  folder it was cloned to. New: `POST /hub/clone`.
+  folder it was cloned to. New: `POST /hub/clone`; an address with a query
+  or fragment, also percent-encoded, is refused.
 
 ### Changed
 
@@ -24,8 +25,8 @@ and listed with their assets on the
   pages, such as the .NET runtime's, no longer count again with every
   process of a tree: Linux takes the proportional set (`Pss`) instead of the
   resident set, and a cgroup's `memory.current` without the file cache the
-  kernel may drop; Windows the private working set; macOS the physical
-  footprint. The numbers in the dashboard, `devstack top` and a lane's
+  kernel may drop; Windows the private working set (the whole one on a
+  Windows before 10 21H2, which lacks it); macOS the physical footprint. The numbers in the dashboard, `devstack top` and a lane's
   need for the pool are lower, for a .NET stack by about a third.
 - **The dashboard names the builds' memory** (ADR-0119). The lane card says
   "of it builds …", and the overview lists *Builds* below the groups: the
@@ -34,21 +35,27 @@ and listed with their assets on the
 - **A lane's need for the pool names its builds** (ADR-0119). The lease
   step says "… memory (of it builds …)" and `remote_lane_need` in
   `daemon.log` logs `builds`: the most the lane's build job took, as its
-  daemon measured it (a node asks each lane's daemon). Placement still takes
+  daemon measured it (a node asks each lane's daemon and reads at most
+  1 MiB of its answer). Placement still takes
   the whole memory; a node before this release sends no part.
 - **main is stopped when only what serves its lanes runs** (ADR-0119). A
-  `singleton` the stop of main keeps for running lanes no longer shows main
-  as running with a Stop button; the stop says what keeps running, and for
-  which lanes.
+  `singleton` the stop of main keeps for running lanes, and what it comes
+  `after`, no longer shows main as running with a Stop button; the stop says
+  what keeps running, and for which lanes. A service's view says
+  `kept_for_lanes`.
 - **`prepare` runs in the main tree too** (#630). Before a service starts
   there (`up`, `start`, `restart`), its `prepare` runs in place when the
   files of its `inputs` changed since it last ran there, or a directory of
   its `outputs` is gone; the first start after this release runs it once.
   A merge that brought new packages no longer leaves the dev server on the
   old `node_modules`. The running instance is stopped first, so `npm ci`
-  can replace the files Windows keeps locked. A failing `prepare` stops the
-  start with its tail. While a service runs, here or in a lane, a change to
-  its `inputs` is a notice naming `devstack restart`; `restart_on` with the
+  can replace the files Windows keeps locked, and so are other running
+  services with the same `outputs` (they start again after it); a start
+  that would prepare under such a service is refused and says so. A failing
+  `prepare` stops the start with its tail. A `prepare` that rewrites its own
+  inputs (`npm install` and the lockfile) is not due again. While a service
+  runs, here or in a lane, a change to its `inputs` is a notice naming
+  `devstack restart` (gone when it stops); `restart_on` with the
   lockfile makes it happen on every change. The main tree still does not use
   the store (ADR-0062, amendment 2026-11-26).
 

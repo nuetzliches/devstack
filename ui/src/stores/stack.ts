@@ -343,11 +343,13 @@ export const useStack = defineStore('stack', () => {
     }
   }
   /**
-   * A service that runs only because lanes do: a `singleton` the main tree's
-   * stop keeps for them (ADR-0080, the daemon's `down` names it in `kept`).
+   * A service that runs only because lanes do: what the main tree's stop
+   * keeps for them (ADR-0080, the daemon's `down` names it in `kept`), a
+   * `singleton` and what one comes `after`, as the daemon marks it; older
+   * daemons mark the singletons only.
    */
   function keptForLanes(s: ServiceView) {
-    return !!s.singleton && runningLanes.value.length > 0;
+    return !!(s.kept_for_lanes ?? s.singleton) && runningLanes.value.length > 0;
   }
   /**
    * Whether the main working tree runs something: its services (not those

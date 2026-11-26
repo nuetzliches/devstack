@@ -351,7 +351,7 @@ fn working_set(pid: u32) -> u64 {
             if K32GetProcessMemoryInfo(h, &mut x as *mut _ as *mut PROCESS_MEMORY_COUNTERS, x.cb)
                 != 0
             {
-                x.PrivateWorkingSetSize as u64
+                private_or_whole(x.PrivateWorkingSetSize as u64, x.WorkingSetSize as u64)
             } else {
                 let mut c: PROCESS_MEMORY_COUNTERS = mem::zeroed();
                 c.cb = mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
@@ -364,6 +364,14 @@ fn working_set(pid: u32) -> u64 {
         CloseHandle(h);
         bytes
     }
+}
+
+/// The private working set, or the whole one where the call filled only the
+/// older fields (a Windows before 10 21H2 takes the larger struct and leaves
+/// `PrivateWorkingSetSize` as it was, zero): a running process never has
+/// none of its own (code review before 0.54.0, Nr. 3).
+fn private_or_whole(private: u64, whole: u64) -> u64 {
+    if private == 0 { whole } else { private }
 }
 
 pub(crate) fn ensure_console() -> Result<bool> {
@@ -648,6 +656,12 @@ pub(crate) fn cpu_times() -> Option<(u64, u64)> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_windows_without_the_private_figure_gives_the_whole_working_set() {
+        assert_eq!(super::private_or_whole(0, 5_000), 5_000);
+        assert_eq!(super::private_or_whole(3_000, 5_000), 3_000);
+    }
+
     #[test]
     fn a_process_counts_its_private_working_set() {
         use windows_sys::Win32::System::ProcessStatus::{

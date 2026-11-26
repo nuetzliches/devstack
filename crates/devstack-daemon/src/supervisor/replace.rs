@@ -95,15 +95,41 @@ The running instance was left as it was."
         // what `prepare` replaces (Windows locks open files), so it stops
         // first instead of serving until a candidate took over.
         let prepares_in_place = artifact.is_none()
+            && svc.prepare.is_some()
             && !self.runs_from_copy()
-            && self.tree_prepare_job(name, &svc)?.is_some();
-        if svc.proxied() && running && !prepares_in_place {
-            self.replace(name, &svc, artifact)?;
+            && match self.tree_prepare_job(name, &svc) {
+                Ok(job) => job.is_some(),
+                Err(e) => {
+                    self.restart_failed(name, epoch, &e);
+                    return Err(e);
+                }
+            };
+        // So do the others that run on the same outputs; they start again
+        // after it (review before 0.54.0, Nr. 2).
+        let sharers = if prepares_in_place {
+            self.sharers(name, &svc)
+        } else {
+            Vec::new()
+        };
+        for s in &sharers {
+            self.stop(s)?;
+        }
+        let restarted = if svc.proxied() && running && !prepares_in_place {
+            self.replace(name, &svc, artifact)
         } else {
             self.set_candidate(name, None);
-            self.stop(name)?;
-            self.start_with(name, artifact)?;
+            self.stop(name)
+                .and_then(|()| self.start_with(name, artifact))
+        };
+        for s in &sharers {
+            if let Err(e) = self.start(s) {
+                crate::diag::warn(
+                    "prepare_sharer_not_started",
+                    serde_json::json!({ "lane": self.lane, "service": s, "after": name, "error": e }),
+                );
+            }
         }
+        restarted?;
         if svc.kind == Kind::Job
             && let Some(s) = self.slots.lock().unwrap().get_mut(name)
         {

@@ -505,49 +505,39 @@ impl Supervisor {
         svc: &Service,
         cancel: &dyn Fn() -> bool,
     ) -> Result<(), String> {
-        if let Some(job) = self.tree_prepare_job(name, svc)?
-            && let Some(view) = self.run_prepare(name, job, cancel)?
-        {
-            self.set_prepare(name, view);
+        if let Some(job) = self.tree_prepare_job(name, svc)? {
+            // What another running service reads is not replaced under it.
+            let sharers = self.sharers(name, svc);
+            if !sharers.is_empty() {
+                return Err(format!(
+                    "`prepare` of {name} would replace what {} runs on (the same `outputs`): `devstack restart {name}` stops {} first, or stop {} and start {name} again",
+                    sharers.join(", "),
+                    if sharers.len() == 1 { "it" } else { "them" },
+                    sharers.join(", "),
+                ));
+            }
+            let (mark, shared) = (
+                job.mark.clone(),
+                job.shared.as_ref().map(|s| s.mark.clone()),
+            );
+            if let Some(view) = self.run_prepare(name, job, cancel)? {
+                self.set_prepare(name, view);
+            }
+            // The inputs as `prepare` left them (`npm install` rewrites the
+            // lockfile): otherwise its own write makes it due again.
+            if let Some(key) = self.tree_key(svc)? {
+                for m in std::iter::once(mark).chain(shared) {
+                    std::fs::write(&m, &key).map_err(|e| e.to_string())?;
+                }
+            }
         }
         self.clear_notice(&format!("prepare.inputs.{name}"));
         Ok(())
     }
 
-    /// `rel`, a file of the `inputs` of `name`'s `prepare`, changed: while it
-    /// runs, it runs on what `prepare` made before, until its next start
-    /// prepares again (#630). Said, unless its `restart_on` restarts it.
-    pub fn prepare_inputs_changed(&self, name: &str, rel: &str) {
-        let Some(svc) = self.stack().services.get(name).cloned() else {
-            return;
-        };
-        let running = self.slots.lock().unwrap().get(name).is_some_and(from_tree);
-        let restarts = devstack_build::watch_set(&svc.restart_on)
-            .ok()
-            .flatten()
-            .is_some_and(|g| {
-                g.is_match(rel) || rel.match_indices('/').any(|(i, _)| g.is_match(&rel[..i]))
-            });
-        if !running || restarts {
-            return;
-        }
-        self.set_notice(
-            &format!("prepare.inputs.{name}"),
-            NoticeLevel::Warn,
-            format!(
-                "`{rel}` changed: {name} still runs on what its `prepare` made before. `devstack restart {name}` runs `prepare` again; `restart_on = [\"{rel}\"]` does it on every change."
-            ),
-        );
-    }
-
-    /// The `prepare` of `svc` the main tree needs before it starts there;
-    /// `None` when it has none, or it ran for these inputs and its outputs
-    /// are there.
-    pub(super) fn tree_prepare_job(
-        &self,
-        name: &str,
-        svc: &Service,
-    ) -> Result<Option<PrepareJob>, String> {
+    /// The key of `svc`'s `prepare` over the inputs as they are in the tree
+    /// (the main tree, or a lane's worktree); `None` without `prepare`.
+    fn tree_key(&self, svc: &Service) -> Result<Option<String>, String> {
         let Some(p) = &svc.prepare else {
             return Ok(None);
         };
@@ -566,7 +556,84 @@ impl Supervisor {
                 Some((rel, blake3::hash(&bytes).to_hex().to_string()))
             })
             .collect();
-        let key = prepare_key(p, svc, hashed.iter().map(|(r, h)| (r.as_str(), h.clone())))?;
+        prepare_key(p, svc, hashed.iter().map(|(r, h)| (r.as_str(), h.clone()))).map(Some)
+    }
+
+    /// Where the key of `name`'s last `prepare` is kept: in the main tree's
+    /// state, or in the lane's copy.
+    fn prepare_mark(&self, name: &str) -> PathBuf {
+        if self.runs_from_copy() {
+            self.layout.lane("main").join("prepared").join(name)
+        } else {
+            self.state_dir.join("prepared-tree").join(name)
+        }
+    }
+
+    /// `rel`, a file of the `inputs` of `name`'s `prepare`, changed: while it
+    /// runs, it runs on what `prepare` made before, until its next start
+    /// prepares again (#630). Said, unless its `restart_on` restarts it
+    /// (`restarts`, as the watcher matched it).
+    pub fn prepare_inputs_changed(&self, name: &str, rel: &str, restarts: bool) {
+        let running = self.slots.lock().unwrap().get(name).is_some_and(from_tree);
+        if !running || restarts {
+            return;
+        }
+        // Its own `prepare` wrote it, or it came back to what was prepared.
+        let Some(svc) = self.stack().services.get(name).cloned() else {
+            return;
+        };
+        if let Ok(Some(key)) = self.tree_key(&svc)
+            && std::fs::read_to_string(self.prepare_mark(name)).is_ok_and(|k| k == key)
+        {
+            return;
+        }
+        self.set_notice(
+            &format!("prepare.inputs.{name}"),
+            NoticeLevel::Warn,
+            format!(
+                "`{rel}` changed: {name} still runs on what its `prepare` made before. `devstack restart {name}` runs `prepare` again; `restart_on = [\"{rel}\"]` does it on every change."
+            ),
+        );
+    }
+
+    /// The other services that run from the tree and whose `prepare` makes
+    /// some of the same `outputs` as `svc`'s.
+    pub(super) fn sharers(&self, name: &str, svc: &Service) -> Vec<String> {
+        let norm = |o: &String| o.replace('\\', "/").trim_matches('/').to_string();
+        let Some(mine) = svc
+            .prepare
+            .as_ref()
+            .map(|p| p.outputs.iter().map(norm).collect::<Vec<_>>())
+        else {
+            return Vec::new();
+        };
+        let stack = self.stack();
+        let slots = self.slots.lock().unwrap();
+        stack
+            .services
+            .iter()
+            .filter(|(n, _)| n.as_str() != name)
+            .filter(|(_, s)| {
+                s.prepare
+                    .as_ref()
+                    .is_some_and(|p| p.outputs.iter().map(norm).any(|o| mine.contains(&o)))
+            })
+            .filter(|(n, _)| slots.get(n.as_str()).is_some_and(from_tree))
+            .map(|(n, _)| n.clone())
+            .collect()
+    }
+
+    /// The `prepare` of `svc` the main tree needs before it starts there;
+    /// `None` when it has none, or it ran for these inputs and its outputs
+    /// are there.
+    pub(super) fn tree_prepare_job(
+        &self,
+        name: &str,
+        svc: &Service,
+    ) -> Result<Option<PrepareJob>, String> {
+        let (Some(p), Some(key)) = (&svc.prepare, self.tree_key(svc)?) else {
+            return Ok(None);
+        };
         let marks = self.state_dir.join("prepared-tree");
         let mark = marks.join(name);
         let outputs: Vec<PathBuf> = p.outputs.iter().map(|o| self.repo.join(o)).collect();
@@ -2019,6 +2086,71 @@ mod tests {
         std::fs::remove_dir_all(&deps).unwrap();
         sup.tree_ready("web", &svc, &|| false).unwrap();
         assert_eq!(lock(), "{\"v\":2}");
+    }
+
+    // Review before 0.54.0, Nr. 5: a `prepare` that rewrites one of its own
+    // inputs (`npm install` normalises the lockfile) is not due again, and
+    // its own write is no change to tell about.
+    #[cfg(windows)]
+    #[test]
+    fn a_prepare_that_rewrites_its_inputs_is_not_due_again() {
+        use crate::state::Status;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let d = tempfile::tempdir().unwrap();
+        let stack = "version = 1\n[stack]\nname = \"t\"\n[services.web]\nkind = \"devserver\"\nrun = \"x\"\nport = 4200\nprepare = { run = \"mkdir deps 2>nul & echo normalised> package-lock.json\", inputs = [\"package-lock.json\"], outputs = [\"deps\"] }\n";
+        let sup = warm_repo(d.path(), stack, &[("package-lock.json", "{}")], &rt);
+        let svc = sup.stack().services["web"].clone();
+        sup.tree_ready("web", &svc, &|| false).unwrap();
+        assert!(
+            sup.tree_prepare_job("web", &svc).unwrap().is_none(),
+            "due again after its own write"
+        );
+        sup.set_status("web", Status::Starting);
+        sup.prepare_inputs_changed("web", "package-lock.json", false);
+        assert!(sup.notices().is_empty(), "{:?}", sup.notices());
+        // A change of somebody else's is one.
+        std::fs::write(d.path().join("package-lock.json"), "{\"v\":2}").unwrap();
+        sup.prepare_inputs_changed("web", "package-lock.json", false);
+        assert_eq!(sup.notices().len(), 1);
+        // Gone with the service (Nr. 6).
+        sup.stop("web").unwrap();
+        assert!(sup.notices().is_empty(), "{:?}", sup.notices());
+    }
+
+    // Review before 0.54.0, Nr. 2: outputs another running service shares
+    // are not prepared under it (Windows keeps its files locked; elsewhere
+    // they vanish under it).
+    #[cfg(windows)]
+    #[test]
+    fn outputs_a_running_service_shares_are_not_prepared_under_it() {
+        use crate::state::Status;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let d = tempfile::tempdir().unwrap();
+        let prep = "prepare = { run = \"mkdir deps 2>nul & copy /y package-lock.json deps\\\\lock.json\", inputs = [\"package-lock.json\"], outputs = [\"deps\"] }";
+        let stack = format!(
+            "version = 1\n[stack]\nname = \"t\"\n[services.web]\nkind = \"devserver\"\nrun = \"x\"\nport = 4200\n{prep}\n[services.admin]\nkind = \"devserver\"\nrun = \"x\"\nport = 4201\n{prep}\n"
+        );
+        let sup = warm_repo(d.path(), &stack, &[("package-lock.json", "{\"v\":1}")], &rt);
+        let services = sup.stack().services.clone();
+        sup.tree_ready("web", &services["web"], &|| false).unwrap();
+        sup.set_status("admin", Status::Starting);
+        std::fs::write(d.path().join("package-lock.json"), "{\"v\":2}").unwrap();
+        let e = sup
+            .tree_ready("web", &services["web"], &|| false)
+            .unwrap_err();
+        assert!(e.contains("admin"), "{e}");
+        assert_eq!(
+            sup.sharers("web", &services["web"]),
+            vec!["admin".to_string()]
+        );
+        sup.set_status("admin", Status::Stopped);
+        sup.tree_ready("web", &services["web"], &|| false).unwrap();
     }
 
     // #630: a `prepare` that fails in the main tree stops the start with its

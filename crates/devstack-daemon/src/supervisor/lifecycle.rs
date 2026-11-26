@@ -98,6 +98,40 @@ pub(super) fn run_stop(
     }
 }
 
+/// What the main tree's stop keeps while lanes run (ADR-0080, ADR-0119): the
+/// `singleton` services and every service and Compose container one of them
+/// comes `after`, transitively. The view marks the services
+/// (`kept_for_lanes`), so the dashboard counts the same ones as the daemon.
+pub(crate) fn kept_for_lanes(
+    stack: &devstack_config::Stack,
+) -> (BTreeSet<String>, BTreeSet<(String, String)>) {
+    let mut keep: BTreeSet<String> = stack
+        .services
+        .iter()
+        .filter(|(_, s)| s.singleton())
+        .map(|(n, _)| n.clone())
+        .collect();
+    let mut containers: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut todo: Vec<String> = keep.iter().cloned().collect();
+    while let Some(n) = todo.pop() {
+        for dep in stack
+            .services
+            .get(&n)
+            .map(|s| s.after.clone())
+            .unwrap_or_default()
+        {
+            if let Some(rest) = dep.strip_prefix("compose.")
+                && let Some((g, s)) = rest.split_once('.')
+            {
+                containers.insert((g.to_string(), s.to_string()));
+            } else if stack.services.contains_key(&dep) && keep.insert(dep.clone()) {
+                todo.push(dep);
+            }
+        }
+    }
+    (keep, containers)
+}
+
 impl Supervisor {
     /// Infra, then every autostart service for this platform, in order; a
     /// service that fails holds back only what comes `after` it.
@@ -334,32 +368,7 @@ impl Supervisor {
         infra: bool,
         local_lanes: bool,
     ) -> (Vec<String>, Vec<String>, Vec<String>) {
-        let mut keep: BTreeSet<String> = self
-            .stack()
-            .services
-            .iter()
-            .filter(|(_, s)| s.singleton())
-            .map(|(n, _)| n.clone())
-            .collect();
-        let mut containers: BTreeSet<(String, String)> = BTreeSet::new();
-        let mut todo: Vec<String> = keep.iter().cloned().collect();
-        while let Some(n) = todo.pop() {
-            for dep in self
-                .stack()
-                .services
-                .get(&n)
-                .map(|s| s.after.clone())
-                .unwrap_or_default()
-            {
-                if let Some(rest) = dep.strip_prefix("compose.")
-                    && let Some((g, s)) = rest.split_once('.')
-                {
-                    containers.insert((g.to_string(), s.to_string()));
-                } else if self.stack().services.contains_key(&dep) && keep.insert(dep.clone()) {
-                    todo.push(dep);
-                }
-            }
-        }
+        let (keep, containers) = kept_for_lanes(&self.stack());
         let mut failed = self.down_keeping(false, &keep);
         let mut kept = Vec::new();
         if infra && self.external_infra().is_none() {
@@ -1356,6 +1365,8 @@ impl Supervisor {
             self.end(&mut i, Some(Duration::from_secs(20)));
         }
         self.set_status(name, Status::Stopped);
+        // Nothing runs on what `prepare` made before any more.
+        self.clear_notice(&format!("prepare.inputs.{name}"));
         Ok(())
     }
 
@@ -1613,6 +1624,23 @@ fn port_freed(port: u16) -> bool {
         std::thread::sleep(Duration::from_millis(250));
     }
     true
+}
+
+#[cfg(test)]
+mod kept_tests {
+    // Code review before 0.54.0, Nr. 1: what a singleton comes after is kept
+    // for the lanes too, and the view says so for each service.
+    #[test]
+    fn what_a_singleton_comes_after_is_kept_for_the_lanes() {
+        let text = "version = 1\n[stack]\nname = \"t\"\n[compose.app]\nproject = \"t\"\nfiles = [\"c.yml\"]\nservices = [\"db\"]\n[services.tray]\nsingleton = true\nrun = \"x\"\nafter = [\"auth\"]\n[services.auth]\nrun = \"x\"\nafter = [\"compose.app.db\"]\n[services.api]\nrun = \"x\"\n";
+        let stack = devstack_config::from_str(text, std::path::Path::new("t")).unwrap();
+        let (kept, containers) = super::kept_for_lanes(&stack);
+        assert_eq!(kept.into_iter().collect::<Vec<_>>(), ["auth", "tray"]);
+        assert_eq!(
+            containers.into_iter().collect::<Vec<_>>(),
+            [("app".to_string(), "db".to_string())]
+        );
+    }
 }
 
 #[cfg(all(test, windows))]

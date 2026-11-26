@@ -284,6 +284,7 @@ type ServiceView = {
                                          // (StackView.public_link_domain: the named tunnel's domain, when one is set up (ADR-0091);
                                          //  links then answer at https://{service}-{lane}-{stack}.<domain>, and open once the hub's connector carries them)
   singleton?: boolean;                   // it runs once per machine, in the main working tree only (`singleton = true`, or the deprecated `lanes = false`, ADR-0080); the dashboard's stack page lists it (ADR-0081). Since 0.33.0; older daemons omit it
+  kept_for_lanes?: boolean;              // the main tree's stop keeps it while lanes run: a singleton, or a service one comes `after`, transitively (ADR-0119). Since 0.54.0; older daemons omit it
   prepare?: PrepareView;                 // where its last `prepare` outputs came from (ADR-0062), since the daemon started; absent before its first `prepare` (and from older daemons)
   last_action?: { via: Client; at: number; action: string };  // the last `/v1/services/<it>/<action>` that succeeded, and its client (ADR-0067), from the journal
   not_forwarded_here?: string;           // a lane on a node: its port is held here by something else, so this machine reaches that instead (#615); why, as the lane says it. Since 0.53.0

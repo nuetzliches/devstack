@@ -478,6 +478,8 @@ export type ServiceView = {
   last_action?: Change;
   /** It runs once per machine, in the main working tree only (`singleton = true`, ADR-0080): the stack's, not a lane's. Older daemons omit it. */
   singleton?: boolean;
+  /** The main tree's stop keeps it while lanes run: a `singleton`, or a service one comes `after`. Older daemons omit it. */
+  kept_for_lanes?: boolean;
   /** Its public link (a Cloudflare Quick Tunnel to its port), while one is open or failed; absent otherwise. */
   public_link?: PublicLink;
   /** A public link may be opened to it (a `port`, no `tunnel = false`). Older daemons omit it. */

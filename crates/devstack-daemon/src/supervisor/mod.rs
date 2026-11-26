@@ -442,6 +442,7 @@ impl Supervisor {
                 .map(|(k, _)| k.clone())
                 .collect()
         };
+        let (kept, _) = lifecycle::kept_for_lanes(&stack);
         let mut slots = BTreeMap::new();
         let mut op_locks = BTreeMap::new();
         let mut reruns = BTreeMap::new();
@@ -471,6 +472,7 @@ impl Supervisor {
                         hot_reload: false,
                         hot_reload_available: svc.hot_reload.is_some(),
                         singleton: svc.singleton(),
+                        kept_for_lanes: kept.contains(name),
                         prepare: None,
                         last_action: None,
                         public_link: None,
@@ -709,9 +711,11 @@ impl Supervisor {
         // A profile changes how services run, never which there are: the
         // slots stay, what they show of the stack file follows.
         {
+            let (kept, _) = lifecycle::kept_for_lanes(&stack);
             let mut slots = self.slots.lock().unwrap();
             for (name, svc) in &stack.services {
                 if let Some(slot) = slots.get_mut(name) {
+                    slot.view.kept_for_lanes = kept.contains(name);
                     slot.view.kind = format!("{:?}", svc.kind).to_lowercase();
                     slot.view.autostart = svc.autostart;
                     slot.view.hot_reload_available = svc.hot_reload.is_some();

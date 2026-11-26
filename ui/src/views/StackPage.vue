@@ -80,7 +80,7 @@ const mainState = computed(() => {
   if (!stack.running || hubDown.value) return null;
   const profile = stack.mainView?.profile;
   if (!stack.mainActive) {
-    const kept = (stack.mainView?.services ?? []).filter((s) => s.singleton && statusBucket(s) !== 'idle').map((s) => s.name);
+    const kept = (stack.mainView?.services ?? []).filter((s) => (s.kept_for_lanes ?? s.singleton) && statusBucket(s) !== 'idle').map((s) => s.name);
     return {
       tone: '',
       label: 'main stopped',

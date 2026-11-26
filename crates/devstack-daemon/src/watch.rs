@@ -465,7 +465,9 @@ fn watch(sup: Arc<Supervisor>) -> Result<Watcher, String> {
                     }
                     for (n, g) in &prepared {
                         if g.is_match(&rel) {
-                            me.prepare_inputs_changed(n, &rel);
+                            let restarts =
+                                devservers.iter().any(|(d, r)| d == n && covers(r, &rel));
+                            me.prepare_inputs_changed(n, &rel, restarts);
                         }
                     }
                 }

@@ -580,6 +580,10 @@ describe('stack store', () => {
       // Another of its services runs: it runs.
       events.handlers.onMessage({ type: 'snapshot', stack: view([svc('api', 'healthy'), tray]) } as never);
       expect(stack.mainActive).toBe(true);
+      // What a singleton comes after is kept too, as the daemon marks it.
+      const auth = { ...svc('auth', 'healthy'), kept_for_lanes: true };
+      events.handlers.onMessage({ type: 'snapshot', stack: view([svc('api', 'stopped'), auth, { ...tray, kept_for_lanes: true }]) } as never);
+      expect(stack.mainActive).toBe(false);
       fake.on('/hub/stacks/shop/api/v1/down?infra=true', ok({ lanes: ['feat'], kept: ['tray'], containers: [] }));
       await stack.laneAction(stack.mainLane!, 'stop');
       expect(useUi().toasts.map((t) => t.title)).toContain('main stopped; tray keeps running for lane feat');
