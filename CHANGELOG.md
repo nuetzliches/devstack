@@ -9,6 +9,19 @@ and listed with their assets on the
 
 ## [Unreleased]
 
+## [0.54.0] - 2026-11-26
+
+A service's memory is what its processes own: shared pages such as the .NET
+runtime's no longer count again with every process, and the dashboard and a
+lane's need for the pool name what the builds take. main shows as stopped
+when only what serves its lanes runs. "Add a stack" clones with your Git
+client. `prepare` runs in the main tree too, when its inputs changed: a
+merge that brought new packages no longer leaves the dev server on the old
+`node_modules` (the first start after the update runs it once). Fixed: a
+change saved while a lane's dev server starts reaches it; a directory
+renamed or removed in a worktree goes from the lane's copy; a stopped stack
+no longer shows the memory of its containers.
+
 ### Added
 
 - **"Add a stack" clones with your Git client** (ADR-0046, amendment
@@ -4124,7 +4137,8 @@ before are refused now, and a pool needs its nodes granted.
   a paused log view keeps its line limit; the folder dialog no longer stays
   "open" after the page gave up waiting.
 
-[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.53.0...HEAD
+[Unreleased]: https://github.com/nuetzliches/devstack/compare/v0.54.0...HEAD
+[0.54.0]: https://github.com/nuetzliches/devstack/compare/v0.53.0...v0.54.0
 [0.53.0]: https://github.com/nuetzliches/devstack/compare/v0.52.0...v0.53.0
 [0.52.0]: https://github.com/nuetzliches/devstack/compare/v0.51.0...v0.52.0
 [0.51.0]: https://github.com/nuetzliches/devstack/compare/v0.50.0...v0.51.0
