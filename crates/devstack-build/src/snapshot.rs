@@ -148,6 +148,7 @@ impl Snapshot {
             .filter(|k| !listed.contains(k.as_str()))
         {
             let _ = fs::remove_file(self.dir.join(gone));
+            self.remove_emptied(gone);
             removed += 1;
         }
         // A first sync has no watcher to wait for: nothing runs from the
@@ -219,6 +220,21 @@ impl Snapshot {
             removed,
             elapsed: t0.elapsed(),
         })
+    }
+
+    /// The directories of `rel`, a file just removed from the copy, that it
+    /// left empty and the source no longer has (#628): a directory renamed or
+    /// removed in the worktree goes from the copy too, where a service that
+    /// reads one folder per entry would see it still. One that holds
+    /// anything else (a build's output) stays.
+    fn remove_emptied(&self, rel: &str) {
+        let mut parent = Path::new(rel).parent();
+        while let Some(dir) = parent.filter(|d| !d.as_os_str().is_empty()) {
+            if self.source.join(dir).is_dir() || fs::remove_dir(self.dir.join(dir)).is_err() {
+                return;
+            }
+            parent = dir.parent();
+        }
     }
 
     /// Clear the way for the copy of `rel`: a file where one of its parent
@@ -411,6 +427,42 @@ mod tests {
         let state = tempfile::tempdir().unwrap();
         let snap = super::Snapshot::open(d.path(), state.path()).unwrap();
         assert_eq!(snap.list().unwrap(), vec!["devstack.toml", "src/a/x.cs"]);
+    }
+
+    /// #628: a directory renamed or removed in the worktree goes from the
+    /// copy too; a service that reads one folder per entry saw it still.
+    /// What the copy holds beyond the snapshot (a build's output) stays.
+    #[test]
+    fn a_directory_gone_from_the_source_goes_from_the_copy() {
+        let src = tempfile::tempdir().unwrap();
+        let a = src.path().join("org/agents/a/v1");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::write(a.join("agent.yaml"), "a").unwrap();
+        std::fs::write(a.join("prompt.md"), "a").unwrap();
+        std::fs::create_dir_all(src.path().join("org/tools")).unwrap();
+        std::fs::write(src.path().join("org/tools/t.yaml"), "t").unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let mut snap = super::Snapshot::open(src.path(), state.path()).unwrap();
+        snap.sync().unwrap();
+        // Written in the copy by a build: not the snapshot's.
+        std::fs::create_dir_all(snap.dir.join("org/tools/bin")).unwrap();
+        std::fs::write(snap.dir.join("org/tools/bin/out.dll"), "built").unwrap();
+
+        // `git mv org/agents/a org/agents/b`, and the tools' file removed.
+        std::fs::rename(
+            src.path().join("org/agents/a"),
+            src.path().join("org/agents/b"),
+        )
+        .unwrap();
+        std::fs::remove_file(src.path().join("org/tools/t.yaml")).unwrap();
+        snap.sync().unwrap();
+
+        assert!(snap.dir.join("org/agents/b/v1/agent.yaml").is_file());
+        assert!(
+            !snap.dir.join("org/agents/a").exists(),
+            "the renamed directory stayed in the copy"
+        );
+        assert!(snap.dir.join("org/tools/bin/out.dll").is_file());
     }
 
     /// A watcher like `@parcel/watcher` on Linux (Angular's dev server,

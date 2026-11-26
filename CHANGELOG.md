@@ -54,6 +54,13 @@ and listed with their assets on the
 
 ### Fixed
 
+- **A directory renamed or removed in a worktree goes from the lane's copy**
+  (#628). The copy removed the files but kept their directories, empty: a
+  service that reads one folder per entry saw a phantom one. Now a directory
+  the removal leaves empty, and the worktree no longer has, goes too; one
+  that holds anything else (a build's output) stays. The same holds for a
+  lane on a node and for the snapshot builds run in. Empty directories a
+  copy kept before this release stay until the copy is made anew.
 - **A stopped stack no longer shows the memory of its containers.** When
   the last container stopped, the daemon kept its last load, so a group and
   the lane card showed gigabytes after `down` (and the lane's estimate for
