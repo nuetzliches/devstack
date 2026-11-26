@@ -1,6 +1,6 @@
 # ADR-0023: Stack files stay readable; migrations once devstack has outside users
 
-- **Status:** Accepted; phase 2 holds since 2026-10-23 (ADR-0054 point 8)
+- **Status:** Accepted; phase 2 held from 2026-10-23 (ADR-0054 point 8); phase 1 again since 2026-11-26 (amendment)
 - **Date:** 2026-10-15
 - **Deciders:** project owner
 - **Related:** [ADR-0017](0017-stack-file-is-toml.md), plan §4
@@ -53,6 +53,13 @@ the frozen copy and say so in the commit), and not at all in phase 2.
 handed to a tester outside the maintainers made devstack's users outside
 users, as [ADR-0054](0054-macos-is-a-developer-platform-in-preview.md) point 8
 says. The question in phase 1 is answered; it is not asked again.
+
+*Amended 2026-11-26.* Phase 1 holds again, by the owner's decision on
+2026-11-26 (#630): devstack's users are the maintainers' team of three to four,
+and a break that gives the lasting, technically right solution is accepted
+without `version = 2` or a migration. Such a break is named in the review card
+and in the changelog, and the frozen copy it breaks is replaced on purpose.
+Phase 2 comes back when the owner says devstack has users outside the team.
 
 ## Alternatives considered
 
