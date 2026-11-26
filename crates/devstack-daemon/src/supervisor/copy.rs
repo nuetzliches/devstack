@@ -1,7 +1,7 @@
 //! A lane's copy of its worktree, and `prepare`.
 
 use super::{COPY_QUIET, KEEP_BUILD_LOGS, STOPPED, Supervisor, tail};
-use crate::state::{NoticeLevel, PrepareView, now_ms};
+use crate::state::{NoticeLevel, PrepareView, Status, now_ms};
 use devstack_build::Snapshot;
 use devstack_build::store::Store;
 use devstack_config::model::{Prepare, Service};
@@ -521,12 +521,7 @@ impl Supervisor {
         let Some(svc) = self.stack().services.get(name).cloned() else {
             return;
         };
-        let running = self
-            .slots
-            .lock()
-            .unwrap()
-            .get(name)
-            .is_some_and(|s| s.main.as_ref().is_some_and(|i| i.build_id.is_none()));
+        let running = self.slots.lock().unwrap().get(name).is_some_and(from_tree);
         let restarts = devstack_build::watch_set(&svc.restart_on)
             .ok()
             .flatten()
@@ -1016,6 +1011,12 @@ impl Supervisor {
         );
     }
 
+    /// Whether a process runs from the copy (not from an artifact): only
+    /// then does a change in the worktree go into it at once.
+    fn runs_something_from_copy(&self) -> bool {
+        self.slots.lock().unwrap().values().any(from_tree)
+    }
+
     /// Something changed in a lane's worktree: bring the copy its dev servers
     /// and tools run from up to date, after a short quiet time, so their own
     /// watchers (hot module replacement) see the change.
@@ -1024,13 +1025,7 @@ impl Supervisor {
             return;
         }
         self.debounce_for("copy".into(), COPY_QUIET, |s| {
-            let from_copy = s
-                .slots
-                .lock()
-                .unwrap()
-                .values()
-                .any(|slot| slot.main.as_ref().is_some_and(|i| i.build_id.is_none()));
-            if !from_copy {
+            if !s.runs_something_from_copy() {
                 return;
             }
             let synced = s.snapshot.lock().unwrap().sync();
@@ -1055,6 +1050,16 @@ impl Supervisor {
             }
         });
     }
+}
+
+/// Whether the service of `slot` runs a process from the tree (the main
+/// tree, or a lane's copy), not from an artifact. One that is still
+/// starting counts (#631): it becomes main only once it is ready, and a dev
+/// server whose first build failed on a half-made change is ready only after
+/// the save that completes it reached the copy.
+fn from_tree(slot: &super::Slot) -> bool {
+    slot.main.as_ref().is_some_and(|i| i.build_id.is_none())
+        || (slot.view.status == Status::Starting && slot.view.build_id.is_none())
 }
 
 /// A `prepare` to run ([`Supervisor::prepare_job`]).
@@ -1938,6 +1943,37 @@ mod tests {
         std::fs::write(deps.join("in-use.txt"), "ui reads this").unwrap();
         sup.copy_ready("app", &services["app"], &|| false).unwrap();
         assert!(deps.join("in-use.txt").is_file());
+    }
+
+    // #631: a dev server runs from the copy as soon as it started, not only
+    // once it is ready: its first build may fail on a half-made change, and
+    // the save that completes it has to reach the copy for the rebuild.
+    #[test]
+    fn a_dev_server_that_is_starting_runs_from_the_copy() {
+        use crate::state::Status;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let d = tempfile::tempdir().unwrap();
+        let stack = "version = 1\n[stack]\nname = \"t\"\n[services.web]\nkind = \"devserver\"\nrun = \"x\"\nport = 4200\n[services.api]\nrun = \"x\"\nport = 5000\nbuild = \"x\"\noutput = \"out\"\nwatch = [\"src/**\"]\n";
+        let sup = warm_repo(d.path(), stack, &[("app.js", "1")], &rt);
+        assert!(!sup.runs_something_from_copy(), "nothing runs");
+        // A built service runs from its artifact, not from the copy.
+        sup.slots
+            .lock()
+            .unwrap()
+            .get_mut("api")
+            .unwrap()
+            .view
+            .build_id = Some("b1".into());
+        sup.set_status("api", Status::Starting);
+        assert!(!sup.runs_something_from_copy());
+        sup.set_status("web", Status::Starting);
+        assert!(
+            sup.runs_something_from_copy(),
+            "a dev server in its first start did not take the worktree's changes"
+        );
     }
 
     // #630: the main tree runs in place; its `prepare` runs there when its
