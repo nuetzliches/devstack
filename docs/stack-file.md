@@ -693,7 +693,9 @@ with its tail. The main working tree runs dev servers in place: there
 `prepare` runs in the tree itself before the service starts (`up`, `start`,
 `restart`), when the files of `inputs` changed since it last ran there or a
 directory of `outputs` is gone (#630). A restart then stops the running
-instance first, so `npm ci` can replace files it holds open. The main tree
+instance first, so `npm ci` can replace files it holds open, and the other
+running services whose `prepare` names the same `outputs` (they start again
+after it); a plain start that would prepare under one of them is refused. The main tree
 does not use the store (`outputs` below) and links nothing. While a service
 runs, here or in a lane, a change to a file of its `inputs` is a notice: it
 runs on what `prepare` made before until its next start. To have that start

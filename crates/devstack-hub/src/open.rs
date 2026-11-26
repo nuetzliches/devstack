@@ -238,7 +238,11 @@ pub fn clone_url(s: &str) -> Option<&str> {
     let rest = s.strip_prefix("https://")?;
     let host = rest.split('/').next()?;
     let allowed = |c: char| c.is_ascii_alphanumeric() || "-._~/:@%+".contains(c);
-    (!host.is_empty() && s.len() <= 2048 && rest.chars().all(allowed)).then_some(s)
+    // Encoded, too: a client that decodes before it parses reads them
+    // (`%3F`, `%23`, and `%25` for a second round).
+    let lower = rest.to_ascii_lowercase();
+    let encoded = ["%3f", "%23", "%25"].iter().any(|e| lower.contains(e));
+    (!host.is_empty() && s.len() <= 2048 && rest.chars().all(allowed) && !encoded).then_some(s)
 }
 
 /// Start the agent `id` in `tree` with `prompt` (written by the hub, never by
@@ -457,6 +461,16 @@ mod tests {
         assert_eq!(clone_url("https://github.com/acme/shop#x"), None);
         assert_eq!(clone_url("https://github.com/acme/my shop"), None);
         assert_eq!(clone_url("https://github.com/a\"b"), None);
+        // Security review before 0.54.0, S2: a query or fragment, encoded.
+        assert_eq!(clone_url("https://github.com/acme/shop%3Fbranch=x"), None);
+        assert_eq!(clone_url("https://github.com/acme/shop%3fbranch=x"), None);
+        assert_eq!(clone_url("https://github.com/acme/shop%23x"), None);
+        assert_eq!(clone_url("https://github.com/acme/shop%253Fx"), None);
+        // An encoded space stays (Azure DevOps project names).
+        assert_eq!(
+            clone_url("https://dev.azure.com/org/My%20Project/_git/shop"),
+            Some("https://dev.azure.com/org/My%20Project/_git/shop")
+        );
     }
 
     #[test]

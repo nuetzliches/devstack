@@ -367,10 +367,12 @@ mod tests {
         let me = std::process::id();
         let (before, footprint) = process_usage(me);
         assert!(footprint >= 1 << 20, "{footprint}");
-        assert_eq!(
-            phys_footprint(me as i32),
-            Some(footprint),
-            "not the resident set"
+        // Two readings of a live footprint: close, not equal (code review
+        // before 0.54.0, Nr. 4).
+        let again = phys_footprint(me as i32).unwrap();
+        assert!(
+            again.abs_diff(footprint) <= (32 << 20).max(footprint / 10),
+            "not the footprint: {footprint} against {again}"
         );
         let t0 = Instant::now();
         let mut x = 0u64;

@@ -3319,10 +3319,16 @@ async fn shared_tunnel(
     }
 }
 
+/// The most of a lane daemon's usage report the node reads: what answers on
+/// that port is the lane's, whatever runs in it (security review before
+/// 0.54.0, S1).
+const USAGE_MAX: usize = 1 << 20;
+
 /// What the lane's build job takes of its memory now, as its daemon
 /// measures it (`builds` of `/v1/usage`, ADR-0119 point 3): the node sees
 /// the lane as one container and cannot tell its builds apart. `None` when
-/// the daemon does not answer within a few seconds.
+/// the daemon does not answer within a few seconds, or says more than
+/// [`USAGE_MAX`].
 async fn lane_builds(d: &DaemonAddr) -> Option<u64> {
     use http_body_util::BodyExt;
     let ask = async {
@@ -3342,7 +3348,11 @@ async fn lane_builds(d: &DaemonAddr) -> Option<u64> {
         if !res.status().is_success() {
             return None;
         }
-        let body = res.into_body().collect().await.ok()?.to_bytes();
+        let body = http_body_util::Limited::new(res.into_body(), USAGE_MAX)
+            .collect()
+            .await
+            .ok()?
+            .to_bytes();
         builds_of(&body)
     };
     tokio::time::timeout(Duration::from_secs(3), ask)
@@ -4515,6 +4525,22 @@ mod tests {
         };
         assert_eq!(lane_builds(&gone).await, None);
         assert_eq!(builds_of(br#"{"services":[]}"#), None);
+
+        // Security review before 0.54.0, S1: what runs in the lane answers
+        // on its daemon's port; a body beyond the limit is not read whole.
+        let big = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let big_addr = big.local_addr().unwrap().to_string();
+        let padded = format!(
+            r#"{{"pad":"{}","builds":{{"memory":1}}}}"#,
+            "x".repeat(USAGE_MAX + 1)
+        );
+        let app = axum::Router::new().route("/v1/usage", get(move || async move { padded }));
+        tokio::spawn(async move { axum::serve(big, app).await.unwrap() });
+        let flood = DaemonAddr {
+            addr: big_addr,
+            ..d("t0k")
+        };
+        assert_eq!(lane_builds(&flood).await, None, "a body past the limit");
     }
 
     #[test]

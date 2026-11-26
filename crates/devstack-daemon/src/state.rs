@@ -101,6 +101,9 @@ pub struct ServiceView {
     /// = true`, or the deprecated `lanes = false`, ADR-0080): the stack
     /// page lists it as the stack's, not a lane's. Older daemons omit it.
     pub singleton: bool,
+    /// The main tree's stop keeps it while lanes run: a `singleton`, or a
+    /// service one comes `after` (`supervisor::kept_for_lanes`).
+    pub kept_for_lanes: bool,
     /// Where its last `prepare` outputs came from (ADR-0062): the store or
     /// a run. Since this daemon started; none before its first `prepare`.
     #[serde(skip_serializing_if = "Option::is_none")]
